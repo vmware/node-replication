@@ -9,8 +9,8 @@ build:
 test:
   stage: test
   script:
-    - cargo +nightly fmt --package bespin -- --check
-    - RUST_TEST_THREADS=1 cargo test
+    - cargo +nightly fmt -- --check
+    - cargo test
   dependencies:
     - build
   variables:
