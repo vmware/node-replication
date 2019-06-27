@@ -68,7 +68,7 @@ where
 ///
 /// This struct is cache aligned to 64 bytes.
 #[repr(align(64))]
-struct Log<'a, T, P>
+pub struct Log<'a, T, P>
 where
     T: Sized + Copy + Default,
     P: Sized + Copy + Default,
