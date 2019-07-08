@@ -1,6 +1,7 @@
 use core::cell::{Cell, RefCell};
 use core::sync::atomic::{AtomicUsize, Ordering};
 
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use super::context::Context;
@@ -14,20 +15,17 @@ const MAX_THREADS_PER_REPLICA: usize = 32;
 /// An instance of a replicated data structure. Uses a shared log to scale operations on
 /// the data structure across cores and processors.
 ///
-/// Takes in four type arguments: `T` helps identify what an operation does (think opcode),
-/// `P` provides the arguments required to execute an operation, and `D` represents the
-/// replicated data structure against which said operations will be run. `D` must implement
-/// the `Dispatch` trait.
+/// Takes in one type argument: `D` represents the replicated data structure against which
+/// said operations will be run. `D` must implement the `Dispatch` trait.
 ///
 /// A thread can be executed against the replica by calling `register()`. An operation can
 /// be issued by calling `execute()`. This operation will be eventually executed against the
 /// replica along with those that were received on other replicas that share the same
 /// underlying log.
-pub struct Replica<'a, T, P, D>
+pub struct Replica<'a, D>
 where
-    T: Sized + Copy + Default,
-    P: Sized + Copy + Default,
     D: Sized + Default + Dispatch,
+    <D as Dispatch>::Operation: Sized + Copy + Default,
 {
     /// Logical log offset upto which this replica has applied operations to its
     /// copy of the replicated data structure.
@@ -42,41 +40,49 @@ where
 
     /// Static array of thread contexts. Threads buffer operations in here when they
     /// cannot perform flat combining (because another thread might be doing so).
-    contexts: [RefCell<Context<T, P>>; MAX_THREADS_PER_REPLICA],
+    contexts: [RefCell<Context<<D as Dispatch>::Operation>>; MAX_THREADS_PER_REPLICA],
 
     /// A buffer of operations for flat combining. The combiner stages operations in
     /// here and then batch appends them into the shared log.
-    buffer: RefCell<Vec<(T, P)>>,
+    buffer: RefCell<Vec<<D as Dispatch>::Operation>>,
 
     /// Reference to the shared log that operations will be appended to and the
     /// data structure will be updated from.
-    slog: &'a Log<'a, T, P>,
+    slog: Arc<Log<'a, <D as Dispatch>::Operation>>,
 
     /// The underlying replicated data structure. Shared between threads registered
     /// with this replica. Each replica maintains its own.
     data: D,
 }
 
-impl<'a, T, P, D> Replica<'a, T, P, D>
+/// The Replica is Sync. `tail` and `buffer` are protected by a CAS on `combiner`.
+/// `contexts` are protected by fine-grained locks.
+unsafe impl<'a, D> Sync for Replica<'a, D>
 where
-    T: Sized + Copy + Default,
-    P: Sized + Copy + Default,
     D: Sized + Default + Dispatch,
+    <D as Dispatch>::Operation: Sized + Copy + Default,
+{
+}
+
+impl<'a, D> Replica<'a, D>
+where
+    D: Sized + Default + Dispatch,
+    <D as Dispatch>::Operation: Sized + Copy + Default,
 {
     /// Constructs an instance of a replicated data structure.
     ///
     /// Takes in a reference to the shared log as an argument. The Log is assumed to
     /// outlive the replica. The replica is bound to the log's lifetime.
-    pub fn new<'b>(log: &'b Log<'b, T, P>) -> Replica<'b, T, P, D> {
+    pub fn new<'b>(log: &Arc<Log<'b, <D as Dispatch>::Operation>>) -> Replica<'b, D> {
         Replica {
             tail: Cell::new(0usize),
             combiner: AtomicUsize::new(0),
             next: AtomicUsize::new(1),
             contexts: Default::default(),
             buffer: RefCell::new(Vec::with_capacity(
-                MAX_THREADS_PER_REPLICA * Context::<T, P>::batch_size(),
+                MAX_THREADS_PER_REPLICA * Context::<<D as Dispatch>::Operation>::batch_size(),
             )),
-            slog: log,
+            slog: log.clone(),
             data: D::default(),
         }
     }
@@ -101,46 +107,45 @@ where
 
     /// Executes an operation against this replica.
     ///
-    /// The operation consists of an opcode of type `T` and a parameter struct of type `P`. `idx`
-    /// is an identifier for the thread performing the execute operation.
+    /// `idx` is an identifier for the thread performing the execute operation.
     ///
     /// In addition to the supplied operation, this method might execute operations that were
     /// received on a different replica and appended to the shared log.
-    pub fn execute(&self, opcode: T, params: P, idx: usize) {
+    pub fn execute(&self, op: <D as Dispatch>::Operation, idx: usize) {
         // Infinite loop until some thread on this replica is elected combiner.
         loop {
             // First, check if there already is a flat combiner. If yes, then just enqueue the
             // operation on the thread local context and return to the caller.
             if self.combiner.load(Ordering::SeqCst) != 0 {
-                if self.make_pending(opcode, params, idx) {
+                if self.make_pending(op, idx) {
                     return;
                 }
             }
 
             // There is no active flat combiner. Try to perform combining on this thread. If
             // that succeeds, then just return to the caller.
-            if self.try_combine(opcode, params, idx) {
+            if self.try_combine(op, idx) {
                 return;
             }
         }
     }
 
     /// Enqueues an operation inside a thread local context.
-    fn make_pending(&self, opcode: T, params: P, idx: usize) -> bool {
+    fn make_pending(&self, op: <D as Dispatch>::Operation, idx: usize) -> bool {
         // First, immutably borrow the context so that we can acquire the lock. The reference
         // is dropped after the semicolon. Next, mutably borrow the context so that we can
         // enqueue the pending operation.
         self.contexts[idx - 1].borrow().acquire();
 
         let mut c = self.contexts[idx - 1].borrow_mut();
-        let f = c.enqueue(opcode, params);
+        let f = c.enqueue(op);
         c.release();
 
         f
     }
 
     /// Appends an operation to the log and attempts to perform flat combining.
-    fn try_combine(&self, opcode: T, params: P, idx: usize) -> bool {
+    fn try_combine(&self, op: <D as Dispatch>::Operation, idx: usize) -> bool {
         // Try to become the combiner here. If this fails, then simply return.
         if self.combiner.compare_and_swap(0, idx, Ordering::SeqCst) != 0 {
             return false;
@@ -151,7 +156,7 @@ where
         // thread safe and does not need a lock around the buffer. Make sure we
         // append the arguments passed into this method too.
         let mut b = self.buffer.borrow_mut();
-        b.push((opcode, params));
+        b.push(op);
         for idx in 1..self.next.load(Ordering::SeqCst) {
             self.contexts[idx - 1].borrow().acquire();
 
@@ -169,8 +174,8 @@ where
         b.clear();
 
         // Execute any operations on the shared log against this replica.
-        let f = |o: T, p: P| {
-            self.data.dispatch(o, p);
+        let f = |o: <D as Dispatch>::Operation| {
+            self.data.dispatch(o);
         };
 
         let t = self.tail.get();
@@ -196,7 +201,9 @@ mod test {
     }
 
     impl Dispatch for Data {
-        fn dispatch<T, P>(&self, _op: T, _params: P) {
+        type Operation = u64;
+
+        fn dispatch(&self, _op: Self::Operation) {
             self.junk.set(self.junk.get() + 1);
         }
     }
@@ -204,15 +211,15 @@ mod test {
     // Tests whether we can construct a Replica given a log.
     #[test]
     fn test_replica_create() {
-        let slog = Log::<u64, u64>::new(1024);
-        let repl = Replica::<u64, u64, Data>::new(&slog);
+        let slog = Arc::new(Log::<<Data as Dispatch>::Operation>::new(1024));
+        let repl = Replica::<Data>::new(&slog);
         assert_eq!(repl.tail.get(), 0);
         assert_eq!(repl.combiner.load(Ordering::SeqCst), 0);
         assert_eq!(repl.next.load(Ordering::SeqCst), 1);
         assert_eq!(repl.contexts.len(), MAX_THREADS_PER_REPLICA);
         assert_eq!(
             repl.buffer.borrow().capacity(),
-            MAX_THREADS_PER_REPLICA * Context::<u64, u64>::batch_size()
+            MAX_THREADS_PER_REPLICA * Context::<u64>::batch_size()
         );
         assert_eq!(repl.data.junk.get(), 0);
     }
@@ -220,8 +227,8 @@ mod test {
     // Tests whether we can register with this replica and receive an idx.
     #[test]
     fn test_replica_register() {
-        let slog = Log::<u64, u64>::new(1024);
-        let repl = Replica::<u64, u64, Data>::new(&slog);
+        let slog = Arc::new(Log::<<Data as Dispatch>::Operation>::new(1024));
+        let repl = Replica::<Data>::new(&slog);
         assert_eq!(repl.register(), Some(1));
         assert_eq!(repl.next.load(Ordering::SeqCst), 2);
         repl.next.store(17, Ordering::SeqCst);
@@ -232,45 +239,45 @@ mod test {
     // Tests whether registering more than the maximum limit of threads per replica is disallowed.
     #[test]
     fn test_replica_register_none() {
-        let slog = Log::<u64, u64>::new(1024);
-        let repl = Replica::<u64, u64, Data>::new(&slog);
+        let slog = Arc::new(Log::<<Data as Dispatch>::Operation>::new(1024));
+        let repl = Replica::<Data>::new(&slog);
         repl.next
             .store(MAX_THREADS_PER_REPLICA + 1, Ordering::SeqCst);
         assert!(repl.register().is_none());
     }
 
-    // Tests that we can successfully allow operations to go pending on this context.
+    // Tests that we can successfully allow operations to go pending on this replica.
     #[test]
     fn test_replica_make_pending() {
-        let slog = Log::<u64, u64>::new(1024);
-        let repl = Replica::<u64, u64, Data>::new(&slog);
+        let slog = Arc::new(Log::<<Data as Dispatch>::Operation>::new(1024));
+        let repl = Replica::<Data>::new(&slog);
         assert!(repl.contexts[7].borrow().ops().is_none());
-        assert!(repl.make_pending(11, 121, 8));
+        assert!(repl.make_pending(121, 8));
         let c = repl.contexts[7].borrow();
         let o = c.ops();
         assert!(o.is_some());
         let o = o.unwrap();
         assert_eq!(o.len(), 1);
-        assert_eq!(o[0], (11, 121));
+        assert_eq!(o[0], 121);
     }
 
-    // Tests that we can pend operations on a context that is already full of operations.
+    // Tests that we can't pend operations on a context that is already full of operations.
     #[test]
     fn test_replica_make_pending_false() {
-        let slog = Log::<u64, u64>::new(1024);
-        let repl = Replica::<u64, u64, Data>::new(&slog);
-        for _i in 0..Context::<u64, u64>::batch_size() {
-            assert!(repl.make_pending(11, 121, 1));
+        let slog = Arc::new(Log::<<Data as Dispatch>::Operation>::new(1024));
+        let repl = Replica::<Data>::new(&slog);
+        for _i in 0..Context::<u64>::batch_size() {
+            assert!(repl.make_pending(121, 1));
         }
-        assert!(!repl.make_pending(11, 121, 1));
+        assert!(!repl.make_pending(11, 1));
     }
 
     // Tests that we can issue, append, and execute operations using try_combine().
     #[test]
     fn test_replica_try_combine() {
-        let slog = Log::<u64, u64>::new(1024);
-        let repl = Replica::<u64, u64, Data>::new(&slog);
-        assert!(repl.try_combine(11, 121, 1));
+        let slog = Arc::new(Log::<<Data as Dispatch>::Operation>::new(1024));
+        let repl = Replica::<Data>::new(&slog);
+        assert!(repl.try_combine(121, 1));
         assert!(repl.contexts[0].borrow().ops().is_none());
         assert_eq!(repl.combiner.load(Ordering::SeqCst), 0);
         assert_eq!(repl.tail.get(), 1);
@@ -280,11 +287,11 @@ mod test {
     // Tests whether try_combine() also applies pending operations on other threads to the log.
     #[test]
     fn test_replica_try_combine_pending() {
-        let slog = Log::<u64, u64>::new(1024);
-        let repl = Replica::<u64, u64, Data>::new(&slog);
+        let slog = Arc::new(Log::<<Data as Dispatch>::Operation>::new(1024));
+        let repl = Replica::<Data>::new(&slog);
         repl.next.store(9, Ordering::SeqCst);
-        assert!(repl.make_pending(11, 121, 8));
-        assert!(repl.try_combine(11, 121, 1));
+        assert!(repl.make_pending(121, 8));
+        assert!(repl.try_combine(11, 1));
         assert!(repl.contexts[7].borrow().ops().is_none());
         assert_eq!(repl.tail.get(), 2);
         assert_eq!(repl.data.junk.get(), 2);
@@ -293,18 +300,18 @@ mod test {
     // Tests whether try_combine() fails if someone else is currently flat combining.
     #[test]
     fn test_replica_try_combine_fail() {
-        let slog = Log::<u64, u64>::new(1024);
-        let repl = Replica::<u64, u64, Data>::new(&slog);
+        let slog = Arc::new(Log::<<Data as Dispatch>::Operation>::new(1024));
+        let repl = Replica::<Data>::new(&slog);
         repl.combiner.store(8, Ordering::SeqCst);
-        assert!(!repl.try_combine(11, 121, 1));
+        assert!(!repl.try_combine(121, 1));
     }
 
     // Tests whether we can execute an operation against the log using execute().
     #[test]
     fn test_replica_execute_combine() {
-        let slog = Log::<u64, u64>::new(1024);
-        let repl = Replica::<u64, u64, Data>::new(&slog);
-        repl.execute(11, 121, 1);
+        let slog = Arc::new(Log::<<Data as Dispatch>::Operation>::new(1024));
+        let repl = Replica::<Data>::new(&slog);
+        repl.execute(121, 1);
         assert_eq!(repl.tail.get(), 1);
         assert_eq!(repl.data.junk.get(), 1);
     }
@@ -313,10 +320,10 @@ mod test {
     // go pending inside the appropriate context.
     #[test]
     fn test_replica_execute_pending() {
-        let slog = Log::<u64, u64>::new(1024);
-        let repl = Replica::<u64, u64, Data>::new(&slog);
+        let slog = Arc::new(Log::<<Data as Dispatch>::Operation>::new(1024));
+        let repl = Replica::<Data>::new(&slog);
         repl.combiner.store(8, Ordering::SeqCst);
-        repl.execute(11, 121, 1);
+        repl.execute(121, 1);
         assert!(repl.contexts[0].borrow().ops().is_some());
         assert_eq!(repl.tail.get(), 0);
         assert_eq!(repl.data.junk.get(), 0);
