@@ -5,6 +5,7 @@ stages:
 build:
   stage: build
   script:
+    - sudo apt install libfreetype6-dev
     - cargo build
 test:
   stage: test

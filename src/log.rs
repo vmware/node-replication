@@ -7,6 +7,8 @@ use core::ops::{Drop, FnMut};
 use core::slice::from_raw_parts_mut;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
+use crossbeam_utils::CachePadded;
+
 /// The default size of the shared log in bytes. If constructed using the
 /// default constructor, the log will be these many bytes in size. Currently
 /// set to 1 GB based on the ASPLOS 2017 paper.
@@ -78,11 +80,11 @@ where
     slog: &'a [Cell<Entry<T>>],
 
     /// Logical index into the above slice at which the log starts.
-    head: AtomicUsize,
+    head: CachePadded<AtomicUsize>,
 
     /// Logical index into the above slice at which the log ends.
     /// New appends go here.
-    tail: AtomicUsize,
+    tail: CachePadded<AtomicUsize>,
 }
 
 /// The Log is Sync. The *mut u8 (`rawp`) is never dereferenced.
@@ -125,8 +127,8 @@ where
             rawb: bytes,
             size: num,
             slog: raw,
-            head: AtomicUsize::new(0usize),
-            tail: AtomicUsize::new(0usize),
+            head: CachePadded::new(AtomicUsize::new(0usize)),
+            tail: CachePadded::new(AtomicUsize::new(0usize)),
         }
     }
 

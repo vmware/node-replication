@@ -3,6 +3,8 @@
 extern crate alloc;
 extern crate core;
 
+extern crate crossbeam_utils;
+
 mod context;
 
 pub mod log;

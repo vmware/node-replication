@@ -1,0 +1,31 @@
+name: stack
+version: "0.1"
+author: Chinmay Kulkarni <chnm.kulkarni@gmail.com>
+about: Examples of concurrent data structures implemented using node-replication.
+args:
+        - replicas:
+                short: r
+                long: replicas
+                takes_value: true
+                default_value: "1"
+                help: The number of replicas of the data structure to be created.
+        - threads:
+                short: t
+                long: threads
+                help: The number of threads to spawn per replica.
+                takes_value: true
+                use_delimiter: true
+                multiple: true
+                default_value: "1"
+        - logsz:
+                short: l
+                long: logsz
+                help: The size of the shared log in GB.
+                takes_value: true
+                default_value: "1"
+        - nop:
+                short: n
+                long: nop
+                help: The number of operations that each thread must issue against the log.
+                takes_value: true
+                default_value: "1000"
