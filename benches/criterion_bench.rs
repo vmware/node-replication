@@ -1,81 +1,406 @@
+#![feature(alloc_layout_extra)]
+
 #[macro_use]
 extern crate criterion;
+#[macro_use]
+extern crate log;
+extern crate alloc;
+extern crate core_affinity;
+extern crate hwloc;
 
 use criterion::black_box;
-use criterion::Criterion;
+use criterion::{Benchmark, Criterion, ParameterizedBenchmark, Throughput};
 
+use std::fs::File;
+use std::io;
+use std::io::prelude::*;
 use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::{Duration, Instant};
 
-fn fibonacci(n: u64) -> u64 {
-    match n {
-        0 => 1,
-        1 => 1,
-        n => fibonacci(n - 1) + fibonacci(n - 2),
-    }
-}
+mod utils;
 
+use node_replication::{log::Log, replica::Replica, Dispatch};
+
+mod os_workload;
+use os_workload::kpi::{ProcessOperation, SystemCall, VSpaceOperation};
+
+/// Operations that go on the log
+///
+/// We conveniently use the same format for the parsing of our trace files.
 #[derive(Copy, Clone, Debug, PartialEq)]
 enum Opcode {
-    Get,
-    Set,
+    /// An operation on the process.
+    Process(ProcessOperation, u64, u64, u64, u64),
+    /// An operation on the vspace (of the process).
+    VSpace(VSpaceOperation, u64, u64, u64, u64),
+    /// A no-op, we should never encounter this in dispatch!
+    Empty,
 }
 
 impl Default for Opcode {
     fn default() -> Opcode {
-        Opcode::Get
+        Opcode::Empty
     }
 }
 
-#[derive(Copy, Clone, Default, Debug, PartialEq)]
-struct Params(u64);
-
+/// A BespinDispatcher that does syscalls on the os_workload ported code-base.
 #[derive(Default)]
-struct Dispatcher;
-impl node_replication::Dispatch for Dispatcher {
-    fn dispatch<T, P>(&self, op: T, params: P) {}
+struct BespinDispatcher;
+
+impl Dispatch for BespinDispatcher {
+    type Operation = Opcode;
+
+    fn dispatch(&self, op: Self::Operation) {
+        match op {
+            Opcode::Process(op, a1, a2, a3, a4) => {
+                os_workload::syscall_handle(SystemCall::Process as u64, op as u64, a1, a2, a3, a4)
+                    .expect("Process syscall failed")
+            }
+            Opcode::VSpace(op, a1, a2, a3, a4) => {
+                os_workload::syscall_handle(SystemCall::VSpace as u64, op as u64, a1, a2, a3, a4)
+                    .expect("VSpace syscall failed")
+            }
+            Opcode::Empty => unreachable!(),
+        };
+    }
 }
 
-fn node_replication_benchmark(c: &mut Criterion) {
-    let log = node_replication::log::Log::<Opcode, Params>::new(1024);
-    let repl = node_replication::replica::Replica::<Opcode, Params, Dispatcher>::new(&log);
+/// A PosixDispatcher that does syscalls on the local host.
+#[derive(Default)]
+struct PosixDispatcher;
 
-    c.bench_function("sillytest", |b| {
-        b.iter_custom(|iters| {
-            let barrier = Arc::new(Barrier::new(10));
-            let mut handles = Vec::new();
+/// The implementation of the PosixDispatcher.
+impl Dispatch for PosixDispatcher {
+    type Operation = Opcode;
 
-            // Spawn some load generator threads
-            for _ in 0..9 {
-                let c = barrier.clone();
-                handles.push(thread::spawn(move || {
-                    c.wait();
-                    for i in 0..iters {
-                        black_box(fibonacci(black_box(20)));
+    fn dispatch(&self, op: Self::Operation) {
+        use nix::sys::mman::{MapFlags, ProtFlags};
+
+        match op {
+            Opcode::Process(pop, _a, _b, _c, _d) => match pop {
+                ProcessOperation::AllocateVector => {}
+                ProcessOperation::Exit => {}
+                ProcessOperation::InstallVCpuArea => {}
+                ProcessOperation::Log => {}
+                ProcessOperation::SubscribeEvent => {}
+                ProcessOperation::Unknown => {
+                    unreachable!("Got a ProcessOperation::Unknown in dispatch")
+                }
+            },
+            Opcode::VSpace(vop, a, b, _c, _d) => {
+                match vop {
+                    VSpaceOperation::Identify => {}
+                    VSpaceOperation::Map => {
+                        let base = a;
+                        let size: nix::libc::size_t = b as nix::libc::size_t;
+                        debug!("VSpaceOperation::Map base {:#x} {:#x}", base, size);
+                        let res = unsafe {
+                            nix::sys::mman::mmap(
+                                base as *mut std::ffi::c_void, //0 as *mut std::ffi::c_void,
+                                size,
+                                ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
+                                MapFlags::MAP_ANON | MapFlags::MAP_PRIVATE, //| MapFlags::MAP_FIXED,
+                                -1 as std::os::unix::io::RawFd,
+                                0 as nix::libc::off_t,
+                            )
+                        };
+
+                        match res {
+                            Ok(m) => {
+                                trace!("mmap worked {:p}", m);
+                                ()
+                            }
+                            Err(e) => error!("mmap failed to map: {}", e),
+                        };
                     }
-                }));
+                    VSpaceOperation::MapDevice => {}
+                    VSpaceOperation::Unmap => {
+                        let base = a;
+                        let size: nix::libc::size_t = b as nix::libc::size_t;
+                        debug!("VSpaceOperation::Unmap base {:#x} {:#x}", base, size);
+                        let res =
+                            unsafe { nix::sys::mman::munmap(base as *mut std::ffi::c_void, size) };
+
+                        match res {
+                            Ok(()) => {
+                                trace!("munmap worked");
+                                ()
+                            }
+                            Err(e) => error!("mmap failed to unmap: {}", e),
+                        };
+                    }
+                    VSpaceOperation::Unknown => {
+                        unreachable!("Got a VSpaceOperation::Unknown in dispatch")
+                    }
+                }
             }
-
-            let c = barrier.clone();
-            c.wait(); // Wait for other threads to finish
-
-            // Measure on our base thread
-            let start = Instant::now();
-            for i in 0..iters {
-                black_box(fibonacci(black_box(20)));
-            }
-            let elapsed = start.elapsed();
-
-            // Wait for other threads to finish
-            for handle in handles {
-                handle.join().unwrap();
-            }
-
-            return elapsed;
-        })
-    });
+            Opcode::Empty => unreachable!("Got an Opcode::Empty in dispatch"),
+        }
+    }
 }
 
+/// A NopDispatcher that ignores all our operations.
+#[derive(Default)]
+struct NopDispatcher;
+
+/// The implementation of our NopDispatcher.
+///
+/// It doesn't do anything which is what it is supposed to do.
+impl Dispatch for NopDispatcher {
+    type Operation = Opcode;
+
+    fn dispatch(&self, op: Self::Operation) {
+        match op {
+            Opcode::Process(_op, _a, _b, _c, _d) => {}
+            Opcode::VSpace(_op, _a, _b, _c, _d) => {}
+            Empty => unreachable!(),
+        }
+    }
+}
+
+/// Parses syscall trace files and returns them as a vector
+/// of `Opcode`.
+///
+/// `file` is a path to the trace, relative to the base-dir
+/// of the repository.
+fn parse_ops(file: &str) -> io::Result<Vec<Opcode>> {
+    let file = File::open(file)?;
+    let reader = io::BufReader::new(file);
+    let mut ops: Vec<Opcode> = Vec::with_capacity(3000);
+
+    // Parses lines that look like this:
+    // ```no-run
+    // syscall: Process Log 32272690 2 0 2
+    // syscall: VSpace Identify 296775680 0 287430656 1
+    // ```
+    for line in reader.lines() {
+        let line = line.unwrap();
+        let words: Vec<&str> = line.split_whitespace().collect();
+        assert!(words.len() == 7);
+
+        assert_eq!(words[0], "syscall:");
+        let sc = words[1]; // Process or VSpace
+        let op = words[2]; // Log, Map, Unmap, Identify etc.
+        let a1 = words[3].parse::<u64>().unwrap_or(0);
+        let a2 = words[4].parse::<u64>().unwrap_or(0);
+        let a3 = words[5].parse::<u64>().unwrap_or(0);
+        let a4 = words[6].parse::<u64>().unwrap_or(0);
+
+        let opcode = match SystemCall::from(sc) {
+            SystemCall::Process => Opcode::Process(ProcessOperation::from(op), a1, a2, a3, a4),
+            SystemCall::VSpace => Opcode::VSpace(VSpaceOperation::from(op), a1, a2, a3, a4),
+            _ => unreachable!(),
+        };
+
+        ops.push(opcode);
+    }
+
+    Ok(ops)
+}
+
+/// Measures overhead of putting stuff on the log and no-op processing it at the same time.
+fn log_exec<T>(iters: u64, thread_num: usize, operations: &Arc<Vec<T::Operation>>) -> Duration
+where
+    T: Dispatch + Default + Send + 'static,
+    <T as Dispatch>::Operation: Send + Sync + Default + 'static,
+{
+    // Need a barrier to synchronize starting of threads
+    let barrier = Arc::new(Barrier::new(thread_num));
+    // Thread handles to `join` them at the end
+    let mut handles = Vec::with_capacity(thread_num);
+    // Our strategy on how we pin the threads to cores
+    let mapping = utils::MappingStrategy::Identity;
+
+    let log = Arc::new(Log::<<T as Dispatch>::Operation>::new(1024 * 1024 * 512));
+    let replica = Arc::new(Replica::<T>::new(&log));
+
+    // Spawn some load generator threads
+    for thread_id in 1..thread_num {
+        let c = barrier.clone();
+        let ops = operations.clone();
+        let replica = replica.clone();
+        handles.push(thread::spawn(move || {
+            let core_id = utils::thread_mapping(mapping, thread_id);
+            utils::pin_thread(core_id);
+            let idx = replica
+                .register()
+                .expect("Failed to register with Replica.");
+            for _i in 0..iters {
+                os_workload::kcb::set_kcb();
+                c.wait();
+                for op in ops.iter() {
+                    assert_ne!(*op, Default::default());
+                    replica.execute(*op, idx);
+                }
+                c.wait();
+                os_workload::kcb::drop_kcb();
+            }
+        }));
+    }
+
+    let c = barrier.clone();
+    let thread_id: usize = 0;
+    utils::pin_thread(utils::thread_mapping(mapping, thread_id));
+
+    //let replica = Arc::new(Replica::<NopDispatcher>::new(&log));
+    let idx = replica
+        .register()
+        .expect("Failed to register with Replica.");
+
+    // Measure on our base thread
+    let mut elapsed = Duration::new(0, 0);
+    for _i in 0..iters {
+        // Wait for other threads to start
+        os_workload::kcb::set_kcb();
+        c.wait();
+        let start = Instant::now();
+        for op in operations.iter() {
+            assert_ne!(*op, Default::default());
+            replica.execute(*op, idx);
+        }
+        c.wait();
+        elapsed = elapsed + start.elapsed();
+        os_workload::kcb::drop_kcb();
+    }
+
+    // Wait for other threads to finish
+    for handle in handles {
+        handle.join().unwrap();
+    }
+
+    elapsed
+}
+
+/// Applies the syscalls as a series to the dummy kernel implementation in `os_workload`.
+fn apply_syscalls(operations: &Arc<Vec<Opcode>>) {
+    for op in operations.iter() {
+        match op {
+            Opcode::Process(op, a1, a2, a3, a4) => os_workload::syscall_handle(
+                SystemCall::Process as u64,
+                *op as u64,
+                *a1,
+                *a2,
+                *a3,
+                *a4,
+            )
+            .expect("Process syscall failed"),
+            Opcode::VSpace(op, a1, a2, a3, a4) => os_workload::syscall_handle(
+                SystemCall::VSpace as u64,
+                *op as u64,
+                *a1,
+                *a2,
+                *a3,
+                *a4,
+            )
+            .expect("VSpace syscall failed"),
+            Opcode::Empty => unreachable!(),
+        };
+    }
+}
+
+fn syscalls_without_log(iters: u64, thread_num: usize, operations: &Arc<Vec<Opcode>>) -> Duration {
+    // Need a barrier to synchronize starting of threads
+    let barrier = Arc::new(Barrier::new(thread_num));
+    // Thread handles to `join` them at the end
+    let mut handles = Vec::with_capacity(thread_num);
+    // Our strategy on how we pin the threads to cores
+    let mapping = utils::MappingStrategy::Identity;
+
+    // Spawn some load generator threads
+    for thread_id in 1..thread_num {
+        let c = barrier.clone();
+        let ops = operations.clone();
+        handles.push(thread::spawn(move || {
+            let core_id = utils::thread_mapping(mapping, thread_id);
+            utils::pin_thread(core_id);
+            utils::set_core_id(core_id);
+            for _i in 0..iters {
+                os_workload::kcb::set_kcb();
+                c.wait();
+                black_box(apply_syscalls(black_box(&ops)));
+                c.wait();
+                os_workload::kcb::drop_kcb();
+            }
+        }));
+    }
+
+    let c = barrier.clone();
+    let thread_id: usize = 0;
+    utils::pin_thread(utils::thread_mapping(mapping, thread_id));
+
+    // Measure on our base thread
+    let mut elapsed = Duration::new(0, 0);
+    for _i in 0..iters {
+        os_workload::kcb::set_kcb();
+        // Wait for other threads to start
+        c.wait();
+        let start = Instant::now();
+        black_box(apply_syscalls(black_box(&operations)));
+        c.wait();
+        elapsed = elapsed + start.elapsed();
+        os_workload::kcb::drop_kcb();
+    }
+
+    // Wait for other threads to finish
+    for handle in handles {
+        handle.join().unwrap();
+    }
+
+    elapsed
+}
+
+fn log_overhead(c: &mut Criterion) {
+    //env_logger::init();
+    utils::disable_dvfs();
+
+    let operations = Arc::new(parse_ops("benches/bsd_init.log").unwrap());
+    let cpus = num_cpus::get();
+    let elements = operations.len();
+
+    let thread_counts: Vec<usize> = vec![1, 2];
+
+    c.bench(
+        "log",
+        ParameterizedBenchmark::new(
+            "overhead",
+            move |b, thread_counts| {
+                b.iter_custom(|iters| {
+                    log_exec::<PosixDispatcher>(iters, *thread_counts, &operations)
+                })
+            },
+            thread_counts,
+        )
+        .throughput(move |t| Throughput::Elements((t * elements) as u32)),
+    );
+}
+
+/// A simple benchmark that takes a bunch of syscall operations
+/// and then replays them using on our `os_workload` implementation
+/// of a syscall handler code.
+fn node_replication_benchmark(c: &mut Criterion) {
+    env_logger::init();
+
+    utils::disable_dvfs();
+    let operations = Arc::new(parse_ops("benches/bsd_init.log").unwrap());
+    let cpus = num_cpus::get();
+    let elements = operations.len();
+
+    let threads: Vec<usize> = vec![1, 2, 4];
+
+    c.bench(
+        "syscall",
+        ParameterizedBenchmark::new(
+            "no-log",
+            move |b, threads| {
+                b.iter_custom(|iters| syscalls_without_log(iters, *threads, &operations))
+            },
+            threads,
+        )
+        .throughput(move |t| Throughput::Elements((t * elements) as u32)),
+    );
+}
+
+criterion_group!(logbench, log_overhead);
 criterion_group!(benches, node_replication_benchmark);
-criterion_main!(benches);
+criterion_main!(benches, logbench);

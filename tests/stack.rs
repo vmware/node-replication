@@ -14,7 +14,7 @@ use rand::{thread_rng, Rng};
 
 const DEFAULT_STACK_SIZE: u32 = 100;
 
-#[derive(Clone, Copy)]
+#[derive(Eq, PartialEq, Clone, Copy, Debug)]
 enum Op {
     Push(u32),
     Pop,
@@ -30,7 +30,7 @@ impl Default for Op {
 #[derive(Eq, PartialEq)]
 struct Stack {
     storage: RefCell<Vec<u32>>,
-    popped: RefCell<Vec<u32>>,
+    popped: RefCell<Vec<Option<u32>>>,
 }
 
 impl Stack {
@@ -40,12 +40,7 @@ impl Stack {
 
     pub fn pop(&self) {
         let r = self.storage.borrow_mut().pop();
-
-        if r.is_none() {
-            panic!("Pop empty")
-        } else {
-            self.popped.borrow_mut().push(r.unwrap());
-        }
+        self.popped.borrow_mut().push(r);
     }
 }
 
@@ -55,10 +50,6 @@ impl Default for Stack {
             storage: Default::default(),
             popped: Default::default(),
         };
-
-        for e in 0..DEFAULT_STACK_SIZE {
-            s.push(e);
-        }
 
         s
     }
@@ -73,6 +64,60 @@ impl Dispatch for Stack {
             Op::Pop => self.pop(),
             Op::Invalid => panic!("Got invalid OP"),
         }
+    }
+}
+
+/// Sequential data structure test (one thread).
+///
+/// Execute operations at random, comparing the result
+/// against a known correct implementation
+#[test]
+fn sequential_test() {
+    let log = Arc::new(Log::<<Stack as Dispatch>::Operation>::new(5 * 1024 * 1024));
+
+    let mut orng = thread_rng();
+    let nop = 50;
+
+    let r = Replica::<Stack>::new(&log);
+    let idx = r.register().expect("Failed to register with Replica.");
+    let mut correct_stack: Vec<u32> = Vec::new();
+    let mut correct_popped: Vec<Option<u32>> = Vec::new();
+
+    // Populate with some initial data
+    for _i in 0..50 {
+        let element = orng.gen();
+        r.execute(Op::Push(element), idx);
+        correct_stack.push(element);
+    }
+
+    for _i in 0..nop {
+        let op: usize = orng.gen();
+        match op % 2usize {
+            0usize => {
+                r.execute(Op::Pop, idx);
+                correct_popped.push(correct_stack.pop());
+            }
+            1usize => {
+                let element = orng.gen();
+                r.execute(Op::Push(element), idx);
+                correct_stack.push(element);
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    unsafe {
+        let s = r.data();
+        assert_eq!(
+            correct_popped,
+            *s.popped.borrow_mut(),
+            "Pop operation error detected"
+        );
+        assert_eq!(
+            correct_stack,
+            *s.storage.borrow_mut(),
+            "Push operation error detected"
+        );
     }
 }
 
@@ -102,8 +147,10 @@ fn bench(r: Arc<Replica<Stack>>, nop: usize, barrier: Arc<Barrier>) -> (u64, u64
     (0, 0)
 }
 
+/// Verify that 2 replicas are equal after a set of randon
+/// operations have been executed.
 #[test]
-fn stack_integration() {
+fn replicas_are_equal() {
     let t = 4usize;
     let r = 2usize;
     let l = 1usize;

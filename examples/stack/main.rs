@@ -28,7 +28,7 @@ use plotters::prelude::*;
 
 const DEFAULT_STACK_SIZE: u32 = 1000u32 * 1000u32;
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Eq, PartialEq, Clone, Copy)]
 enum Op {
     Push(u32),
 

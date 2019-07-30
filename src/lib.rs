@@ -14,7 +14,7 @@ pub mod replica;
 /// library executes an operation against the data structure, it invokes the `dispatch()`
 /// method with the operation as an argument.
 pub trait Dispatch {
-    type Operation: Sized + Copy + Default;
+    type Operation: Sized + Copy + Default + PartialEq + core::fmt::Debug;
 
     fn dispatch(&self, op: Self::Operation);
 }

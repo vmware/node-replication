@@ -15,13 +15,21 @@ debug = true
 
 [dev-dependencies]
 chrono = "0.4"
-core_affinity = { git = "https://github.com/nau/core_affinity_rs", branch = "patch-1" }
-clap = { version = "2", features = ["yaml"] }
 criterion = { git = "https://github.com/gz/criterion.rs", branch = "iter-custom" }
+clap = { version = "2", features = ["yaml"] }
+rand = "0.7"
+plotters = "^0.2.2"
+nix = "0.14.1"
+log = "0.4"
+hwloc = "0.5.0"
+env_logger = "0.6"
+num_cpus = "1.10"
+x86 = "0.19"
+custom_error = "1.6.0"
+slabmalloc = "0.3.1"
+core_affinity = { git = "https://github.com/nau/core_affinity_rs", branch = "patch-1" }
 csv = "0.*"
 nom = "^1.2.3"
-plotters = "^0.2.2"
-rand = "0.7"
 rustc-serialize = "0.3"
 
 [[bench]]

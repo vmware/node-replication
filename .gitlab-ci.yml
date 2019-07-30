@@ -5,13 +5,14 @@ stages:
 build:
   stage: build
   script:
-    - sudo apt install libfreetype6-dev
+    - sudo apt install libfreetype6-dev gnuplot --yes
     - cargo build
 test:
   stage: test
   script:
     - cargo +nightly fmt -- --check
     - cargo test
+    - cargo bench
   dependencies:
     - build
   variables:
