@@ -202,7 +202,6 @@ where
         // append the arguments passed into this method too.
         {
             let mut b = self.buffer.borrow_mut();
-            b.push(op);
             for idx in 1..self.next.load(Ordering::SeqCst) {
                 self.acquire(idx);
 
@@ -216,6 +215,7 @@ where
 
                 self.release(idx);
             }
+            b.push(op);
 
             // Append all collected operations into the shared log and clear the buffer.
             while !self.slog.append(&b) {}

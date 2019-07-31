@@ -189,6 +189,9 @@ where
         // Execute all operations from the passed in offset to the shared log's tail.
         for idx in from..t {
             let entry = self.slog[self.index(idx)].get();
+            if !entry.alivef {
+                return idx - from;
+            }
             dispatch(entry.operation);
         }
 
