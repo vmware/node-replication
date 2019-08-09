@@ -203,6 +203,23 @@ where
     fn index(&self, logical: usize) -> usize {
         logical % self.size
     }
+
+    /// Resets the log; *for testing only since we don't have GC*.
+    ///
+    /// # TODO
+    /// Remove when we have GC.
+    #[inline(always)]
+    pub unsafe fn reset(&self) {
+        for e in self.slog {
+            e.set(Entry::default());
+        }
+
+        let t = self.tail.load(Ordering::SeqCst);
+        let h = self.head.load(Ordering::SeqCst);
+
+        self.tail.compare_and_swap(t, 0, Ordering::SeqCst);
+        self.head.compare_and_swap(h, 0, Ordering::SeqCst);
+    }
 }
 
 impl<'a, T> Default for Log<'a, T>

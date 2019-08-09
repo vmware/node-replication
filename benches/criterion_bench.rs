@@ -401,6 +401,107 @@ fn node_replication_benchmark(c: &mut Criterion) {
     );
 }
 
-criterion_group!(logbench, log_overhead);
-criterion_group!(benches, node_replication_benchmark);
-criterion_main!(benches, logbench);
+fn generic_log_bench(
+    iters: u64,
+    thread_num: usize,
+    batch: usize,
+    log: &Arc<Log<'static, usize>>,
+    operations: &Arc<Vec<usize>>,
+    f: fn(&Arc<Log<usize>>, &Arc<Vec<usize>>, usize) -> (),
+) -> Duration {
+    // Need a barrier to synchronize starting of threads
+    let barrier = Arc::new(Barrier::new(thread_num));
+    // Thread handles to `join` them at the end
+    let mut handles = Vec::with_capacity(thread_num);
+    // Our strategy on how we pin the threads to cores
+    let mapping = utils::MappingStrategy::Identity;
+
+    unsafe {
+        log.reset();
+    }
+
+    // Spawn some load generator threads
+    for thread_id in 1..thread_num {
+        let c = barrier.clone();
+        let ops = operations.clone();
+        let log = log.clone();
+        handles.push(thread::spawn(move || {
+            let core_id = utils::thread_mapping(mapping, thread_id);
+            utils::pin_thread(core_id);
+            utils::set_core_id(core_id);
+            for _i in 0..iters {
+                os_workload::kcb::set_kcb();
+                c.wait();
+                black_box(f(&log, &ops, batch));
+                c.wait();
+                os_workload::kcb::drop_kcb();
+            }
+        }));
+    }
+
+    let c = barrier.clone();
+    let thread_id: usize = 0;
+    utils::pin_thread(utils::thread_mapping(mapping, thread_id));
+    let log = log.clone();
+    // Measure on our base thread
+    let mut elapsed = Duration::new(0, 0);
+    for _i in 0..iters {
+        os_workload::kcb::set_kcb();
+        // Wait for other threads to start
+        c.wait();
+        let start = Instant::now();
+        black_box(f(&log, &operations, batch));
+        c.wait();
+        elapsed = elapsed + start.elapsed();
+        os_workload::kcb::drop_kcb();
+    }
+
+    // Wait for other threads to finish
+    for handle in handles {
+        handle.join().unwrap();
+    }
+
+    elapsed
+}
+
+fn scale_log(log: &Arc<Log<usize>>, ops: &Arc<Vec<usize>>, batch: usize) {
+    for batch_op in ops.rchunks(batch) {
+        let r = log.append(batch_op);
+        assert!(r);
+    }
+}
+
+fn log_scale_bench(c: &mut Criterion) {
+    //env_logger::init();
+
+    utils::disable_dvfs();
+    let mut operations = Vec::new();
+    for e in 0..50000 {
+        operations.push(e);
+    }
+
+    let operations = Arc::new(operations);
+    let elements = operations.len();
+
+    let threads_batchsize: Vec<(usize, usize)> =
+        vec![(1, 1), (1, 8), (2, 1), (2, 8), (4, 1), (4, 8)];
+    let log = Arc::new(Log::<usize>::new(1024 * 1024 * 1024 * 2));
+
+    c.bench(
+        "log",
+        ParameterizedBenchmark::new(
+            "append",
+            move |b, (threads, batch)| {
+                b.iter_custom(|iters| {
+                    generic_log_bench(iters, *threads, *batch, &log, &operations, scale_log)
+                })
+            },
+            threads_batchsize,
+        )
+        .throughput(move |(t, b)| Throughput::Elements((t * elements) as u32)),
+    );
+}
+
+criterion_group!(osbench, node_replication_benchmark);
+criterion_group!(logbench, log_scale_bench, log_overhead);
+criterion_main!(osbench, logbench);
