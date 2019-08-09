@@ -7,16 +7,24 @@ args:
                 short: r
                 long: replicas
                 takes_value: true
-                default_value: "1"
-                help: The number of replicas of the data structure to be created.
+                help: How replicas should be created and allocated (either one per l1, l2, l3, socket or entire system).
+                possible_values: [ "l1", "l2", "l3", "socket", "one" ]
+                default_value: "one"
         - threads:
                 short: t
                 long: threads
-                help: The number of threads to spawn per replica.
+                help: The number of total threads to spawn (supply multiple values for multiple experiments).
                 takes_value: true
                 use_delimiter: true
                 multiple: true
                 default_value: "1"
+        - mapping:
+                short: m
+                help: How threads are mapped to cores (none = do not pin, sequential = keep close together, interleave = spread across sockets).
+                value_name: MAPPING
+                long: mapping
+                takes_value: true
+                possible_values: [ "none", "sequential", "interleave" ]
         - logsz:
                 short: l
                 long: logsz

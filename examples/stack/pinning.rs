@@ -1,7 +1,18 @@
 use nom::*;
 
+use serde::{Deserialize, Serialize};
 use std::process::Command;
 use std::str::{from_utf8_unchecked, FromStr};
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub enum ThreadMapping {
+    /// Don't do any pinning.
+    None,
+    /// Keep threads of a replica on the same socket (as much as possible).
+    Sequential,
+    /// Spread threads of a replica out across sockets.
+    Interleave,
+}
 
 pub type Node = u64;
 pub type Socket = u64;
@@ -50,7 +61,7 @@ fn get_node_info(node: Node, numactl_output: &String) -> Option<NodeInfo> {
     None
 }
 
-#[derive(Debug, Eq, PartialEq, RustcEncodable)]
+#[derive(Eq, PartialEq, RustcEncodable, Clone, Copy)]
 pub struct CpuInfo {
     pub node: NodeInfo,
     pub socket: Socket,
@@ -59,6 +70,16 @@ pub struct CpuInfo {
     pub l1: L1,
     pub l2: L2,
     pub l3: L3,
+}
+
+impl std::fmt::Debug for CpuInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "CpuInfo {{ core/l1/l2: {}/{}/{}, cpu: {}, socket/l3/node: {}/{}/{} }}",
+            self.core, self.l1, self.l2, self.cpu, self.socket, self.l3, self.node.node
+        )
+    }
 }
 
 #[derive(Debug, Eq, PartialEq, Ord, PartialOrd, Copy, Clone, RustcEncodable)]
@@ -121,22 +142,27 @@ impl MachineTopology {
         MachineTopology { data: data }
     }
 
-    pub fn sockets(&self) -> Vec<Socket> {
-        let mut sockets: Vec<Cpu> = self.data.iter().map(|t| t.socket).collect();
-        sockets.sort();
-        sockets.dedup();
-        sockets
-    }
+    pub fn allocate(&self, strategy: ThreadMapping, how_many: usize, use_ht: bool) -> Vec<CpuInfo> {
+        let v = Vec::with_capacity(how_many);
+        let mut cpus = self.data.clone();
 
-    pub fn cores_on_socket(&self, socket: Socket) -> Vec<Core> {
-        let mut cores: Vec<Core> = self
-            .data
-            .iter()
-            .filter(|c| c.socket == socket)
-            .map(|c| c.core)
-            .collect();
-        cores.sort();
-        cores.dedup();
-        cores
+        if !use_ht {
+            cpus.sort_by_key(|c| c.core);
+            cpus.dedup_by(|a, b| a.core == b.core);
+        }
+
+        match strategy {
+            ThreadMapping::None => v,
+            ThreadMapping::Interleave => {
+                cpus.sort_by_key(|c| c.cpu);
+                let c = cpus.iter().take(how_many).map(|c| *c).collect();
+                c
+            }
+            ThreadMapping::Sequential => {
+                cpus.sort_by_key(|c| c.socket);
+                let c = cpus.iter().take(how_many).map(|c| *c).collect();
+                c
+            }
+        }
     }
 }
