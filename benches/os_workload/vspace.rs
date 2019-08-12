@@ -1,3 +1,6 @@
+// Copyright © 2019 VMware, Inc. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
 //! API to construct a virtual address space for the loaded kernel image.
 use std::pin::Pin;
 

@@ -1,3 +1,6 @@
+// Copyright © 2019 VMware, Inc. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
 use alloc::alloc::{alloc, dealloc, Layout};
 
 use core::cell::Cell;

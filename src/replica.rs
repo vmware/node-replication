@@ -1,3 +1,6 @@
+// Copyright © 2019 VMware, Inc. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
 use core::cell::{Cell, RefCell};
 use core::sync::atomic::{spin_loop_hint, AtomicBool, AtomicUsize, Ordering};
 

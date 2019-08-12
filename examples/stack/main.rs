@@ -1,3 +1,6 @@
+// Copyright © 2019 VMware, Inc. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
 extern crate chrono;
 extern crate clap;
 extern crate core_affinity;

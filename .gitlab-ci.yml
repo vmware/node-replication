@@ -12,7 +12,6 @@ test:
   script:
     - cargo +nightly fmt -- --check
     - cargo test
-    - cargo bench
   dependencies:
     - build
   variables:
