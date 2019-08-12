@@ -6,13 +6,18 @@ scales it out to multiple cores and NUMA nodes using an operation log.
 
 The code should be treated as experimental and work in progress, there may be correctness and performance bugs.
 
-# Testing
+## Testing
 Unit tests can be run by executing the command `cargo test --lib`
 
-# Examples
-A working example of a replicated stack can be found under `examples/stack.rs`
+## Benchmarks
+`cargo bench` will run several benchmarks evaluating the performance of the log. The code is located in the `benches` folder.
 
-To run the stack example with one and two threads each you can invoke:
-`cargo run --release --example stack -- -r socket -m sequential -t1,2 --nop 800000 -l 2`
+## Examples
 
-For a detailled explanation of the parameters use `-h`.
+### Stack
+A working example of a replicated stack can be found under `examples/stack/`
+
+To run the stack example with 1-2 threads, each performing 800'000 push and pop operations invoke:
+`cargo run --release --example stack -- -t1,2 --nop 800000 -l 2`
+
+For a detailled explanation of the program parameters use `-h`.
