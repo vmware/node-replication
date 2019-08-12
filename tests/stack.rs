@@ -56,13 +56,16 @@ impl Default for Stack {
 
 impl Dispatch for Stack {
     type Operation = Op;
+    type Response = Option<u32>;
 
-    fn dispatch(&self, op: Self::Operation) {
+    fn dispatch(&self, op: Self::Operation) -> Self::Response {
         match op {
             Op::Push(v) => self.push(v),
             Op::Pop => self.pop(),
             Op::Invalid => panic!("Got invalid OP"),
         }
+
+        None
     }
 }
 
@@ -150,14 +153,15 @@ impl Default for VerifyStack {
 
 impl Dispatch for VerifyStack {
     type Operation = Op;
+    type Response = Option<u32>;
 
-    fn dispatch(&self, op: Self::Operation) {
+    fn dispatch(&self, op: Self::Operation) -> Self::Response {
         match op {
             Op::Push(v) => {
                 let _tid = (v & 0xffff) as u16;
                 let _val = ((v >> 16) & 0xffff) as u16;
                 //println!("Push tid {} val {}", tid, val);
-                self.push(v)
+                self.push(v);
             }
             Op::Pop => {
                 let ele: u32 = self.pop();
@@ -189,6 +193,8 @@ impl Dispatch for VerifyStack {
             }
             Op::Invalid => panic!("Got invalid OP"),
         }
+
+        return None;
     }
 }
 
@@ -247,7 +253,7 @@ fn parallel_push_sequential_pop_test() {
         let replica = replicas[i].clone();
         for _j in 0..t {
             for _z in 0..nop {
-                replica.execute(Op::Pop, 0);
+                replica.execute(Op::Pop, 1);
             }
         }
     }

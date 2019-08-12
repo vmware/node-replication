@@ -50,19 +50,47 @@ struct BespinDispatcher;
 
 impl Dispatch for BespinDispatcher {
     type Operation = Opcode;
+    type Response = (u64, u64);
 
-    fn dispatch(&self, op: Self::Operation) {
+    fn dispatch(&self, op: Self::Operation) -> Self::Response {
         match op {
             Opcode::Process(op, a1, a2, a3, a4) => {
-                os_workload::syscall_handle(SystemCall::Process as u64, op as u64, a1, a2, a3, a4)
-                    .expect("Process syscall failed")
+                return os_workload::syscall_handle(
+                    SystemCall::Process as u64,
+                    op as u64,
+                    a1,
+                    a2,
+                    a3,
+                    a4,
+                )
+                .expect("Process syscall failed");
             }
             Opcode::VSpace(op, a1, a2, a3, a4) => {
-                os_workload::syscall_handle(SystemCall::VSpace as u64, op as u64, a1, a2, a3, a4)
-                    .expect("VSpace syscall failed")
+                return os_workload::syscall_handle(
+                    SystemCall::VSpace as u64,
+                    op as u64,
+                    a1,
+                    a2,
+                    a3,
+                    a4,
+                )
+                .expect("VSpace syscall failed")
             }
             Opcode::Empty => unreachable!(),
         };
+    }
+}
+
+fn fix_op(oper: &Opcode) -> Opcode {
+    match oper {
+        Opcode::VSpace(op, a1, a2, a3, a4) => match op {
+            VSpaceOperation::Map => {
+                let paddr = os_workload::get_paddr(*a2);
+                return Opcode::VSpace(*op, *a1, *a2, paddr, *a2);
+            }
+            _ => return *oper,
+        },
+        _ => return *oper,
     }
 }
 
@@ -73,6 +101,7 @@ struct PosixDispatcher;
 /// The implementation of the PosixDispatcher.
 impl Dispatch for PosixDispatcher {
     type Operation = Opcode;
+    type Response = ();
 
     fn dispatch(&self, op: Self::Operation) {
         use nix::sys::mman::{MapFlags, ProtFlags};
@@ -149,8 +178,9 @@ struct NopDispatcher;
 /// It doesn't do anything which is what it is supposed to do.
 impl Dispatch for NopDispatcher {
     type Operation = Opcode;
+    type Response = ();
 
-    fn dispatch(&self, op: Self::Operation) {
+    fn dispatch(&self, op: Self::Operation) -> Self::Response {
         match op {
             Opcode::Process(_op, _a, _b, _c, _d) => {}
             Opcode::VSpace(_op, _a, _b, _c, _d) => {}
@@ -200,11 +230,7 @@ fn parse_ops(file: &str) -> io::Result<Vec<Opcode>> {
 }
 
 /// Measures overhead of putting stuff on the log and no-op processing it at the same time.
-fn log_exec<T>(iters: u64, thread_num: usize, operations: &Arc<Vec<T::Operation>>) -> Duration
-where
-    T: Dispatch + Default + Send + 'static,
-    <T as Dispatch>::Operation: Send + Sync + Default + 'static,
-{
+fn log_exec(iters: u64, thread_num: usize, operations: &Arc<Vec<Opcode>>) -> Duration {
     // Need a barrier to synchronize starting of threads
     let barrier = Arc::new(Barrier::new(thread_num));
     // Thread handles to `join` them at the end
@@ -212,8 +238,8 @@ where
     // Our strategy on how we pin the threads to cores
     let mapping = utils::MappingStrategy::Identity;
 
-    let log = Arc::new(Log::<<T as Dispatch>::Operation>::new(1024 * 1024 * 512));
-    let replica = Arc::new(Replica::<T>::new(&log));
+    let log = Arc::new(Log::<Opcode>::new(1024 * 1024 * 1024 * 4));
+    let replica = Arc::new(Replica::<BespinDispatcher>::new(&log));
 
     // Spawn some load generator threads
     for thread_id in 1..thread_num {
@@ -231,7 +257,7 @@ where
                 c.wait();
                 for op in ops.iter() {
                     assert_ne!(*op, Default::default());
-                    replica.execute(*op, idx);
+                    replica.execute(fix_op(op), idx);
                 }
                 c.wait();
                 os_workload::kcb::drop_kcb();
@@ -257,7 +283,7 @@ where
         let start = Instant::now();
         for op in operations.iter() {
             assert_ne!(*op, Default::default());
-            replica.execute(*op, idx);
+            replica.execute(fix_op(op), idx);
         }
         c.wait();
         elapsed = elapsed + start.elapsed();
@@ -275,25 +301,15 @@ where
 /// Applies the syscalls as a series to the dummy kernel implementation in `os_workload`.
 fn apply_syscalls(operations: &Arc<Vec<Opcode>>) {
     for op in operations.iter() {
-        match op {
-            Opcode::Process(op, a1, a2, a3, a4) => os_workload::syscall_handle(
-                SystemCall::Process as u64,
-                *op as u64,
-                *a1,
-                *a2,
-                *a3,
-                *a4,
-            )
-            .expect("Process syscall failed"),
-            Opcode::VSpace(op, a1, a2, a3, a4) => os_workload::syscall_handle(
-                SystemCall::VSpace as u64,
-                *op as u64,
-                *a1,
-                *a2,
-                *a3,
-                *a4,
-            )
-            .expect("VSpace syscall failed"),
+        match fix_op(op) {
+            Opcode::Process(op, a1, a2, a3, a4) => {
+                os_workload::syscall_handle(SystemCall::Process as u64, op as u64, a1, a2, a3, a4)
+                    .expect("Process syscall failed")
+            }
+            Opcode::VSpace(op, a1, a2, a3, a4) => {
+                os_workload::syscall_handle(SystemCall::VSpace as u64, op as u64, a1, a2, a3, a4)
+                    .expect("VSpace syscall failed")
+            }
             Opcode::Empty => unreachable!(),
         };
     }
@@ -365,9 +381,7 @@ fn log_overhead(c: &mut Criterion) {
         ParameterizedBenchmark::new(
             "overhead",
             move |b, thread_counts| {
-                b.iter_custom(|iters| {
-                    log_exec::<PosixDispatcher>(iters, *thread_counts, &operations)
-                })
+                b.iter_custom(|iters| log_exec(iters, *thread_counts, &operations))
             },
             thread_counts,
         )
@@ -467,7 +481,7 @@ fn generic_log_bench(
 fn scale_log(log: &Arc<Log<usize>>, ops: &Arc<Vec<usize>>, batch: usize) {
     for batch_op in ops.rchunks(batch) {
         let r = log.append(batch_op);
-        assert!(r);
+        assert!(r.is_some());
     }
 }
 
@@ -503,5 +517,10 @@ fn log_scale_bench(c: &mut Criterion) {
 }
 
 criterion_group!(osbench, node_replication_benchmark);
-criterion_group!(logbench, log_scale_bench, log_overhead);
-criterion_main!(osbench, logbench);
+criterion_group!(logscale, log_scale_bench);
+criterion_group!(
+    name = logbench;
+    config = Criterion::default().sample_size(8);
+    targets = log_overhead
+);
+criterion_main!(osbench, logbench, logscale);

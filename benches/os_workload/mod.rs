@@ -4,6 +4,8 @@ mod memory;
 mod process;
 mod vspace;
 
+use vspace::ResourceType;
+
 pub use kpi::*;
 use process::{UserPtr, UserValue};
 
@@ -140,7 +142,13 @@ fn handle_process(arg1: u64, arg2: u64, arg3: u64) -> Result<(u64, u64), KError>
 }
 
 /// System call handler for vspace operations
-fn handle_vspace(arg1: u64, arg2: u64, arg3: u64) -> Result<(u64, u64), KError> {
+fn handle_vspace(
+    arg1: u64,
+    arg2: u64,
+    arg3: u64,
+    arg4: u64,
+    arg5: u64,
+) -> Result<(u64, u64), KError> {
     let op = VSpaceOperation::from(arg1);
     let base = VAddr::from(arg2);
     let bound = arg3;
@@ -152,11 +160,11 @@ fn handle_vspace(arg1: u64, arg2: u64, arg3: u64) -> Result<(u64, u64), KError> 
     match op {
         VSpaceOperation::Map => unsafe {
             plock.as_mut().map_or(Err(KError::ProcessNotSet), |p| {
-                let (paddr, size) = (*p).vspace.map(
+                let (paddr, size) = (*p).vspace.map_new(
                     base,
                     bound as usize,
                     vspace::MapAction::ReadWriteUser,
-                    0x1000,
+                    x86::bits64::paging::PAddr(arg4),
                 )?;
 
                 //tlb::flush_all();
@@ -195,6 +203,23 @@ fn handle_vspace(arg1: u64, arg2: u64, arg3: u64) -> Result<(u64, u64), KError> 
     }
 }
 
+pub fn get_paddr(size: u64) -> u64 {
+    let kcb = kcb::get_kcb();
+    let mut plock = kcb.current_process();
+
+    plock
+        .as_mut()
+        .map_or(Err(KError::ProcessNotSet), |p| {
+            Ok((*p).vspace.allocate_pages_aligned(
+                size as usize / BASE_PAGE_SIZE,
+                ResourceType::Memory,
+                0x1000,
+            ))
+        })
+        .unwrap()
+        .as_u64()
+}
+
 #[inline(never)]
 #[no_mangle]
 pub fn syscall_handle(
@@ -208,7 +233,7 @@ pub fn syscall_handle(
     //println!("syscall_handle {} {} {} {} {} {}", function, arg1, arg2, arg3, arg4, arg5);
     let status: Result<(u64, u64), KError> = match SystemCall::new(function) {
         SystemCall::Process => handle_process(arg1, arg2, arg3),
-        SystemCall::VSpace => handle_vspace(arg1, arg2, arg3),
+        SystemCall::VSpace => handle_vspace(arg1, arg2, arg3, arg4, arg5),
         _ => Err(KError::InvalidSyscallArgument1 { a: function }),
     };
 

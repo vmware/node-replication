@@ -558,6 +558,20 @@ impl VSpace {
         self.map_generic(base, (paddr, size), rights)?;
         Ok((paddr, size))
     }
+
+    #[allow(unused)]
+    pub fn map_new(
+        &mut self,
+        base: VAddr,
+        size: usize,
+        rights: MapAction,
+        paddr: PAddr,
+    ) -> Result<(PAddr, usize), VSpaceError> {
+        assert_eq!(base % BASE_PAGE_SIZE, 0, "base is not page-aligned");
+        assert_eq!(size % BASE_PAGE_SIZE, 0, "size is not page-aligned");
+        self.map_generic(base, (paddr, size), rights)?;
+        Ok((paddr, size))
+    }
 }
 
 pub unsafe fn dump_table(pml4_table: &PML4) {

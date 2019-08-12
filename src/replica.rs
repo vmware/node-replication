@@ -27,7 +27,6 @@ const MAX_THREADS_PER_REPLICA: usize = 32;
 pub struct Replica<'a, D>
 where
     D: Sized + Default + Dispatch,
-    <D as Dispatch>::Operation: Sized + Copy + Default,
 {
     /// Logical log offset upto which this replica has applied operations to its
     /// copy of the replicated data structure.
@@ -42,11 +41,20 @@ where
 
     /// Static array of thread contexts. Threads buffer operations in here when they
     /// cannot perform flat combining (because another thread might be doing so).
-    contexts: [RefCell<Context<<D as Dispatch>::Operation>>; MAX_THREADS_PER_REPLICA],
+    contexts: [RefCell<Context<<D as Dispatch>::Operation, <D as Dispatch>::Response>>;
+        MAX_THREADS_PER_REPLICA],
 
     /// A buffer of operations for flat combining. The combiner stages operations in
     /// here and then batch appends them into the shared log.
     buffer: RefCell<Vec<<D as Dispatch>::Operation>>,
+
+    /// Number of operations collected by the combiner from each thread at any
+    /// given point of time.
+    inflight: RefCell<[usize; MAX_THREADS_PER_REPLICA]>,
+
+    /// A buffer of results collected after flat combining. With the help of `inflight`,
+    /// the combiner enqueues this results into the appropriate thread context.
+    result: RefCell<Vec<<D as Dispatch>::Response>>,
 
     /// Reference to the shared log that operations will be appended to and the
     /// data structure will be updated from.
@@ -64,17 +72,11 @@ where
 
 /// The Replica is Sync. `tail` and `buffer` are protected by a CAS on `combiner`.
 /// `contexts` are protected by fine-grained locks.
-unsafe impl<'a, D> Sync for Replica<'a, D>
-where
-    D: Sized + Default + Dispatch,
-    <D as Dispatch>::Operation: Sized + Copy + Default,
-{
-}
+unsafe impl<'a, D> Sync for Replica<'a, D> where D: Sized + Default + Dispatch {}
 
 impl<'a, D> core::fmt::Debug for Replica<'a, D>
 where
     D: Sized + Default + Dispatch,
-    <D as Dispatch>::Operation: Sized + Copy + Default,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         write!(f, "Replica")
@@ -84,7 +86,6 @@ where
 impl<'a, D> Replica<'a, D>
 where
     D: Sized + Default + Dispatch,
-    <D as Dispatch>::Operation: Sized + Copy + Default,
 {
     /// Constructs an instance of a replicated data structure.
     ///
@@ -97,7 +98,15 @@ where
             next: CachePadded::new(AtomicUsize::new(1)),
             contexts: Default::default(),
             buffer: RefCell::new(Vec::with_capacity(
-                MAX_THREADS_PER_REPLICA * Context::<<D as Dispatch>::Operation>::batch_size(),
+                MAX_THREADS_PER_REPLICA
+                    * Context::<<D as Dispatch>::Operation, <D as Dispatch>::Response>::batch_size(
+                    ),
+            )),
+            inflight: Default::default(),
+            result: RefCell::new(Vec::with_capacity(
+                MAX_THREADS_PER_REPLICA
+                    * Context::<<D as Dispatch>::Operation, <D as Dispatch>::Response>::batch_size(
+                    ),
             )),
             slog: log.clone(),
             data: D::default(),
@@ -129,28 +138,57 @@ where
     ///
     /// In addition to the supplied operation, this method might execute operations that were
     /// received on a different replica and appended to the shared log.
-    pub fn execute(&self, op: <D as Dispatch>::Operation, idx: usize) {
-        // Infinite loop until some thread on this replica is elected combiner.
-        loop {
-            // First, check if there already is a flat combiner. If yes, then just enqueue the
-            // operation on the thread local context and return to the caller.
-            let mut combine = 0;
-            for _idx in 0..4 {
-                combine += self.combiner.load(Ordering::Relaxed);
-            }
+    pub fn execute(
+        &self,
+        op: <D as Dispatch>::Operation,
+        idx: usize,
+    ) -> Vec<<D as Dispatch>::Response> {
+        // Enqueue the operation onto the thread local batch.
+        while !self.make_pending(op, idx) {}
 
-            if combine != 0 {
-                if self.make_pending(op, idx) {
-                    return;
+        // First, check if there already is a flat combiner. If there is no active flat combiner
+        // then try to perform combining on this thread.
+        let mut combine = 0;
+        for _idx in 0..4 {
+            combine += self.combiner.load(Ordering::Relaxed);
+        }
+
+        if combine == 0 {
+            self.try_combine(idx);
+        }
+
+        // Return pending responses on this thread if any.
+        self.get_responses(idx, false)
+    }
+
+    /// Returns a vector of pending responses on the thread identified by `idx`.
+    ///
+    /// Takes in a flag `wait`. If true, this method waits until a result is available. If
+    /// false, it checks for results once and returns immediately after.
+    pub fn get_responses(&self, idx: usize, wait: bool) -> Vec<<D as Dispatch>::Response> {
+        let mut r = Vec::new();
+
+        // Loop checking if there are responses available on the thread's context. Break if we
+        // found results or if this method was invoked with `wait = false`.
+        loop {
+            self.acquire(idx);
+
+            {
+                let mut c = self.contexts[idx - 1].borrow_mut();
+                if let Some(res) = c.res() {
+                    r.extend_from_slice(res);
+                    c.reset_res();
                 }
             }
 
-            // There is no active flat combiner. Try to perform combining on this thread. If
-            // that succeeds, then just return to the caller.
-            if self.try_combine(op, idx) {
-                return;
+            self.release(idx);
+
+            if r.len() > 0 || !wait {
+                break;
             }
         }
+
+        return r;
     }
 
     /// Consume the replica and return the underlying replicated data structure.
@@ -189,11 +227,11 @@ where
     }
 
     /// Appends an operation to the log and attempts to perform flat combining.
-    fn try_combine(&self, op: <D as Dispatch>::Operation, idx: usize) -> bool {
+    fn try_combine(&self, idx: usize) {
         // Try to become the combiner here. If this fails, then simply return.
         if self.combiner.compare_and_swap(0, idx, Ordering::Acquire) != 0 {
             spin_loop_hint();
-            return false;
+            return;
         }
 
         // Loop through every context collecting all pending operations into a
@@ -201,7 +239,10 @@ where
         // thread safe and does not need a lock around the buffer. Make sure we
         // append the arguments passed into this method too.
         {
+            let mut o = self.inflight.borrow_mut();
+            let mut r = self.result.borrow_mut();
             let mut b = self.buffer.borrow_mut();
+
             for idx in 1..self.next.load(Ordering::SeqCst) {
                 self.acquire(idx);
 
@@ -209,33 +250,60 @@ where
                     let mut c = self.contexts[idx - 1].borrow_mut();
                     if let Some(ops) = c.ops() {
                         b.extend_from_slice(ops);
+                        o[idx - 1] = ops.len();
                         c.reset_ops();
                     }
                 }
 
                 self.release(idx);
             }
-            b.push(op);
 
             // Append all collected operations into the shared log and clear the buffer.
-            while !self.slog.append(&b) {}
+            let mut v;
+            loop {
+                v = self.slog.append(&b);
+                if v.is_some() {
+                    break;
+                }
+            }
+
             b.clear();
 
             // Execute any operations on the shared log against this replica.
-            let f = |o: <D as Dispatch>::Operation| {
-                self.data.dispatch(o);
-            };
+            let f = |o: <D as Dispatch>::Operation| r.push(self.data.dispatch(o));
 
             let t = self.tail.get();
             self.tail.set(t + self.slog.exec(t, f));
+
+            // Now that we've executed these operations and collected their results, enqueue
+            // them onto the appropriate thread local contexts. 'l' and 'r' help determine
+            // which set of results go into which thread context.
+            let mut l = v.unwrap() - t;
+            let mut e = v.unwrap() - t;
+
+            for idx in 1..self.next.load(Ordering::SeqCst) {
+                self.acquire(idx);
+
+                {
+                    let mut c = self.contexts[idx - 1].borrow_mut();
+
+                    e += o[idx - 1];
+                    c.enqueue_resps(&r[l..e]);
+                    l += o[idx - 1];
+
+                    o[idx - 1] = 0;
+                }
+
+                self.release(idx);
+            }
+
+            r.clear();
         }
 
         // Allow other threads to perform flat combining once we have finished all our work.
         // At this point, we've dropped all mutable references to thread contexts and to
         // the staging buffer as well.
         self.combiner.store(0, Ordering::Release);
-
-        true
     }
 
     /// Reserves a context so that the batch can be written to or read from.
@@ -257,6 +325,7 @@ where
     }
 }
 
+/*
 #[cfg(test)]
 mod test {
     extern crate std;
@@ -427,3 +496,4 @@ mod test {
         assert!(!repl.locks[7].load(Ordering::SeqCst));
     }
 }
+*/

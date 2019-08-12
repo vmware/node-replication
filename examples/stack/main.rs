@@ -67,7 +67,6 @@ impl Default for Op {
 
 struct Stack {
     storage: RefCell<Vec<u32>>,
-    sum: Cell<u32>,
 }
 
 impl Stack {
@@ -76,13 +75,7 @@ impl Stack {
     }
 
     pub fn pop(&self) -> Option<u32> {
-        let r = self.storage.borrow_mut().pop();
-
-        if r.is_none() {
-            return Some(0);
-        }
-
-        r
+        self.storage.borrow_mut().pop()
     }
 }
 
@@ -90,7 +83,6 @@ impl Default for Stack {
     fn default() -> Stack {
         let s = Stack {
             storage: Default::default(),
-            sum: Default::default(),
         };
 
         for e in 0..DEFAULT_STACK_SIZE {
@@ -103,14 +95,16 @@ impl Default for Stack {
 
 impl Dispatch for Stack {
     type Operation = Op;
+    type Response = Option<u32>;
 
-    fn dispatch(&self, op: Self::Operation) {
+    fn dispatch(&self, op: Self::Operation) -> Self::Response {
         match op {
-            Op::Push(v) => self.push(v),
-
-            Op::Pop => {
-                self.sum.set(self.pop().unwrap());
+            Op::Push(v) => {
+                self.push(v);
+                return None;
             }
+
+            Op::Pop => return self.pop(),
 
             Op::Invalid => unreachable!("Op::Invalid?"),
         }
@@ -172,9 +166,10 @@ fn bench(
     }
     barrier.wait();
 
+    let mut _resps = 0;
     let time = Duration::span(|| {
         for i in 0..nop {
-            r.execute(ops[i], idx);
+            _resps += r.execute(ops[i], idx).len();
         }
     });
 

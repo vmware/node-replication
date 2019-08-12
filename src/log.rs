@@ -140,7 +140,7 @@ where
     /// Adds a batch of operations to the shared log. Returns true if the operations
     /// were added. Returns false if they couldn't because there was no space on the
     /// log (even after an attempt to garbage collect).
-    pub fn append(&self, ops: &[T]) -> bool {
+    pub fn append(&self, ops: &[T]) -> Option<usize> {
         let n = ops.len();
 
         // Keep trying to reserve entries and add operations to the log until
@@ -152,7 +152,7 @@ where
             // If there isn't space on the log, then return false.
             // TODO: Might want to add garbage collection here?
             if t - h + n > self.size {
-                return false;
+                return None;
             }
 
             // Try reserving slots for the operations. If that fails, then restart
@@ -166,7 +166,7 @@ where
                 self.slog[self.index(t + idx)].set(Entry::new(ops[idx]));
             }
 
-            return true;
+            return Some(t);
         }
     }
 
@@ -188,9 +188,12 @@ where
 
         // Execute all operations from the passed in offset to the shared log's tail.
         for idx in from..t {
-            let entry = self.slog[self.index(idx)].get();
-            if !entry.alivef {
-                return idx - from;
+            let mut entry;
+            loop {
+                entry = self.slog[self.index(idx)].get();
+                if entry.alivef {
+                    break;
+                }
             }
             dispatch(entry.operation);
         }
@@ -344,7 +347,7 @@ mod tests {
     fn test_log_append() {
         let l = Log::<Operation>::new(1024);
         let o = [Operation::Read];
-        assert!(l.append(&o));
+        assert!(l.append(&o).is_some());
         assert_eq!(l.head.load(Ordering::Relaxed), 0);
         assert_eq!(l.tail.load(Ordering::Relaxed), 1);
         assert_eq!(l.slog[0].get().operation, Operation::Read);
@@ -355,7 +358,7 @@ mod tests {
     fn test_log_append_multiple() {
         let l = Log::<Operation>::new(1024);
         let o = [Operation::Read, Operation::Write(119)];
-        assert!(l.append(&o));
+        assert!(l.append(&o).is_some());
     }
 
     // Test that appends fail when the log is full.
@@ -363,8 +366,8 @@ mod tests {
     fn test_log_append_full() {
         let l = Log::<Operation>::new(64);
         let o = [Operation::Read];
-        assert!(l.append(&o)); // First append should succeed.
-        assert!(!l.append(&o)); // Second append must fail.
+        assert!(l.append(&o).is_some()); // First append should succeed.
+        assert!(l.append(&o).is_none()); // Second append must fail.
     }
 
     // Test that we can execute operations appended to the log.
@@ -375,7 +378,7 @@ mod tests {
         let f = |op: Operation| {
             assert_eq!(op, Operation::Read);
         };
-        assert!(l.append(&o));
+        assert!(l.append(&o).is_some());
         assert_eq!(l.exec(0, f), 1);
     }
 
@@ -398,7 +401,7 @@ mod tests {
         let f = |_op: Operation| {
             assert!(false);
         };
-        assert!(l.append(&o));
+        assert!(l.append(&o).is_some());
         assert_eq!(l.exec(1, f), 0);
     }
 
@@ -413,7 +416,7 @@ mod tests {
             Operation::Write(v) => s += v,
             Operation::Invalid => assert!(false),
         };
-        assert!(l.append(&o));
+        assert!(l.append(&o).is_some());
         assert_eq!(l.exec(0, f), 2);
         assert_eq!(s, 240);
     }
@@ -429,7 +432,7 @@ mod tests {
             Operation::Write(v) => s += v,
             Operation::Invalid => assert!(false),
         };
-        assert!(l.append(&o));
+        assert!(l.append(&o).is_some());
         assert_eq!(l.exec(1, f), 1); // Execute only the second entry.
         assert_eq!(s, 119);
     }

@@ -15,6 +15,7 @@ pub mod replica;
 /// method with the operation as an argument.
 pub trait Dispatch {
     type Operation: Sized + Copy + Default + PartialEq + core::fmt::Debug;
+    type Response: Sized + Copy + Default;
 
-    fn dispatch(&self, op: Self::Operation);
+    fn dispatch(&self, op: Self::Operation) -> Self::Response;
 }
