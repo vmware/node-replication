@@ -1,0 +1,25 @@
+name: Benchmark and Deploy
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  bench-and-deploy:
+    runs-on: ubuntu-latest
+    rust: nightly
+
+    steps:
+    - name: Install dependencies
+      run: sudo apt-get install -y libhwloc-dev libfreetype6 libfreetype6-dev gnuplot numactl
+    - name: Checkout
+      uses: actions/checkout@master
+    - name: Try to run benchmarks
+      run: cargo bench
+    - name: Build and Deploy
+      uses: JamesIves/github-pages-deploy-action@master
+      env:
+        ACCESS_TOKEN: ${{ secrets.GH_PAGES }}
+        BRANCH: gh-pages
+        FOLDER: target/criterion/report
+        BUILD_SCRIPT: npm install && npm run-script build
