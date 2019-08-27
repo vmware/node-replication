@@ -6,6 +6,19 @@ scales it out to multiple cores and NUMA nodes using an operation log.
 
 The code should be treated as experimental and work in progress, there may be correctness and performance bugs.
 
+## Compiling
+
+The following system packets are required (for the examples/benchmark only):
+```
+$ apt-get install libhwloc-dev libfreetype6 libfreetype6-dev gnuplot
+```
+
+The tests require the nightly rust compiler:
+```
+rustup toolchain install nightly
+rustup default nightly
+```
+
 ## Testing
 Unit tests can be run by executing the command `cargo test --lib`
 
