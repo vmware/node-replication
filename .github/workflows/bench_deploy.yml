@@ -16,7 +16,7 @@ jobs:
         rust-version: nightly
     - uses: actions/checkout@v1
     - name: Try to run benchmarks
-      run: cargo bench
+      run: RUST_BACKTRACE=1 cargo bench
     - name: Build and Deploy
       uses: JamesIves/github-pages-deploy-action@master
       env:
