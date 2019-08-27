@@ -1,17 +1,25 @@
+- name: GitHub Pages Deploy
+  uses: maxheld83/ghpages@v0.2.1
+
 name: Rust
 
 on: [push]
 
 jobs:
   build:
-    name: Build and test on ${{ matrix.os }}
+    name: Build and test on ${{ matrix.os }} with rustc {{ matrix.rust }}
     runs-on: ${{ matrix.os }}
 
     strategy:
       matrix:
         os: [ubuntu-latest]
+        rust: [nightly]
 
     steps:
+    - name: Set up a Rust toolchain
+      uses: hecrj/setup-rust-action@v1.0.2
+      with:
+        rust-version: ${{ matrix.rust }}
     - uses: actions/checkout@v1
     - name: Build
       run: cargo build --verbose
