@@ -19,6 +19,6 @@ The benchmark results are located in `target/criterion/report/index.html`.
 A working example of a replicated stack can be found under `examples/stack/`
 
 To run the stack example with 1-2 threads, each performing 800'000 push and pop operations invoke:
-`cargo run --release --example stack -- -t1,2 --nop 800000 -l 2 -m sequential`
+`RUST_LOG='debug' cargo run --release --example stack -- -t1,2 --nop 800000 -l 2 -m sequential`
 
 For a detailled explanation of the program parameters use `-h`.
