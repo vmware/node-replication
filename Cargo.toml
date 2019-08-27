@@ -25,7 +25,7 @@ chrono = "0.4"
 criterion = { git = "https://github.com/gz/criterion.rs", branch = "tput" }
 clap = { version = "2", features = ["yaml"] }
 rand = "0.7"
-plotters = "^0.2.2"
+plotters = "=0.2.2"
 nix = "0.14.1"
 log = "0.4"
 hwloc = "0.5.0"
