@@ -8,12 +8,15 @@ The code should be treated as experimental and work in progress, there may be co
 
 ## Compiling
 
-The following system packets are required (for the examples/benchmark only):
+The library should compile with a stable rust compiler. The code supports
+`no_std` as well.
+
+The following system libraries are required if you want to run the examples/benchmarks:
 ```
-$ apt-get install libhwloc-dev libfreetype6 libfreetype6-dev gnuplot
+$ apt-get install libhwloc-dev libfreetype6 libfreetype6-dev gnuplot numactl
 ```
 
-The tests require the nightly rust compiler:
+Running the tests require the use of a nightly rust compiler:
 ```
 rustup toolchain install nightly
 rustup default nightly
