@@ -1,16 +1,11 @@
-name: Deploy Benchmark
+name: Benchmark
 
 on: [push]
 
 jobs:
   build:
-    name: Benchmark on ${{ matrix.os }} with rustc ${{ matrix.rust }}
-    runs-on: ${{ matrix.os }}
-
-    strategy:
-      matrix:
-        os: [ubuntu-latest]
-        rust: [nightly]
+    name: Benchmark on ubuntu-latest with rustc nightly
+    runs-on: ubuntu-latest
 
     steps:
     - name: Install dependencies
@@ -18,7 +13,7 @@ jobs:
     - name: Set up a Rust toolchain
       uses: hecrj/setup-rust-action@v1.0.2
       with:
-        rust-version: ${{ matrix.rust }}
+        rust-version: nightly
     - uses: actions/checkout@v1
     - name: Try to run benchmarks
       run: cargo bench
@@ -28,4 +23,3 @@ jobs:
         ACCESS_TOKEN: ${{ secrets.GH_PAGES }}
         BRANCH: gh-pages
         FOLDER: target/criterion/report
-        BUILD_SCRIPT: npm install && npm run-script build
