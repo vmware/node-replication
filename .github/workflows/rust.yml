@@ -14,16 +14,16 @@ jobs:
 
     steps:
     - name: Install dependencies
-      run: sudo apt-get install -y libhwloc-dev libfreetype6 libfreetype6-dev gnuplot
+      run: sudo apt-get install -y libhwloc-dev libfreetype6 libfreetype6-dev gnuplot numactl
     - name: Set up a Rust toolchain
       uses: hecrj/setup-rust-action@v1.0.2
       with:
         rust-version: ${{ matrix.rust }}
     - uses: actions/checkout@v1
     - name: Build
-      run: cargo build --verbose
+      run: cargo build --release --verbose
     - name: Try to compile tests
-      run: cargo test --no-run --verbose
+      run: cargo test --release --no-run --verbose
     - name: Try to compile benchmarks
       run: cargo bench --no-run --verbose
     - name: Try stack example
