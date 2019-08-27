@@ -22,7 +22,7 @@ debug = true
 
 [dev-dependencies]
 chrono = "0.4"
-criterion = { git = "https://github.com/gz/criterion.rs", branch = "iter-custom" }
+criterion = { git = "https://github.com/gz/criterion.rs", branch = "tput" }
 clap = { version = "2", features = ["yaml"] }
 rand = "0.7"
 plotters = "^0.2.2"
