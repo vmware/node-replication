@@ -13,6 +13,8 @@ jobs:
         rust: [nightly]
 
     steps:
+    - name: Install dependencies
+      run: apt-get install libhwloc-dev libfreetype6 libfreetype6-dev gnuplot
     - name: Set up a Rust toolchain
       uses: hecrj/setup-rust-action@v1.0.2
       with:
@@ -22,3 +24,5 @@ jobs:
       run: cargo build --verbose
     - name: Run tests
       run: cargo test --verbose
+    - name: Try stack example
+      run: RUST_LOG='debug' cargo run --release --example stack -- -t1,2 --nop 100000 -l 1 -m sequential
