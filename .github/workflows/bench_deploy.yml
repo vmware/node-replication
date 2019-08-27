@@ -1,19 +1,25 @@
-name: Benchmark and Deploy
-on:
-  push:
-    branches:
-      - master
+name: Rust
+
+on: [push]
 
 jobs:
-  bench-and-deploy:
-    runs-on: ubuntu-latest
-    rust: nightly
+  build:
+    name: Build and test on ${{ matrix.os }} with rustc ${{ matrix.rust }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+        rust: [nightly]
 
     steps:
     - name: Install dependencies
       run: sudo apt-get install -y libhwloc-dev libfreetype6 libfreetype6-dev gnuplot numactl
-    - name: Checkout
-      uses: actions/checkout@master
+    - name: Set up a Rust toolchain
+      uses: hecrj/setup-rust-action@v1.0.2
+      with:
+        rust-version: ${{ matrix.rust }}
+    - uses: actions/checkout@v1
     - name: Try to run benchmarks
       run: cargo bench
     - name: Build and Deploy
