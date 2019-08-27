@@ -4,7 +4,7 @@ on: [push]
 
 jobs:
   build:
-    name: Build and test on ${{ matrix.os }} with rustc {{ matrix.rust }}
+    name: Build and test on ${{ matrix.os }} with rustc ${{ matrix.rust }}
     runs-on: ${{ matrix.os }}
 
     strategy:
