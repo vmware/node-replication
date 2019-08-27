@@ -388,7 +388,7 @@ fn log_overhead(c: &mut Criterion) {
             },
             thread_counts,
         )
-        .throughput(move |t| Throughput::Elements((t * elements) as u32)),
+        .throughput(move |t| Throughput::Elements((t * elements) as u64)),
     );
 }
 
@@ -414,7 +414,7 @@ fn node_replication_benchmark(c: &mut Criterion) {
             },
             threads,
         )
-        .throughput(move |t| Throughput::Elements((t * elements) as u32)),
+        .throughput(move |t| Throughput::Elements((t * elements) as u64)),
     );
 }
 
@@ -515,7 +515,7 @@ fn log_scale_bench(c: &mut Criterion) {
             },
             threads_batchsize,
         )
-        .throughput(move |(t, b)| Throughput::Elements((t * elements) as u32)),
+        .throughput(move |(t, b)| Throughput::Elements((t * elements) as u64)),
     );
 }
 
