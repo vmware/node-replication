@@ -11,6 +11,7 @@ Unit tests can be run by executing the command `cargo test --lib`
 
 ## Benchmarks
 `cargo bench` will run several benchmarks evaluating the performance of the log. The code is located in the `benches` folder.
+The benchmark results are located in `target/criterion/report/index.html`.
 
 ## Examples
 
