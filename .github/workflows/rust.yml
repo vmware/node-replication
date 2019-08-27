@@ -27,4 +27,4 @@ jobs:
     - name: Try to compile benchmarks
       run: cargo bench --no-run --verbose
     - name: Try stack example
-      run: RUST_LOG='trace' cargo run --release --example stack -- -t1,2 --nop 100000 -l 1 -m sequential
+      run: RUST_BACKTRACE=1 RUST_LOG='trace' cargo run --release --example stack -- -t1,2 --nop 100000 -l 1 -m sequential
