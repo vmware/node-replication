@@ -377,7 +377,11 @@ fn log_overhead(c: &mut Criterion) {
     let cpus = num_cpus::get();
     let elements = operations.len();
 
-    let thread_counts: Vec<usize> = vec![1, 2];
+    let thread_counts: Vec<usize> = if cfg!(feature = "bench_small") {
+        vec![1, 2]
+    } else {
+        vec![1, 2, 4]
+    };
 
     c.bench(
         "log",
@@ -400,10 +404,14 @@ fn node_replication_benchmark(c: &mut Criterion) {
 
     utils::disable_dvfs();
     let operations = Arc::new(parse_ops("benches/bsd_init.log").unwrap());
-    let cpus = num_cpus::get();
+    let _cpus = num_cpus::get();
     let elements = operations.len();
 
-    let threads: Vec<usize> = vec![1, 2, 4];
+    let threads: Vec<usize> = if cfg!(feature = "bench_small") {
+        vec![1, 2]
+    } else {
+        vec![1, 2, 4]
+    };
 
     c.bench(
         "syscall",
@@ -500,8 +508,12 @@ fn log_scale_bench(c: &mut Criterion) {
     let operations = Arc::new(operations);
     let elements = operations.len();
 
-    let threads_batchsize: Vec<(usize, usize)> =
-        vec![(1, 1), (1, 8), (2, 1), (2, 8), (4, 1), (4, 8)];
+    let threads_batchsize: Vec<(usize, usize)> = if cfg!(feature = "bench_small") {
+        vec![(1, 1), (1, 8), (2, 1), (2, 8)]
+    } else {
+        vec![(1, 1), (1, 8), (2, 1), (2, 8), (4, 1), (4, 8)]
+    };
+
     let log = Arc::new(Log::<usize>::new(1024 * 1024 * 1024 * 2));
 
     c.bench(
@@ -515,7 +527,7 @@ fn log_scale_bench(c: &mut Criterion) {
             },
             threads_batchsize,
         )
-        .throughput(move |(t, b)| Throughput::Elements((t * elements) as u64)),
+        .throughput(move |(t, _b)| Throughput::Elements((t * elements) as u64)),
     );
 }
 
@@ -523,7 +535,7 @@ criterion_group!(osbench, node_replication_benchmark);
 criterion_group!(logscale, log_scale_bench);
 criterion_group!(
     name = logbench;
-    config = Criterion::default().sample_size(8);
+    config = Criterion::default().sample_size(10);
     targets = log_overhead
 );
 criterion_main!(osbench, logbench, logscale);
