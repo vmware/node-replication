@@ -1,7 +1,7 @@
 // Copyright © 2019 VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use core::cell::{Cell, RefCell};
+use core::cell::{RefCell};
 use core::sync::atomic::{spin_loop_hint, AtomicBool, AtomicUsize, Ordering};
 
 use alloc::sync::Arc;
@@ -35,9 +35,7 @@ pub struct Replica<'a, D>
 where
     D: Sized + Default + Dispatch,
 {
-    /// Logical log offset upto which this replica has applied operations to its
-    /// copy of the replicated data structure.
-    tail: Cell<usize>,
+    idx: usize,
 
     /// Thread idx of the thread currently responsible for flat combining. Zero
     /// if there isn't any thread actively performing flat combining on the log.
@@ -102,7 +100,7 @@ where
         use arr_macro::arr;
 
         Replica {
-            tail: Cell::new(0usize),
+            idx: log.register().unwrap(),
             combiner: CachePadded::new(AtomicUsize::new(0)),
             next: CachePadded::new(AtomicUsize::new(1)),
             contexts: arr![Default::default(); 128],
@@ -212,8 +210,8 @@ where
         let f = |o: <D as Dispatch>::Operation| {
             data.dispatch(o);
         };
-        let t = self.tail.get();
-        self.tail.set(t + self.slog.exec(t, f));
+
+        self.slog.exec(self.idx, f);
 
         data
     }
@@ -283,8 +281,7 @@ where
             let mut data = self.data.borrow_mut();
             let f = |o: <D as Dispatch>::Operation| r.push(data.dispatch(o));
 
-            let t = self.tail.get();
-            self.tail.set(t + self.slog.exec(t, f));
+            let t = self.slog.exec(self.idx, f);
 
             // Now that we've executed these operations and collected their results, enqueue
             // them onto the appropriate thread local contexts. 'l' and 'r' help determine

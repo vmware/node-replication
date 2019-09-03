@@ -18,6 +18,13 @@ use crossbeam_utils::CachePadded;
 /// set to 1 GB based on the ASPLOS 2017 paper.
 const DEFAULT_LOG_BYTES: usize = 1024 * 1024 * 1024;
 
+/// The maximum number of replicas that can be used against the log.
+const MAX_REPLICAS: usize = 32;
+
+/// Required for garbage collection. When this fraction of the log is full of valid
+/// operations, then one round of garbage collection will be performed.
+const GC_FRACTION: f64 = 0.8;
+
 /// An entry that sits on the log. Each entry consists of two fields: The operation to
 /// be performed when a thread reaches this entry on the log, and a flag indicating whether
 /// this entry is valid.
@@ -89,6 +96,16 @@ where
     /// Logical index into the above slice at which the log ends.
     /// New appends go here.
     tail: CachePadded<AtomicUsize>,
+
+    /// Array consisting of the local tail of each replica registered with the log.
+    /// Required for garbage collection; since replicas make progress over the log
+    /// independently, we want to make sure that we don't garbage collect operations
+    /// that haven't been executed by all replicas.
+    ltails: [CachePadded<AtomicUsize>; MAX_REPLICAS],
+
+    /// Identifier that will be allocated to the next replica that registers with
+    /// this Log. Required to index into ltails above.
+    next: CachePadded<AtomicUsize>,
 }
 
 impl<'a, T> fmt::Debug for Log<'a, T>
@@ -146,6 +163,8 @@ where
             slog: raw,
             head: CachePadded::new(AtomicUsize::new(0usize)),
             tail: CachePadded::new(AtomicUsize::new(0usize)),
+            ltails: Default::default(),
+            next: CachePadded::new(AtomicUsize::new(1usize)),
         }
     }
 
@@ -154,9 +173,21 @@ where
         size_of::<Cell<Entry<T>>>()
     }
 
+    /// Registers a replica against the log. Returns an identifier that the replica
+    /// can use while executing operations on the log.
+    pub fn register(&self) -> Option<usize> {
+        let n = self.next.load(Ordering::SeqCst);
+
+        // Check if we've exceeded the maximum number of replicas the log can support.
+        if n >= MAX_REPLICAS {
+            return None;
+        }
+
+        Some(self.next.fetch_add(1, Ordering::SeqCst))
+    }
+
     /// Adds a batch of operations to the shared log. Returns true if the operations
-    /// were added. Returns false if they couldn't because there was no space on the
-    /// log (even after an attempt to garbage collect).
+    /// were added. Returns false if they couldn't because there was no space.
     pub fn append(&self, ops: &[T]) -> Option<usize> {
         let n = ops.len();
 
@@ -166,8 +197,7 @@ where
             let t = self.tail.load(Ordering::SeqCst);
             let h = self.head.load(Ordering::SeqCst);
 
-            // If there isn't space on the log, then return false.
-            // TODO: Might want to add garbage collection here?
+            // If there isn't space on the log, then return None.
             if t - h + n > self.size {
                 return None;
             }
@@ -183,24 +213,36 @@ where
                 self.slog[self.index(t + idx)].set(Entry::new(ops[idx]));
             }
 
+            // Check if we need to perform one round of garbage collection. First compute
+            // the number of live entries at which we need to kick-off garbage collection.
+            // Next, check if this append operation made us exceed the number of these
+            // live entries. If it did, then perform garbage collection.
+            let i = (GC_FRACTION * (self.size as f64)) as usize;
+            if t - h < i && t + n - h > i {
+                self.gc();
+            }
+
             return Some(t);
         }
     }
 
     /// Executes a passed in closure (`dispatch`) on all operations starting from
-    /// logical index `from` on the shared log. Returns the number of operations
-    /// that were successfully executed.
+    /// a replica's local tail on the shared log. The replica is identified through an
+    /// `idx` passed in as an argument.
     ///
     /// The passed in closure is expected to take in one argument: The operation
     /// from the shared log to be executed.
-    pub fn exec<F: FnMut(T)>(&self, from: usize, mut dispatch: F) -> usize {
+    pub fn exec<F: FnMut(T)>(&self, idx: usize, mut dispatch: F) -> usize {
         let t = self.tail.load(Ordering::SeqCst);
         let h = self.head.load(Ordering::SeqCst);
 
-        // Make sure we're within the shared log. If we aren't, then return 0 since there
+        // Load the logical log offset from which we must execute operations.
+        let from = self.ltails[idx - 1].load(Ordering::SeqCst);
+
+        // Make sure we're within the shared log. If we aren't, then return since there
         // anyway aren't any operations to execute.
         if from > t || from < h {
-            return 0;
+            return from;
         }
 
         // Execute all operations from the passed in offset to the shared log's tail.
@@ -215,13 +257,49 @@ where
             dispatch(entry.operation);
         }
 
-        t - from
+        // Update the replica's local tail.
+        self.ltails[idx - 1].store(t, Ordering::SeqCst);
+
+        from
     }
 
     /// Returns a physical index given a logical index into the shared log.
     #[inline(always)]
     fn index(&self, logical: usize) -> usize {
         logical % self.size
+    }
+
+    /// Garbage collects entries on the log.
+    fn gc(&self) {
+        // First, look at all replica-local tails and find the minimum. It
+        // is safe to garbage collect entries from the head upto this minimum.
+        let n = self.next.load(Ordering::SeqCst);
+        let h = self.head.load(Ordering::SeqCst);
+
+        let mut new = self.ltails[0].load(Ordering::SeqCst);
+
+        for idx in 0..n {
+            let t = self.ltails[idx].load(Ordering::SeqCst);
+            if new > t {
+                new = t;
+            }
+        }
+
+        // No entries to garbage collect. Return empty-handed.
+        if new <= h {
+            return;
+        }
+
+        // Update the head of the log to point to the minimum of all replica-local
+        // tails. Next, mark all entries between the old and new heads as dead by
+        // setting their `alivef` to false.
+        self.head.store(new, Ordering::SeqCst);
+
+        for idx in h..new {
+            let mut e = self.slog[self.index(idx)].get();
+            e.alivef = false;
+            self.slog[self.index(idx)].set(e);
+        }
     }
 
     /// Resets the log; *for testing only since we don't have GC*.
@@ -296,7 +374,7 @@ mod tests {
     fn test_entry_create_basic() {
         let e: Entry<u64> = Entry::new(121);
         assert_eq!(e.operation, 121);
-        assert_eq!(e.alivef, true);
+        assert_eq!(e.alivef.load(Ordering::SeqCst), true);
     }
 
     // Test that we can construct entries correctly. Use a richer type for T
@@ -305,7 +383,7 @@ mod tests {
     fn test_entry_create() {
         let e = Entry::<Operation>::new(Operation::Write(121));
         assert_eq!(e.operation, Operation::Write(121));
-        assert_eq!(e.alivef, true);
+        assert_eq!(e.alivef.load(Ordering::SeqCst), true);
     }
 
     // Test that we can default construct entries correctly.
@@ -313,7 +391,7 @@ mod tests {
     fn test_entry_create_default() {
         let e = Entry::<Operation>::default();
         assert_eq!(e.operation, Operation::default());
-        assert_eq!(e.alivef, false);
+        assert_eq!(e.alivef.load(Ordering::SeqCst), false);
     }
 
     // Test that our entry_size() method returns the correct size.
