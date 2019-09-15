@@ -14,7 +14,7 @@ name = "criterion_bench"
 harness = false
 
 [dependencies]
-crossbeam-utils = "0.6"
+crossbeam-utils = { version = "0.6", default-features = false }
 
 # Add debug symbols on the release build so that we can debug performance issues
 [profile.release]
