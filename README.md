@@ -32,8 +32,8 @@ You can run the tests by executing: `cargo test --lib`
 
 ## Examples
 
-### Stack
-A working example of a replicated stack can be found under [examples/stack/](examples/stack)
+### Stack [[src](examples/stack)]
+A working example of a replicated stack.
 
 To run the stack example with 1-2 threads, each performing 800'000 push and pop operations invoke:
 `RUST_LOG='debug' cargo run --release --example stack -- -t1,2 --nop 800000 -l 2 -m sequential`
