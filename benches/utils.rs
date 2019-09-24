@@ -14,6 +14,45 @@ use criterion::black_box;
 
 use node_replication::log::Log;
 
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum ReplicaStrategy {
+    /// One replica per system.
+    One,
+    /// One replica per L1 cache.
+    L1,
+    /// One replica per L2 cache.
+    L2,
+    /// One replica per L3 cache.
+    L3,
+    /// One replica per socket.
+    Socket,
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum ThreadMapping {
+    /// Don't do any pinning.
+    None,
+    /// Keep threads of a replica on the same socket (as much as possible).
+    Sequential,
+    /// Spread threads of a replica out across sockets.
+    Interleave,
+}
+
+/// Generic benchmark configuration parameters for node-replication.
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+struct BenchConfig {
+    /// Number of threads
+    threads: usize,
+    /// How to map threads to cores
+    thread_strategy: ThreadMapping,
+    /// How to allocate replicas
+    replica_strategy: ReplicaStrategy,
+    /// Size of the log in bytes
+    log_size: usize,
+    /// Amount of iterations/operations per benchmark
+    ops: usize,
+}
+
 
 pub type CoreId = usize;
 pub type ThreadId = usize;
@@ -91,6 +130,7 @@ pub fn debug_topology() {
     }
 }
 
+
 #[allow(unused)]
 pub fn generic_log_bench(
     iters: u64,
@@ -151,4 +191,44 @@ pub fn generic_log_bench(
     }
 
     elapsed
+}
+
+/// Takes a generic data-structure that implements dispatch and a vector of operations 
+/// to execute against said data-structure.
+/// 
+/// It configures the supplied criterion runner to do two benchmarks: 
+/// - Running the DS operations on a single-thread directly against the DS.
+/// - Running the DS operation on a single-thread but go through a replica/log.
+/// 
+/// Use this function to evalute the overhead the log adds for a given data-structure.
+pub fn baseline_comparison_benchmark<T: Dispatch + Default>(c: &mut Criterion, name: &str, ops: Vec<<T as Dispatch>::Operation>) {
+    let s: T = Default::default();
+
+    // First benchmark is just a stack on a single thread:
+    let mut group = c.benchmark_group(name);
+    group.throughput(Throughput::Elements(ops.len() as u64));
+    group.bench_function("baseline", |b| {
+        b.iter(|| {
+            for i in 0..ops.len() {
+                s.dispatch(ops[i]);
+            }
+        })
+    });
+
+    // 2nd benchmark we compare the stack but now we put a log in front:
+    let log = Arc::new(Log::<<T as Dispatch>::Operation>::new(
+        LOG_SIZE_BYTES,
+    ));
+    let r  = Replica::<T>::new(&log);
+    let ridx = r.register().expect("Failed to register with Replica.");
+
+    group.bench_function("log", |b| {
+        b.iter(|| {
+            for i in 0..ops.len() {
+                r.execute(ops[i], ridx);
+            }
+        })
+    });
+
+    group.finish();
 }

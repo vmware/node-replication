@@ -1,21 +1,20 @@
 // Copyright © 2019 VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! Benchmark to compare a single-threaded stack vs. a node-replicated stack.
+//! Benchmark a stack data-structure.
+//! 
+//! This benchmark is mainly evaluating the performance of the log and the replica code
+//! as all stack operations add very little overhead.
+
+mod mkbench;
 
 use std::cell::RefCell;
-use std::sync::Arc;
 
 use rand::{thread_rng, Rng};
-use criterion::{criterion_main, criterion_group, Criterion, Throughput};
+use criterion::{criterion_main, criterion_group, Criterion};
 
-use node_replication::{log::Log, replica::Replica, Dispatch};
+use node_replication::Dispatch;
 
-/// Benchmark 500k operations per iteration
-const NOP: usize = 500_000;
-
-/// Use a 10 GiB log size
-const LOG_SIZE_BYTES: usize = 10 * 1024 * 1024 * 1024;
 
 /// Operations we can perform on the stack.
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
@@ -85,7 +84,7 @@ impl Dispatch for Stack {
 }
 
 /// Generate a random sequence of operations that we'll perform:
-fn st_setup(nop: usize) -> Vec<Op> {
+fn generate_operations(nop: usize) -> Vec<Op> {
     let mut orng = thread_rng();
     let mut arng = thread_rng();
 
@@ -103,41 +102,14 @@ fn st_setup(nop: usize) -> Vec<Op> {
 }
 
 /// Compare against a stack with and without a log in-front.
-/// 
-/// Shows overhead of log approach against best possible
-/// single-threaded implementation.
 fn stack_single_threaded(c: &mut Criterion) {
-    let nop = NOP;
-    let ops = st_setup(nop);
-    let s: Stack = Default::default();
+    // Benchmark 500k operations per iteration
+    const NOP: usize = 500_000;
+    // Use a 10 GiB log size
+    const LOG_SIZE_BYTES: usize = 10 * 1024 * 1024 * 1024;
 
-    // First benchmark is just a stack on a single thread:
-    let mut group = c.benchmark_group("stack");
-    group.throughput(Throughput::Elements(nop as u64));
-    group.bench_function("baseline", |b| {
-        b.iter(|| {
-            for i in 0..nop {
-                s.dispatch(ops[i]);
-            }
-        })
-    });
-
-    // 2nd benchmark we compare the stack but now we put a log in front:
-    let log = Arc::new(Log::<<Stack as Dispatch>::Operation>::new(
-        LOG_SIZE_BYTES,
-    ));
-    let r  = Replica::<Stack>::new(&log);
-    let ridx = r.register().expect("Failed to register with Replica.");
-
-    group.bench_function("log", |b| {
-        b.iter(|| {
-            for i in 0..nop {
-                r.execute(ops[i], ridx);
-            }
-        })
-    });
-
-    group.finish();
+    let ops = generate_operations(NOP);
+    mkbench::baseline_comparison::<Stack>(c, "stack", ops, LOG_SIZE_BYTES);
 }
 
 criterion_group!(

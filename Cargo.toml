@@ -21,6 +21,10 @@ harness = false
 name = "stack"
 harness = false
 
+[[bench]]
+name = "synthetic"
+harness = false
+
 [dependencies]
 crossbeam-utils = { version = "0.6", default-features = false }
 
@@ -34,6 +38,7 @@ debug = true
 [dev-dependencies]
 chrono = "0.4"
 criterion = { git = "https://github.com/gz/criterion.rs", branch = "tput" }
+#criterion = { path = "../criterion.rs" }
 clap = { version = "2", features = ["yaml"] }
 rand = "0.7"
 plotters = "=0.2.2"

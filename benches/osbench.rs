@@ -426,68 +426,6 @@ fn node_replication_benchmark(c: &mut Criterion) {
     );
 }
 
-fn generic_log_bench(
-    iters: u64,
-    thread_num: usize,
-    batch: usize,
-    log: &Arc<Log<'static, usize>>,
-    operations: &Arc<Vec<usize>>,
-    f: fn(&Arc<Log<usize>>, &Arc<Vec<usize>>, usize) -> (),
-) -> Duration {
-    // Need a barrier to synchronize starting of threads
-    let barrier = Arc::new(Barrier::new(thread_num));
-    // Thread handles to `join` them at the end
-    let mut handles = Vec::with_capacity(thread_num);
-    // Our strategy on how we pin the threads to cores
-    let mapping = utils::MappingStrategy::Identity;
-
-    unsafe {
-        log.reset();
-    }
-
-    // Spawn some load generator threads
-    for thread_id in 1..thread_num {
-        let c = barrier.clone();
-        let ops = operations.clone();
-        let log = log.clone();
-        handles.push(thread::spawn(move || {
-            let core_id = utils::thread_mapping(mapping, thread_id);
-            utils::pin_thread(core_id);
-            utils::set_core_id(core_id);
-            for _i in 0..iters {
-                os_workload::kcb::set_kcb();
-                c.wait();
-                black_box(f(&log, &ops, batch));
-                c.wait();
-                os_workload::kcb::drop_kcb();
-            }
-        }));
-    }
-
-    let c = barrier.clone();
-    let thread_id: usize = 0;
-    utils::pin_thread(utils::thread_mapping(mapping, thread_id));
-    let log = log.clone();
-    // Measure on our base thread
-    let mut elapsed = Duration::new(0, 0);
-    for _i in 0..iters {
-        os_workload::kcb::set_kcb();
-        // Wait for other threads to start
-        c.wait();
-        let start = Instant::now();
-        black_box(f(&log, &operations, batch));
-        c.wait();
-        elapsed = elapsed + start.elapsed();
-        os_workload::kcb::drop_kcb();
-    }
-
-    // Wait for other threads to finish
-    for handle in handles {
-        handle.join().unwrap();
-    }
-
-    elapsed
-}
 
 criterion_group!(osbench, node_replication_benchmark);
 criterion_group!(
