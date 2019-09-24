@@ -61,7 +61,7 @@ To run this benchmark execute:
 
 ### Stack cost [[src](benches/stack.rs)]
 
-A benchmark that evaluates the COST overhead of the library by comparing a
+A benchmark that evaluates the COST (overhead of added synchronization) by comparing a
 node-replicated stack against single-threaded stack (without a log/replica).
 The benchmark reports throughput in ops/s.
 
