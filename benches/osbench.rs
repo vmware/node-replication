@@ -373,7 +373,7 @@ fn log_overhead(c: &mut Criterion) {
     //env_logger::init();
     utils::disable_dvfs();
 
-    let operations = Arc::new(parse_ops("benches/bsd_init.log").unwrap());
+    let operations = Arc::new(parse_ops("benches/os_workload/bsd_init.log").unwrap());
     let cpus = num_cpus::get();
     let elements = operations.len();
 
@@ -403,7 +403,7 @@ fn node_replication_benchmark(c: &mut Criterion) {
     env_logger::init();
 
     utils::disable_dvfs();
-    let operations = Arc::new(parse_ops("benches/bsd_init.log").unwrap());
+    let operations = Arc::new(parse_ops("benches/os_workload/bsd_init.log").unwrap());
     let _cpus = num_cpus::get();
     let elements = operations.len();
 
@@ -489,53 +489,10 @@ fn generic_log_bench(
     elapsed
 }
 
-fn scale_log(log: &Arc<Log<usize>>, ops: &Arc<Vec<usize>>, batch: usize) {
-    for batch_op in ops.rchunks(batch) {
-        let r = log.append(batch_op);
-        assert!(r.is_some());
-    }
-}
-
-fn log_scale_bench(c: &mut Criterion) {
-    //env_logger::init();
-
-    utils::disable_dvfs();
-    let mut operations = Vec::new();
-    for e in 0..50000 {
-        operations.push(e);
-    }
-
-    let operations = Arc::new(operations);
-    let elements = operations.len();
-
-    let threads_batchsize: Vec<(usize, usize)> = if cfg!(feature = "bench_small") {
-        vec![(1, 1), (1, 8), (2, 1), (2, 8)]
-    } else {
-        vec![(1, 1), (1, 8), (2, 1), (2, 8), (4, 1), (4, 8)]
-    };
-
-    let log = Arc::new(Log::<usize>::new(1024 * 1024 * 1024 * 2));
-
-    c.bench(
-        "log",
-        ParameterizedBenchmark::new(
-            "append",
-            move |b, (threads, batch)| {
-                b.iter_custom(|iters| {
-                    generic_log_bench(iters, *threads, *batch, &log, &operations, scale_log)
-                })
-            },
-            threads_batchsize,
-        )
-        .throughput(move |(t, _b)| Throughput::Elements((t * elements) as u64)),
-    );
-}
-
 criterion_group!(osbench, node_replication_benchmark);
-criterion_group!(logscale, log_scale_bench);
 criterion_group!(
     name = logbench;
     config = Criterion::default().sample_size(10);
     targets = log_overhead
 );
-criterion_main!(osbench, logbench, logscale);
+criterion_main!(osbench, logbench);

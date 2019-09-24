@@ -10,7 +10,11 @@ keywords = ["numa", "log", "x86", "black-box", "replication"]
 categories = ["algorithms", "concurrency", "data-structures", "no-std", "os"]
 
 [[bench]]
-name = "criterion_bench"
+name = "log"
+harness = false
+
+[[bench]]
+name = "osbench"
 harness = false
 
 [[bench]]
@@ -22,6 +26,9 @@ crossbeam-utils = { version = "0.6", default-features = false }
 
 # Add debug symbols on the release build so that we can debug performance issues
 [profile.release]
+debug = true
+
+[profile.bench]
 debug = true
 
 [dev-dependencies]

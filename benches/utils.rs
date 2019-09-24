@@ -1,12 +1,19 @@
 // Copyright © 2019 VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use std::process;
+//! Utility functions to do multi-threaded benchmarking of the log infrastructure.
+
+use std::sync::{Arc, Barrier};
+use std::thread;
+use std::time::{Duration, Instant};
+use std::cell::RefCell;
 
 use hwloc::Topology;
-use log::{error, warn};
+use log::{warn};
+use criterion::black_box;
 
-use std::cell::RefCell;
+use node_replication::log::Log;
+
 
 pub type CoreId = usize;
 pub type ThreadId = usize;
@@ -20,6 +27,7 @@ pub fn set_core_id(cid: CoreId) {
 }
 
 #[cfg(not(target_os = "linux"))]
+#[allow(unused)]
 pub fn get_core_id() -> CoreId {
     CORE_ID.with(|cid| cid.borrow().clone())
 }
@@ -68,7 +76,7 @@ pub fn disable_dvfs() {
 
 #[cfg(not(target_os = "linux"))]
 pub fn disable_dvfs() {
-    warn!("Can't disable DVFS, expect flaky test results!");
+    warn!("Can't disable DVFS, expect non-optimal test results!");
 }
 
 #[allow(unused)]
@@ -78,9 +86,69 @@ pub fn debug_topology() {
         println!("*** Objects at level {}", i);
 
         for (idx, object) in topo.objects_at_depth(i).iter().enumerate() {
-            //println!("{}", object.name());
-
             println!("{}: {:?}", idx, object.os_index());
         }
     }
+}
+
+#[allow(unused)]
+pub fn generic_log_bench(
+    iters: u64,
+    thread_num: usize,
+    batch: usize,
+    log: &Arc<Log<'static, usize>>,
+    operations: &Arc<Vec<usize>>,
+    f: fn(&Arc<Log<usize>>, &Arc<Vec<usize>>, usize) -> (),
+) -> Duration {
+
+    // Need a barrier to synchronize starting of threads
+    let barrier = Arc::new(Barrier::new(thread_num));
+    // Thread handles to `join` them at the end
+    let mut handles = Vec::with_capacity(thread_num);
+    // Our strategy on how we pin the threads to cores
+    let mapping = MappingStrategy::Identity;
+
+    // TODO: Remove once we have GC
+    unsafe {
+        log.reset();
+    }
+
+    // Spawn n-1 threads that perform the same benchmark function:
+    for thread_id in 1..thread_num {
+        let c = barrier.clone();
+        let ops = operations.clone();
+        let log = log.clone();
+        handles.push(thread::spawn(move || {
+            let core_id = thread_mapping(mapping, thread_id);
+            pin_thread(core_id);
+            set_core_id(core_id);
+            for _i in 0..iters {
+                c.wait();
+                black_box(f(&log, &ops, batch));
+                c.wait();
+            }
+        }));
+    }
+
+    // Spawn the master thread that performs the measurements:
+    let c = barrier.clone();
+    let thread_id: usize = 0;
+    pin_thread(thread_mapping(mapping, thread_id));
+    let log = log.clone();
+    let mut elapsed = Duration::new(0, 0);
+    for _i in 0..iters {
+        // Wait for other threads to start
+        c.wait();
+        let start = Instant::now();
+        black_box(f(&log, &operations, batch));
+        c.wait();
+        elapsed = elapsed + start.elapsed();
+    }
+
+    // Wait for other threads to finish
+    for handle in handles {
+        handle.join().unwrap();
+    }
+
+    elapsed
 }
