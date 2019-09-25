@@ -426,7 +426,6 @@ fn node_replication_benchmark(c: &mut Criterion) {
     );
 }
 
-
 criterion_group!(osbench, node_replication_benchmark);
 criterion_group!(
     name = logbench;

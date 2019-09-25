@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Benchmark a stack data-structure.
-//! 
+//!
 //! This benchmark is mainly evaluating the performance of the log and the replica code
 //! as all stack operations add very little overhead.
 
@@ -10,11 +10,10 @@ mod mkbench;
 
 use std::cell::RefCell;
 
+use criterion::{criterion_group, criterion_main, Criterion};
 use rand::{thread_rng, Rng};
-use criterion::{criterion_main, criterion_group, Criterion};
 
 use node_replication::Dispatch;
-
 
 /// Operations we can perform on the stack.
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
@@ -34,7 +33,7 @@ impl Default for Op {
 }
 
 /// Single-threaded implementation of the stack
-/// 
+///
 /// We just use a vector.
 #[derive(Debug, Clone)]
 struct Stack {
@@ -112,10 +111,21 @@ fn stack_single_threaded(c: &mut Criterion) {
     mkbench::baseline_comparison::<Stack>(c, "stack", ops, LOG_SIZE_BYTES);
 }
 
+/// Compare scalability of a node-replicated stack.
+fn stack_scale_out(c: &mut Criterion) {
+    // Benchmark 500k operations per iteration
+    const NOP: usize = 500_000;
+    // Use a 10 GiB log size
+    const LOG_SIZE_BYTES: usize = 10 * 1024 * 1024 * 1024;
+
+    let ops = generate_operations(NOP);
+    mkbench::scaleout::<Stack>(c, "stackscale", ops, LOG_SIZE_BYTES);
+}
+
 criterion_group!(
     name = benches;
     config = Criterion::default().sample_size(10);
-    targets = stack_single_threaded, 
+    targets = stack_single_threaded, stack_scale_out
 );
 
 criterion_main!(benches);

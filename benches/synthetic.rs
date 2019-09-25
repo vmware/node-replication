@@ -2,18 +2,18 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Benchmark of a synthetic node replicated data-structure.
-//! 
+//!
 //! The data-structure is configurable with 4 parameters: cold_reads, cold_writes, hot_reads, hot_writes
 //! which simulates how many cold/random and hot/cached cache-lines are touched for every operation.
-//! 
+//!
 //! It evaluates the overhead of the log with an abstracted model of a generic data-structure
 //! to measure the cache-impact.
 
 use std::cell::RefCell;
 
-use rand::{thread_rng, Rng};
-use criterion::{criterion_main, criterion_group, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 use crossbeam_utils::CachePadded;
+use rand::{thread_rng, Rng};
 
 use node_replication::Dispatch;
 
@@ -68,21 +68,26 @@ struct AbstractDataStructure {
 
 impl Default for AbstractDataStructure {
     fn default() -> Self {
-        AbstractDataStructure::new(100_000, 5, 5, 10, 10)
+        AbstractDataStructure::new(200_000, 20, 5, 2, 1)
     }
 }
 
 impl AbstractDataStructure {
-    
-    fn new(n: usize, cold_reads: usize, cold_writes: usize, hot_reads: usize, hot_writes: usize) -> AbstractDataStructure {
+    fn new(
+        n: usize,
+        cold_reads: usize,
+        cold_writes: usize,
+        hot_reads: usize,
+        hot_writes: usize,
+    ) -> AbstractDataStructure {
         debug_assert!(hot_reads + cold_writes < n);
         debug_assert!(hot_reads + cold_reads < n);
         debug_assert!(hot_writes < hot_reads);
-        
+
         // Maximum buffer space (within a data-structure).
         const MAX_BUFFER_SIZE: usize = 400_000;
         debug_assert!(n < MAX_BUFFER_SIZE);
-        
+
         let storage = RefCell::new(Vec::with_capacity(n));
         {
             let mut storage = storage.borrow_mut();
@@ -90,14 +95,14 @@ impl AbstractDataStructure {
                 storage.push(CachePadded::from(i));
             }
         }
-        
+
         AbstractDataStructure {
             n,
             cold_reads,
             cold_writes,
             hot_reads,
             hot_writes,
-            storage
+            storage,
         }
     }
 
@@ -105,7 +110,7 @@ impl AbstractDataStructure {
         let storage = self.storage.borrow();
         let mut sum = 0;
 
-        // Hot cache-lines (reads)
+        // Hot cache-lines (reads sequential)
         let begin = rnd2;
         let end = begin + self.hot_writes;
         for i in begin..end {
@@ -127,7 +132,7 @@ impl AbstractDataStructure {
     pub fn write(&self, tid: usize, rnd1: usize, rnd2: usize) -> usize {
         let mut storage = self.storage.borrow_mut();
 
-        // Hot cache-lines (updates)
+        // Hot cache-lines (updates sequential)
         let begin = rnd2;
         let end = begin + self.hot_writes;
         for i in begin..end {
@@ -149,7 +154,7 @@ impl AbstractDataStructure {
     pub fn read_write(&self, tid: usize, rnd1: usize, rnd2: usize) -> usize {
         let mut storage = self.storage.borrow_mut();
 
-        // Hot cache-lines (updates)
+        // Hot cache-lines (sequential updates)
         let begin = rnd2;
         let end = begin + self.hot_writes;
         for i in begin..end {
@@ -187,10 +192,16 @@ impl Dispatch for AbstractDataStructure {
 }
 
 /// Generate a random sequence of operations that we'll perform.
-/// 
+///
 /// Flag determines which types of operation we allow on the data-structure.
 /// The split is approximately equal among the operations we allow.
-fn generate_random_operations(nop: usize, tid: usize, readonly: bool, writeonly: bool, readwrite: bool) -> Vec<Op> {
+fn generate_random_operations(
+    nop: usize,
+    tid: usize,
+    readonly: bool,
+    writeonly: bool,
+    readwrite: bool,
+) -> Vec<Op> {
     let mut orng = thread_rng();
     let mut arng = thread_rng();
 
@@ -235,7 +246,7 @@ fn synthetic_single_threaded(c: &mut Criterion) {
     // How many operations per iteration
     const NOP: usize = 1_000;
     // Size of the log.
-    const LOG_SIZE_BYTES: usize = 2 * 1024 * 1024 * 1024;
+    const LOG_SIZE_BYTES: usize = 4 * 1024 * 1024 * 1024;
 
     let ops = generate_random_operations(NOP, 0, false, false, true);
     mkbench::baseline_comparison::<AbstractDataStructure>(c, "synthetic", ops, LOG_SIZE_BYTES);

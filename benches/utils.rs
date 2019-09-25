@@ -3,14 +3,14 @@
 
 //! Utility functions to do multi-threaded benchmarking of the log infrastructure.
 
+use std::cell::RefCell;
 use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::{Duration, Instant};
-use std::cell::RefCell;
 
-use hwloc::Topology;
-use log::{warn};
 use criterion::black_box;
+use hwloc::Topology;
+use log::warn;
 
 use node_replication::log::Log;
 
@@ -52,7 +52,6 @@ struct BenchConfig {
     /// Amount of iterations/operations per benchmark
     ops: usize,
 }
-
 
 pub type CoreId = usize;
 pub type ThreadId = usize;
@@ -130,7 +129,6 @@ pub fn debug_topology() {
     }
 }
 
-
 #[allow(unused)]
 pub fn generic_log_bench(
     iters: u64,
@@ -140,7 +138,6 @@ pub fn generic_log_bench(
     operations: &Arc<Vec<usize>>,
     f: fn(&Arc<Log<usize>>, &Arc<Vec<usize>>, usize) -> (),
 ) -> Duration {
-
     // Need a barrier to synchronize starting of threads
     let barrier = Arc::new(Barrier::new(thread_num));
     // Thread handles to `join` them at the end
@@ -193,15 +190,19 @@ pub fn generic_log_bench(
     elapsed
 }
 
-/// Takes a generic data-structure that implements dispatch and a vector of operations 
+/// Takes a generic data-structure that implements dispatch and a vector of operations
 /// to execute against said data-structure.
-/// 
-/// It configures the supplied criterion runner to do two benchmarks: 
+///
+/// It configures the supplied criterion runner to do two benchmarks:
 /// - Running the DS operations on a single-thread directly against the DS.
 /// - Running the DS operation on a single-thread but go through a replica/log.
-/// 
+///
 /// Use this function to evalute the overhead the log adds for a given data-structure.
-pub fn baseline_comparison_benchmark<T: Dispatch + Default>(c: &mut Criterion, name: &str, ops: Vec<<T as Dispatch>::Operation>) {
+pub fn baseline_comparison_benchmark<T: Dispatch + Default>(
+    c: &mut Criterion,
+    name: &str,
+    ops: Vec<<T as Dispatch>::Operation>,
+) {
     let s: T = Default::default();
 
     // First benchmark is just a stack on a single thread:
@@ -216,10 +217,8 @@ pub fn baseline_comparison_benchmark<T: Dispatch + Default>(c: &mut Criterion, n
     });
 
     // 2nd benchmark we compare the stack but now we put a log in front:
-    let log = Arc::new(Log::<<T as Dispatch>::Operation>::new(
-        LOG_SIZE_BYTES,
-    ));
-    let r  = Replica::<T>::new(&log);
+    let log = Arc::new(Log::<<T as Dispatch>::Operation>::new(LOG_SIZE_BYTES));
+    let r = Replica::<T>::new(&log);
     let ridx = r.register().expect("Failed to register with Replica.");
 
     group.bench_function("log", |b| {

@@ -1,12 +1,11 @@
 // Copyright © 2019 VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-///! A benchmark that evaluates the append performance (in terms of throughput ops/s) 
-///! of the log by varying the batch size and the amount of threads contending on the log.
-
-use std::sync::Arc;
-use criterion::{Criterion, ParameterizedBenchmark, Throughput, criterion_group, criterion_main};
+use criterion::{criterion_group, criterion_main, Criterion, ParameterizedBenchmark, Throughput};
 use node_replication::log::Log;
+///! A benchmark that evaluates the append performance (in terms of throughput ops/s)
+///! of the log by varying the batch size and the amount of threads contending on the log.
+use std::sync::Arc;
 
 mod utils;
 
@@ -47,7 +46,7 @@ fn log_scale_bench(c: &mut Criterion) {
         (Threads(2), BatchSize(1)),
         (Threads(2), BatchSize(8)),
         (Threads(4), BatchSize(1)),
-        (Threads(4), BatchSize(8))
+        (Threads(4), BatchSize(8)),
     ];
 
     let log = Arc::new(Log::<usize>::new(LOG_SIZE_BYTES));
@@ -58,7 +57,14 @@ fn log_scale_bench(c: &mut Criterion) {
             "append",
             move |b, (threads, batch)| {
                 b.iter_custom(|iters| {
-                    utils::generic_log_bench(iters, threads.0, batch.0, &log, &operations, scale_log)
+                    utils::generic_log_bench(
+                        iters,
+                        threads.0,
+                        batch.0,
+                        &log,
+                        &operations,
+                        scale_log,
+                    )
                 })
             },
             configurations,
