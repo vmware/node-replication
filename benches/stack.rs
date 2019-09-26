@@ -114,26 +114,33 @@ fn stack_single_threaded(c: &mut Criterion) {
 
 /// Compare scalability of a node-replicated stack.
 fn stack_scale_out(c: &mut Criterion) {
-    /*env_logger::init();
-    use clap::{load_yaml, App};
+    env_logger::init();
 
-    let yml = load_yaml!("args.yml");
-    let matches = App::from_yaml(yml).get_matches();
-    //let topology = MachineTopology::new();
-
-    // Benchmark 500k operations per iteration
-    const NOP: usize = 500_000;
-    // Use a 10 GiB log size
-    const LOG_SIZE_BYTES: usize = 10 * 1024 * 1024 * 1024;
+    // How many operations per iteration
+    const NOP: usize = 1_000;
+    // Size of the log.
+    const LOG_SIZE_BYTES: usize = 4 * 1024 * 1024 * 1024;
 
     let ops = generate_operations(NOP);
-    mkbench::scaleout::<Stack>(c, "stackscale", ops, LOG_SIZE_BYTES);*/
+
+    mkbench::ScaleBenchBuilder::<Stack>::new(ops)
+        .log_size(LOG_SIZE_BYTES)
+        .replica_strategy(mkbench::ReplicaStrategy::One)
+        .thread_mapping(mkbench::ThreadMapping::Sequential)
+        .threads(1)
+        .threads(2)
+        .threads(4)
+        .configure(c, "stack-scaleout", |cid, rid, log, replica, ops, _batch_size| {
+            for op in ops {
+                replica.execute(*op, rid);
+            }
+        });
 }
 
 criterion_group!(
     name = benches;
     config = Criterion::default().sample_size(10);
-    targets = stack_single_threaded
+    targets = stack_single_threaded, stack_scale_out
 );
 
 criterion_main!(benches);

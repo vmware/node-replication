@@ -1,6 +1,7 @@
 // Copyright © 2019 VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+use std::fmt;
 use hwloc::*;
 
 pub type Node = u64;
@@ -12,7 +13,7 @@ pub type L2 = u64;
 pub type L3 = u64;
 
 /// The strategy how threads are allocated in the system.
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone, Eq, PartialEq)]
 pub enum ThreadMapping {
     /// Don't do any pinning.
     None,
@@ -20,6 +21,16 @@ pub enum ThreadMapping {
     Sequential,
     /// Spread thread allocation out across sockets (as much as possible).
     Interleave,
+}
+
+impl fmt::Debug for ThreadMapping {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            ThreadMapping::None => write!(f, "TM=None"),
+            ThreadMapping::Sequential => write!(f, "TM=Sequential"),
+            ThreadMapping::Interleave => write!(f, "TM=Interleave"),
+        }
+    }
 }
 
 /// NUMA Node information.

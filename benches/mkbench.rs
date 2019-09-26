@@ -2,12 +2,19 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Helper functions to instantiate and configure benchmarks.
+//! 
+//! The file exports two items:
+//!  - baseline_comparison: A generic function to compare a data-structure
+//!    with and without a log.
+//! - `ScaleBenchBuilder`: A struct that helps to configure criterion 
+//!    to evaluate the scalability of a data-structure with node-replication.
 #![allow(unused)]
 
 use std::collections::HashMap;
 use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::{Duration, Instant};
+use std::fmt;
 
 use criterion::{black_box, BenchmarkId, Criterion, Throughput};
 use log::*;
@@ -17,6 +24,15 @@ use crate::utils;
 use crate::utils::topology::*;
 
 pub use crate::utils::topology::ThreadMapping;
+
+type BenchFn<T> = fn(
+    crate::utils::ThreadId,
+    usize,
+    &Arc<Log<'static, <T as Dispatch>::Operation>>,
+    &Arc<Replica<T>>,
+    &Vec<<T as Dispatch>::Operation>,
+    usize,
+);
 
 /// Creates a benchmark to evalute the overhead the log adds for a given data-structure.
 ///
@@ -61,12 +77,8 @@ pub fn baseline_comparison<T: Dispatch + Default>(
     group.finish();
 }
 
-fn thread_mapping(tm: ThreadMapping, thread_id: usize) -> Cpu {
-    thread_id as Cpu
-}
-
 /// How replicas are mapped to cores/threads.
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone, Eq, PartialEq)]
 pub enum ReplicaStrategy {
     /// One replica per system.
     One,
@@ -80,7 +92,19 @@ pub enum ReplicaStrategy {
     Socket,
 }
 
-pub struct ScaleBenchmark<'a, T: Dispatch + Default + Send>
+impl fmt::Debug for ReplicaStrategy {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            ReplicaStrategy::One => write!(f, "RS=System"),
+            ReplicaStrategy::L1 => write!(f, "RS=L1"),
+            ReplicaStrategy::L2 => write!(f, "RS=L2"),
+            ReplicaStrategy::L3 => write!(f, "RS=L3"),
+            ReplicaStrategy::Socket => write!(f, "RS=Socket"),
+        }
+    }
+}
+
+pub struct ScaleBenchmark<T: Dispatch + Default + Send>
 where
     <T as node_replication::Dispatch>::Operation: std::marker::Send,
     <T as node_replication::Dispatch>::Response: std::marker::Send,
@@ -94,32 +118,38 @@ where
     log: Arc<Log<'static, <T as Dispatch>::Operation>>,
     /// Results of the benchmark, (replica idx, ops/s, runtime in microseconds) per thread.
     results: Vec<(u64, u64, i64)>,
+    /// Batch-size (passed as a parameter to benchmark funtion `f`)
+    batch_size: usize,
     /// Benchmark function to execute
-    f: Box<fn(&Arc<Log<'a, <T as Dispatch>::Operation>>, &Arc<Replica<T>>)>,
+    f: BenchFn<T>,
+
 }
 
-impl<'a, T: Dispatch + Default + Send> ScaleBenchmark<'a, T>
+impl<T: Dispatch + Default + Send> ScaleBenchmark<T>
 where
     <T as node_replication::Dispatch>::Operation: std::marker::Send,
+    <T as node_replication::Dispatch>::Operation: std::marker::Sync,
     <T as node_replication::Dispatch>::Response: std::marker::Send,
     T: 'static,
 {
     /// Create a new ScaleBenchmark.    
     fn new(
-        topology: &'a MachineTopology,
+        topology: &MachineTopology,
         rs: ReplicaStrategy,
         tm: ThreadMapping,
         ts: usize,
         operations: Vec<<T as Dispatch>::Operation>,
+        batch_size: usize,
         log: Arc<Log<'static, <T as Dispatch>::Operation>>,
-        f: fn(&Arc<Log<'static, <T as Dispatch>::Operation>>, &Arc<Replica<T>>),
-    ) -> ScaleBenchmark<'static, T> {
+        f: BenchFn<T>,
+    ) -> ScaleBenchmark<T> {
         ScaleBenchmark {
             rm: ScaleBenchmark::<T>::replica_core_allocation(topology, rs, tm, ts),
-            operations,
+            operations: operations,
             log,
             results: Default::default(),
-            f: Box::new(f),
+            batch_size,
+            f: f,
         }
     }
 
@@ -135,6 +165,8 @@ where
     }
 
     fn execute(&self, iters: u64) -> Duration {
+        utils::disable_dvfs();
+
         let thread_num = self.threads();
         // Need a barrier to synchronize starting of threads
         let barrier = Arc::new(Barrier::new(thread_num));
@@ -142,8 +174,8 @@ where
         // Thread handles to `join` them at the end
         let mut handles = Vec::with_capacity(thread_num);
 
+        // TODO: Remove once we have GC
         unsafe {
-            // TODO: Remove once we have GC
             self.log.reset();
         }
 
@@ -152,17 +184,28 @@ where
             replicas.push(Arc::new(Replica::<T>::new(&self.log)));
         }
 
+        debug!(
+            "Execute benchmark with the following replica: [core_id] mapping: {:#?}",
+            self.rm
+        );
         for (rid, cores) in self.rm.clone().into_iter() {
             for core_id in cores {
                 let b = barrier.clone();
 
                 let log: Arc<_> = self.log.clone();
                 let replica = replicas[rid].clone();
-                //let operations = Arc::new(&self.operations);
+                let operations = self.operations.clone();
                 let f = self.f.clone();
+                let batch_size = self.batch_size;
+                let replica_token = replica
+                    .register()
+                    .expect("Can't register replica, out of slots?");
 
                 let b = barrier.clone();
-                error!("Spawn thread on core {} with replica {}", core_id, rid);
+                debug!(
+                    "Spawn thread on core {} with replica {} replica register token is {}",
+                    core_id, rid, replica_token
+                );
 
                 handles.push(thread::spawn(move || {
                     utils::pin_thread(core_id);
@@ -171,7 +214,7 @@ where
                     b.wait();
                     let start = Instant::now();
                     for _i in 0..iters {
-                        black_box((f)(&log, &replica));
+                        black_box((f)(core_id, replica_token, &log, &replica, &operations, batch_size));
                     }
                     let elapsed = start.elapsed();
                     b.wait();
@@ -203,7 +246,7 @@ where
         debug_assert!(min_thread_duration > 0.0, "Threads must have some runtime");
         let fairness = max_thread_duration / min_thread_duration;
         if fairness < 0.9 {
-            panic!("Fairness threshold of 0.9 reached: {}, figure out why some threads were starved (max = {}, min = {})?", fairness, max_thread_duration, min_thread_duration);
+            panic!("Fairness threshold below 0.9: {}, figure out why some threads were starved (max = {}, min = {})?", fairness, max_thread_duration, min_thread_duration);
         }
 
         durations[0]
@@ -221,7 +264,14 @@ where
         ts: usize,
     ) -> HashMap<usize, Vec<Cpu>> {
         let cpus = topology.allocate(tm, ts, false);
-        trace!("Pin to {:?}", cpus);
+        debug_assert_eq!(ts, cpus.len());
+
+        trace!(
+            "Allocated cores for benchmark with {:?} {:?} {:?}",
+            rs,
+            tm,
+            cpus
+        );
         let mut rm: HashMap<usize, Vec<Cpu>> = HashMap::new();
 
         match rs {
@@ -285,7 +335,7 @@ where
     }
 }
 
-/// Generic benchmark configuration parameters for node-replication scalability benchmarks.
+/// A generic benchmark configurator for node-replication scalability benchmarks.
 #[derive(Debug)]
 pub struct ScaleBenchBuilder<T: Dispatch + Default>
 where
@@ -299,15 +349,18 @@ where
     thread_mappings: Vec<ThreadMapping>,
     /// # Threads.
     threads: Vec<usize>,
+    /// Batch sizes to use (default 1)
+    batches: Vec<usize>,
     /// Log size (bytes).
     log_size: usize,
     /// Operations executed on the log.
-    operations: Arc<Vec<<T as Dispatch>::Operation>>,
+    operations: Vec<<T as Dispatch>::Operation>,
 }
 
 impl<T: Dispatch + Default> ScaleBenchBuilder<T>
 where
     <T as node_replication::Dispatch>::Operation: std::marker::Send,
+    <T as node_replication::Dispatch>::Operation: std::marker::Sync,
     <T as node_replication::Dispatch>::Response: std::marker::Send,
     T: 'static,
     T: std::marker::Send,
@@ -317,14 +370,21 @@ where
     /// By default this won't execute any runs,
     /// you have to at least call `threads`, `thread_mapping`
     /// `replica_strategy` once and set `operations`.
-    pub fn new(ops: Arc<Vec<<T as Dispatch>::Operation>>) -> ScaleBenchBuilder<T> {
+    pub fn new(ops: Vec<<T as Dispatch>::Operation>) -> ScaleBenchBuilder<T> {
         ScaleBenchBuilder {
             replica_strategies: Vec::new(),
             thread_mappings: Vec::new(),
             threads: Vec::new(),
+            batches: vec![1usize],
             log_size: 1024 * 1024 * 2,
             operations: ops,
         }
+    }
+
+    /// Run benchmark with batching of size `b`.
+    pub fn add_batch(&mut self, b: usize) -> &mut Self {
+        self.batches.push(b);
+        self
     }
 
     /// Run benchmark with `t` threads.
@@ -360,30 +420,33 @@ where
     ///
     /// Criterion will be configured to create a run for every
     /// possible triplet: (replica strategy, thread mapping, #threads).
-    pub fn configure(&self, name: &str, c: &mut Criterion) {
+    pub fn configure(&self, c: &mut Criterion, name: &str, f: BenchFn<T>) {
         let topology = MachineTopology::new();
 
         let mut group = c.benchmark_group(name);
+
         let log = Arc::new(Log::<<T as Dispatch>::Operation>::new(self.log_size));
 
         for rs in self.replica_strategies.iter() {
             for tm in self.thread_mappings.iter() {
                 for ts in self.threads.iter() {
-                    let runner = ScaleBenchmark::<T>::new(
-                        &topology,
-                        *rs,
-                        *tm,
-                        *ts,
-                        self.operations.to_vec(),
-                        log.clone(),
-                        |log, replica| {
-                            //println!("hi from {:?} {:?},", log, replica);
-                        },
-                    );
-                    let name = format!("{:?} {:?}", *rs, *tm);
-                    group.bench_with_input(BenchmarkId::new(name, *ts), &runner, |cb, runner| {
-                        cb.iter_custom(|iters| runner.execute(iters))
-                    });
+                    for b in self.batches.iter() {
+                        let runner = ScaleBenchmark::<T>::new(
+                            &topology,
+                            *rs,
+                            *tm,
+                            *ts,
+                            self.operations.to_vec(),
+                            *b,
+                            log.clone(),
+                            f,
+                        );
+                        let name = format!("{:?} {:?} BS={}", *rs, *tm, *b);
+                        group.throughput(Throughput::Elements((self.operations.len() * ts) as u64));
+                        group.bench_with_input(BenchmarkId::new(name, *ts), &runner, |cb, runner| {
+                            cb.iter_custom(|iters| runner.execute(iters))
+                        });
+                    }
                 }
             }
         }

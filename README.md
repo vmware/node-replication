@@ -48,6 +48,10 @@ code is located in the `benches` folder. We use criterion as a harness runner
 for benchmarks. The benchmark results are best viewed in a browser by opening
 `target/criterion/report/index.html`.
 
+Please ensure to set `RUST_TEST_THREADS=1` for running as the scale-out
+benchmarks will spawn multiple threads internally that can utilize the entire
+machine for certain runs.
+
 ### Log append [[src](benches/log.rs)]
 
 A benchmark that evaluates the append performance (in terms of throughput
@@ -57,7 +61,7 @@ theoretically possible (if we are ignoring the overhead of synchronization
 within a replica).
 
 To run this benchmark execute:
-`cargo bench -- log/append`
+`RUST_TEST_THREADS=1 cargo bench --bench log`
 
 ### Stack cost [[src](benches/stack.rs)]
 
@@ -66,10 +70,11 @@ node-replicated stack against single-threaded stack (without a log/replica).
 The benchmark reports throughput in ops/s.
 
 To run this benchmark execute:
-`cargo bench -- stack`
+`RUST_TEST_THREADS=1 cargo bench --bench stack`
 
 ### Synthetic data-structure [[src](benches/synthetic.rs)]
 
 A benchmark that evaluates the performance of the NR library by using a
-synthetic model for the data-structure that gets replicated.
+configurable cache-model for the data-structure that gets replicated.
 
+`RUST_TEST_THREADS=1 cargo bench --bench synthetic`
