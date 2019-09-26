@@ -5,6 +5,7 @@ use alloc::alloc::{alloc, dealloc, Layout};
 
 use core::cell::Cell;
 use core::default::Default;
+use core::fmt;
 use core::mem::{align_of, size_of};
 use core::ops::{Drop, FnMut};
 use core::slice::from_raw_parts_mut;
@@ -88,6 +89,19 @@ where
     /// Logical index into the above slice at which the log ends.
     /// New appends go here.
     tail: CachePadded<AtomicUsize>,
+}
+
+impl<'a, T> fmt::Debug for Log<'a, T>
+where
+    T: Sized + Copy + Default,
+{
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        fmt.debug_struct("Log")
+            .field("head", &self.tail)
+            .field("tail", &self.head)
+            .field("size", &self.size)
+            .finish()
+    }
 }
 
 /// The Log is Sync. The *mut u8 (`rawp`) is never dereferenced.
