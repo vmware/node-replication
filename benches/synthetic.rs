@@ -10,6 +10,7 @@
 //! to measure the cache-impact.
 
 use std::cell::RefCell;
+use std::sync::Arc;
 
 use criterion::{criterion_group, criterion_main, Criterion};
 use crossbeam_utils::CachePadded;
@@ -18,6 +19,7 @@ use rand::{thread_rng, Rng};
 use node_replication::Dispatch;
 
 mod mkbench;
+mod utils;
 
 /// Operations we can perform on the AbstractDataStructure.
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
@@ -252,10 +254,30 @@ fn synthetic_single_threaded(c: &mut Criterion) {
     mkbench::baseline_comparison::<AbstractDataStructure>(c, "synthetic", ops, LOG_SIZE_BYTES);
 }
 
+fn synthetic_scale_out(c: &mut Criterion) {
+    env_logger::init();
+
+    // How many operations per iteration
+    const NOP: usize = 1_000;
+    // Size of the log.
+    const LOG_SIZE_BYTES: usize = 4 * 1024 * 1024 * 1024;
+
+    let ops = generate_random_operations(NOP, 0, false, false, true);
+
+    mkbench::ScaleBenchBuilder::<AbstractDataStructure>::new(Arc::new(ops))
+        .log_size(LOG_SIZE_BYTES)
+        .replica_strategy(mkbench::ReplicaStrategy::One)
+        .replica_strategy(mkbench::ReplicaStrategy::L1)
+        .thread_mapping(mkbench::ThreadMapping::Sequential)
+        .threads(1)
+        .threads(2)
+        .configure("synthetic-scaleout", c);
+}
+
 criterion_group!(
     name = benches;
     config = Criterion::default().sample_size(10);
-    targets = synthetic_single_threaded,
+    targets = synthetic_single_threaded, synthetic_scale_out
 );
 
 criterion_main!(benches);

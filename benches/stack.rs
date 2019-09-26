@@ -7,6 +7,7 @@
 //! as all stack operations add very little overhead.
 
 mod mkbench;
+mod utils;
 
 use std::cell::RefCell;
 
@@ -113,19 +114,26 @@ fn stack_single_threaded(c: &mut Criterion) {
 
 /// Compare scalability of a node-replicated stack.
 fn stack_scale_out(c: &mut Criterion) {
+    /*env_logger::init();
+    use clap::{load_yaml, App};
+
+    let yml = load_yaml!("args.yml");
+    let matches = App::from_yaml(yml).get_matches();
+    //let topology = MachineTopology::new();
+
     // Benchmark 500k operations per iteration
     const NOP: usize = 500_000;
     // Use a 10 GiB log size
     const LOG_SIZE_BYTES: usize = 10 * 1024 * 1024 * 1024;
 
     let ops = generate_operations(NOP);
-    mkbench::scaleout::<Stack>(c, "stackscale", ops, LOG_SIZE_BYTES);
+    mkbench::scaleout::<Stack>(c, "stackscale", ops, LOG_SIZE_BYTES);*/
 }
 
 criterion_group!(
     name = benches;
     config = Criterion::default().sample_size(10);
-    targets = stack_single_threaded, stack_scale_out
+    targets = stack_single_threaded
 );
 
 criterion_main!(benches);
