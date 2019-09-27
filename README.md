@@ -65,16 +65,23 @@ To run this benchmark execute:
 
 ### Stack cost [[src](benches/stack.rs)]
 
-A benchmark that evaluates the COST (overhead of added synchronization) by comparing a
-node-replicated stack against single-threaded stack (without a log/replica).
-The benchmark reports throughput in ops/s.
+Includes a benchmark that evaluates the COST (overhead of added synchronization) by 
+comparing a node-replicated stack against a single-threaded stack 
+(without a log/replica). Furthermore it includes a second benchmark that evaluates 
+the scalability of the stack by running benchmarks with increasing amounts
+of threads. 
 
 To run this benchmark execute:
 `RUST_TEST_THREADS=1 cargo bench --bench stack`
 
 ### Synthetic data-structure [[src](benches/synthetic.rs)]
 
-A benchmark that evaluates the performance of the NR library by using a
-configurable cache-model for the data-structure that gets replicated.
+A benchmark to evaluates the performance of the NR library by using a
+configurable cache-model and access-pattern for an abstract data-structure 
+that gets replicated.
+
+Again the code contains two sets of benchmarks to (a) compare the COST 
+(overhead of added synchronization) and (b) the scalability of the 
+synthetic data-structure. All benchmarks report throughput in ops/s. 
 
 `RUST_TEST_THREADS=1 cargo bench --bench synthetic`
