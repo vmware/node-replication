@@ -151,7 +151,7 @@ impl PhysicalAllocator for BuddyFrameAllocator {
 impl BuddyFrameAllocator {
     const MIN_HEAP_ALIGN: usize = BASE_PAGE_SIZE;
 
-    pub fn new() -> BuddyFrameAllocator {
+    pub const fn new() -> BuddyFrameAllocator {
         BuddyFrameAllocator {
             region: Frame {
                 base: PAddr(0),

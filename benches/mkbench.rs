@@ -208,7 +208,6 @@ where
 
                 handles.push(thread::spawn(move || {
                     utils::pin_thread(core_id);
-                    utils::set_core_id(core_id);
 
                     b.wait();
                     let start = Instant::now();
@@ -405,8 +404,13 @@ where
             2
         };
 
-        for t in (1..topology.cores()).step_by(thread_incremements) {
-            self.threads(t);
+        for t in (0..topology.cores()).step_by(thread_incremements) {
+            if t == 0 {
+                // Can't run on 0 threads
+                self.threads(t+1);
+            } else {
+                self.threads(t);
+            }
         }
 
         // TODO: large because we don't have GC atm.

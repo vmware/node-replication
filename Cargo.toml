@@ -14,7 +14,7 @@ name = "log"
 harness = false
 
 [[bench]]
-name = "osbench"
+name = "vspace"
 harness = false
 
 [[bench]]

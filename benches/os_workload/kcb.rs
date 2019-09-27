@@ -3,65 +3,41 @@
 
 // KCB is the local kernel control that stores all core local state.
 
-use core::borrow::BorrowMut;
-use core::cell::{Ref, RefCell, RefMut};
+use core::cell::{Ref, RefCell, RefMut, UnsafeCell};
 use core::pin::Pin;
 use core::ptr;
 use std::boxed::Box;
+use std::thread_local;
 
 use super::kpi;
-
-use x86::current::paging::PAddr;
-use x86::current::segmentation;
-use x86::msr::{wrmsr, IA32_KERNEL_GSBASE};
 
 use super::process::Process;
 use super::vspace::VSpace;
 
 use super::memory::buddy::BuddyFrameAllocator;
-use super::memory::PhysicalMemoryAllocator;
 
-static mut KCBS: [*mut Kcb; 128] = [ptr::null_mut(); 128];
+#[thread_local]
+static mut KCB: RefCell<Kcb> = RefCell::new(Kcb::new(&[0; 1], BuddyFrameAllocator::new()));
 
-/// Try to retrieve the KCB by reading the gs register.
+/// Try to retrieve the KCB.
 pub fn try_get_kcb() -> Option<&'static mut Kcb> {
-    unsafe {
-        if KCBS[crate::utils::get_core_id()] == ptr::null_mut() {
-            None
-        } else {
-            Some(&mut *KCBS[crate::utils::get_core_id()])
-        }
+    unsafe { 
+        Some(KCB.get_mut())
     }
 }
 
-/// Retrieve the KCB by reading the gs register.
+/// Retrieve the KCB.
 ///
 /// # Panic
 /// This will fail in case the KCB is not yet set (i.e., early on during
 /// initialization).
 pub fn get_kcb() -> &'static mut Kcb {
-    unsafe { &mut *KCBS[crate::utils::get_core_id()] }
-}
-
-/// Installs the KCB by setting the gs register to point to it.
-///
-/// We also set IA32_KERNEL_GSBASE to the kcb pointer to make sure
-/// when we call swapgs on a syscall entry, we restore the pointer
-/// to the KCB (since user-space may change gs register for
-/// TLS etc.).
-pub fn set_kcb() {
-    unsafe {
-        let kcb = Box::new(Kcb::new(&[0; 1], VSpace::new(), BuddyFrameAllocator::new()));
-        kcb.swap_current_process(Box::new(Process::new_map().unwrap()));
-        KCBS[crate::utils::get_core_id()] = Box::into_raw(kcb);
-    }
-}
-
-pub fn drop_kcb() {
-    unsafe {
-        let b = Box::from_raw(KCBS[crate::utils::get_core_id()]);
-        drop(b);
-        KCBS[crate::utils::get_core_id()] = ptr::null_mut();
+    unsafe { 
+        let kcb = KCB.get_mut();
+        if kcb.current_process().is_none() {
+            kcb.swap_current_process(Box::new(Process::new_map().unwrap()));
+        }
+        kcb
     }
 }
 
@@ -88,7 +64,7 @@ pub struct Kcb {
     kernel_binary: RefCell<&'static [u8]>,
 
     /// The initial VSpace as constructed by the bootloader.
-    init_vspace: RefCell<VSpace>,
+    //init_vspace: RefCell<VSpace>,
 
     /// A handle to the physical memory manager.
     pmanager: RefCell<BuddyFrameAllocator>,
@@ -110,10 +86,10 @@ pub struct Kcb {
 }
 
 impl Kcb {
-    pub fn new(
+    pub const fn new(
         //kernel_args: &'static KernelArgs<[Module; 2]>,
         kernel_binary: &'static [u8],
-        init_vspace: VSpace,
+        //init_vspace: VSpace,
         pmanager: BuddyFrameAllocator,
         //apic: XAPIC,
     ) -> Kcb {
@@ -123,7 +99,7 @@ impl Kcb {
             current_process: RefCell::new(None),
             //kernel_args: RefCell::new(kernel_args),
             kernel_binary: RefCell::new(kernel_binary),
-            init_vspace: RefCell::new(init_vspace),
+            //init_vspace: RefCell::new(init_vspace),
             pmanager: RefCell::new(pmanager),
             //apic: RefCell::new(apic),
             interrupt_stack: None,
@@ -186,9 +162,9 @@ impl Kcb {
         self.apic.borrow_mut()
     }*/
 
-    pub fn init_vspace(&self) -> RefMut<VSpace> {
+    /*pub fn init_vspace(&self) -> RefMut<VSpace> {
         self.init_vspace.borrow_mut()
-    }
+    }*/
 
     pub fn kernel_binary(&self) -> Ref<&'static [u8]> {
         self.kernel_binary.borrow()

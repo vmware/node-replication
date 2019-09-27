@@ -1,6 +1,8 @@
 // Copyright © 2019 VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+#![allow(safe_packed_borrows)]
+
 pub mod kcb;
 pub mod kpi;
 mod memory;

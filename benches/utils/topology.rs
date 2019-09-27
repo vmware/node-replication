@@ -1,6 +1,8 @@
 // Copyright © 2019 VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+//! Allows to query information about the CPU topology.
+
 use hwloc::*;
 use std::fmt;
 
@@ -16,10 +18,12 @@ pub type L3 = u64;
 #[derive(Copy, Clone, Eq, PartialEq)]
 pub enum ThreadMapping {
     /// Don't do any pinning.
+    #[allow(unused)]
     None,
     /// Allocate threads on the same socket (as much as possible).
     Sequential,
     /// Spread thread allocation out across sockets (as much as possible).
+    #[allow(unused)]
     Interleave,
 }
 

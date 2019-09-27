@@ -220,9 +220,9 @@ impl Process {
 
         // Install the kernel mappings
         super::kcb::try_get_kcb().map(|kcb| {
-            let kernel_pml_entry = kcb.init_vspace().pml4[128];
-            info!("KERNEL MAPPINGS {:?}", kernel_pml_entry);
-            p.vspace.pml4[128] = kernel_pml_entry;
+            //let kernel_pml_entry = kcb.init_vspace().pml4[128];
+            //info!("KERNEL MAPPINGS {:?}", kernel_pml_entry);
+            //p.vspace.pml4[128] = kernel_pml_entry;
         });
 
         Ok(p)

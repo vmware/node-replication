@@ -118,8 +118,6 @@ fn stack_scale_out(c: &mut Criterion) {
 
     // How many operations per iteration
     const NOP: usize = 10_000;
-    // Size of the log.
-    const LOG_SIZE_BYTES: usize = 4 * 1024 * 1024 * 1024;
 
     let ops = generate_operations(NOP);
 

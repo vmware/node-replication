@@ -10,7 +10,6 @@
 //! to measure the cache-impact.
 
 use std::cell::RefCell;
-use std::sync::Arc;
 
 use criterion::{criterion_group, criterion_main, Criterion};
 use crossbeam_utils::CachePadded;
@@ -267,7 +266,7 @@ fn synthetic_scale_out(c: &mut Criterion) {
         .configure(
             c,
             "synthetic-scaleout",
-            |cid, rid, log, replica, ops, _batch_size| {
+            |cid, rid, _log, replica, ops, _batch_size| {
                 for op in ops {
                     let mut op = *op;
                     op.set_tid(cid as usize);
