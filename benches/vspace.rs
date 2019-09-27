@@ -17,8 +17,8 @@ use std::fs::File;
 use std::io;
 use std::io::prelude::*;
 
-mod utils;
 mod mkbench;
+mod utils;
 
 use node_replication::Dispatch;
 

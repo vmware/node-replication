@@ -21,9 +21,7 @@ static mut KCB: RefCell<Kcb> = RefCell::new(Kcb::new(&[0; 1], BuddyFrameAllocato
 
 /// Try to retrieve the KCB.
 pub fn try_get_kcb() -> Option<&'static mut Kcb> {
-    unsafe { 
-        Some(KCB.get_mut())
-    }
+    unsafe { Some(KCB.get_mut()) }
 }
 
 /// Retrieve the KCB.
@@ -32,7 +30,7 @@ pub fn try_get_kcb() -> Option<&'static mut Kcb> {
 /// This will fail in case the KCB is not yet set (i.e., early on during
 /// initialization).
 pub fn get_kcb() -> &'static mut Kcb {
-    unsafe { 
+    unsafe {
         let kcb = KCB.get_mut();
         if kcb.current_process().is_none() {
             kcb.swap_current_process(Box::new(Process::new_map().unwrap()));

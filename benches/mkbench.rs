@@ -407,7 +407,7 @@ where
         for t in (0..topology.cores()).step_by(thread_incremements) {
             if t == 0 {
                 // Can't run on 0 threads
-                self.threads(t+1);
+                self.threads(t + 1);
             } else {
                 self.threads(t);
             }
