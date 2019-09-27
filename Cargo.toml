@@ -27,6 +27,7 @@ harness = false
 
 [dependencies]
 crossbeam-utils = { version = "0.6", default-features = false }
+arr_macro = "0.1.2"
 
 # Add debug symbols on the release build so that we can debug performance issues
 [profile.release]

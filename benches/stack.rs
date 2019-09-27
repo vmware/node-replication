@@ -104,7 +104,7 @@ fn generate_operations(nop: usize) -> Vec<Op> {
 /// Compare against a stack with and without a log in-front.
 fn stack_single_threaded(c: &mut Criterion) {
     // Benchmark 500k operations per iteration
-    const NOP: usize = 500_000;
+    const NOP: usize = 10_000;
     // Use a 10 GiB log size
     const LOG_SIZE_BYTES: usize = 10 * 1024 * 1024 * 1024;
 
@@ -117,24 +117,23 @@ fn stack_scale_out(c: &mut Criterion) {
     env_logger::init();
 
     // How many operations per iteration
-    const NOP: usize = 1_000;
+    const NOP: usize = 10_000;
     // Size of the log.
     const LOG_SIZE_BYTES: usize = 4 * 1024 * 1024 * 1024;
 
     let ops = generate_operations(NOP);
 
     mkbench::ScaleBenchBuilder::<Stack>::new(ops)
-        .log_size(LOG_SIZE_BYTES)
-        .replica_strategy(mkbench::ReplicaStrategy::One)
-        .thread_mapping(mkbench::ThreadMapping::Sequential)
-        .threads(1)
-        .threads(2)
-        .threads(4)
-        .configure(c, "stack-scaleout", |cid, rid, log, replica, ops, _batch_size| {
-            for op in ops {
-                replica.execute(*op, rid);
-            }
-        });
+        .machine_defaults()
+        .configure(
+            c,
+            "stack-scaleout",
+            |_cid, rid, _log, replica, ops, _batch_size| {
+                for op in ops {
+                    replica.execute(*op, rid);
+                }
+            },
+        );
 }
 
 criterion_group!(

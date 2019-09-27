@@ -31,13 +31,15 @@ pub fn get_core_id() -> topology::Cpu {
 pub fn get_core_id() -> topology::Cpu {
     let ids = core_affinity::get_core_ids().unwrap();
     assert_eq!(ids.len(), 1);
-    ids[0].id
+    ids[0].id as topology::Cpu
 }
 
 // Pin a thread to a core
 #[cfg(target_os = "linux")]
 pub fn pin_thread(core_id: topology::Cpu) {
-    core_affinity::set_for_current(core_affinity::topology::Cpu { id: core_id });
+    core_affinity::set_for_current(core_affinity::CoreId {
+        id: core_id as usize,
+    });
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -61,69 +63,3 @@ pub fn disable_dvfs() {
 pub fn disable_dvfs() {
     warn!("Can't disable DVFS, expect non-optimal test results!");
 }
-
-// XXX remove
-/*
-#[allow(unused)]
-pub fn generic_log_bench(
-    iters: u64,
-    thread_num: usize,
-    batch: usize,
-    log: &Arc<Log<'static, usize>>,
-    operations: &Arc<Vec<usize>>,
-    f: fn(&Arc<Log<usize>>, &Arc<Vec<usize>>, usize) -> (),
-) -> Duration {
-    // Need a barrier to synchronize starting of threads
-    let barrier = Arc::new(Barrier::new(thread_num));
-
-    // Thread handles to `join` them at the end
-    let mut handles = Vec::with_capacity(thread_num);
-
-    // Our strategy on how allocate cores
-    let mapping = ThreadMapping::Sequential;
-
-    unsafe {
-        // TODO: Remove once we have GC
-        log.reset();
-    }
-
-    // Spawn n-1 threads that perform the same benchmark function:
-    for thread_id in 1..thread_num {
-        let c = barrier.clone();
-        let ops = operations.clone();
-        let log = log.clone();
-        handles.push(thread::spawn(move || {
-            let core_id = thread_mapping(mapping, thread_id);
-            utils::pin_thread(core_id);
-            utils::set_core_id(core_id);
-
-            for _i in 0..iters {
-                c.wait();
-                black_box(f(&log, &ops, batch));
-                c.wait();
-            }
-        }));
-    }
-
-    // Spawn the master thread that performs the measurements:
-    let c = barrier.clone();
-    let thread_id: usize = 0;
-    utils::pin_thread(thread_mapping(mapping, thread_id));
-    let log = log.clone();
-    let mut elapsed = Duration::new(0, 0);
-    for _i in 0..iters {
-        // Wait for other threads to start
-        c.wait();
-        let start = Instant::now();
-        black_box(f(&log, &operations, batch));
-        c.wait();
-        elapsed = elapsed + start.elapsed();
-    }
-
-    // Wait for other threads to finish
-    for handle in handles {
-        handle.join().unwrap();
-    }
-
-    elapsed
-}*/

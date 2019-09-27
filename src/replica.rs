@@ -15,7 +15,11 @@ use super::Dispatch;
 
 /// The maximum number of threads that can be registered with a replica. If more than
 /// this number of threads try to register, the register() function will return None.
-const MAX_THREADS_PER_REPLICA: usize = 32;
+///
+/// # Important
+/// If this number is adjusted due to the use of the `arr_macro::arr` macro we
+/// have to adjust the `64` literals in the `new` constructor of `Replica`.
+const MAX_THREADS_PER_REPLICA: usize = 128;
 
 /// An instance of a replicated data structure. Uses a shared log to scale operations on
 /// the data structure across cores and processors.
@@ -95,17 +99,19 @@ where
     /// Takes in a reference to the shared log as an argument. The Log is assumed to
     /// outlive the replica. The replica is bound to the log's lifetime.
     pub fn new<'b>(log: &Arc<Log<'b, <D as Dispatch>::Operation>>) -> Replica<'b, D> {
+        use arr_macro::arr;
+
         Replica {
             tail: Cell::new(0usize),
             combiner: CachePadded::new(AtomicUsize::new(0)),
             next: CachePadded::new(AtomicUsize::new(1)),
-            contexts: Default::default(),
+            contexts: arr![Default::default(); 128],
             buffer: RefCell::new(Vec::with_capacity(
                 MAX_THREADS_PER_REPLICA
                     * Context::<<D as Dispatch>::Operation, <D as Dispatch>::Response>::batch_size(
                     ),
             )),
-            inflight: Default::default(),
+            inflight: RefCell::new(arr![Default::default(); 128]),
             result: RefCell::new(Vec::with_capacity(
                 MAX_THREADS_PER_REPLICA
                     * Context::<<D as Dispatch>::Operation, <D as Dispatch>::Response>::batch_size(
@@ -113,7 +119,7 @@ where
             )),
             slog: log.clone(),
             data: D::default(),
-            locks: Default::default(),
+            locks: arr![Default::default(); 128],
         }
     }
 

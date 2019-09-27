@@ -3,15 +3,14 @@
 
 ///! A benchmark that evaluates the append performance (in terms of throughput ops/s)
 ///! of the log by varying the batch size and the amount of threads contending on the log.
-
 use criterion::{criterion_group, criterion_main, Criterion, ParameterizedBenchmark, Throughput};
 use node_replication::log::Log;
 use node_replication::Dispatch;
 
 use std::sync::Arc;
 
-mod utils;
 mod mkbench;
+mod utils;
 
 /// Benchmark 500k operations per iteration
 const NOP: usize = 50_000;
@@ -47,18 +46,18 @@ fn log_scale_bench(c: &mut Criterion) {
 
     mkbench::ScaleBenchBuilder::<Nop>::new(operations)
         .log_size(LOG_SIZE_BYTES)
-        .replica_strategy(mkbench::ReplicaStrategy::One)
-        .thread_mapping(mkbench::ThreadMapping::Sequential)
-        .threads(1)
-        .threads(2)
-        .threads(4)
+        .machine_defaults()
         .add_batch(8)
-        .configure(c, "log-append", |cid, rid, log, replica, ops, batch_size| {
-            for batch_op in ops.rchunks(batch_size) {
-                let _r = log.append(batch_op);
-                //assert!(r.is_some());
-            }
-        });
+        .configure(
+            c,
+            "log-append",
+            |cid, rid, log, replica, ops, batch_size| {
+                for batch_op in ops.rchunks(batch_size) {
+                    let _r = log.append(batch_op);
+                    //assert!(r.is_some());
+                }
+            },
+        );
 }
 
 criterion_group!(logscale, log_scale_bench);

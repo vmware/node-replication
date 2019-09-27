@@ -22,7 +22,7 @@ const MAX_PENDING_OPS: usize = 32;
 ///
 /// This class is *not* thread-safe.
 #[repr(align(64))]
-#[derive(Default)]
+#[derive(Default, Copy, Clone)]
 pub struct Context<T, R>
 where
     T: Sized + Copy + Default,

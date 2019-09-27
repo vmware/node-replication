@@ -258,26 +258,23 @@ fn synthetic_scale_out(c: &mut Criterion) {
     env_logger::init();
 
     // How many operations per iteration
-    const NOP: usize = 1_000;
-    // Size of the log.
-    const LOG_SIZE_BYTES: usize = 5 * 1024 * 1024 * 1024;
+    const NOP: usize = 10_000;
 
     let ops = generate_random_operations(NOP, 0, false, false, true);
 
     mkbench::ScaleBenchBuilder::<AbstractDataStructure>::new(ops)
-        .log_size(LOG_SIZE_BYTES)
-        .replica_strategy(mkbench::ReplicaStrategy::One)
-        .thread_mapping(mkbench::ThreadMapping::Sequential)
-        .threads(1)
-        .threads(2)
-        .threads(4)
-        .configure(c, "synthetic-scaleout", |cid, rid, log, replica, ops, _batch_size| {
-            for op in ops {
-                let mut op = *op;
-                op.set_tid(tid as usize);
-                replica.execute(op, rid);
-            }
-        });
+        .machine_defaults()
+        .configure(
+            c,
+            "synthetic-scaleout",
+            |cid, rid, log, replica, ops, _batch_size| {
+                for op in ops {
+                    let mut op = *op;
+                    op.set_tid(cid as usize);
+                    replica.execute(op, rid);
+                }
+            },
+        );
 }
 
 criterion_group!(

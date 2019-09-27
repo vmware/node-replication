@@ -1,8 +1,8 @@
 // Copyright © 2019 VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use std::fmt;
 use hwloc::*;
+use std::fmt;
 
 pub type Node = u64;
 pub type Socket = u64;
@@ -137,6 +137,11 @@ impl MachineTopology {
         }
 
         MachineTopology { data }
+    }
+
+    /// Return how many processing units that the system has
+    pub fn cores(&self) -> usize {
+        self.data.len()
     }
 
     pub fn allocate(&self, strategy: ThreadMapping, how_many: usize, use_ht: bool) -> Vec<CpuInfo> {

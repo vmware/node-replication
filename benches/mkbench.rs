@@ -2,19 +2,19 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Helper functions to instantiate and configure benchmarks.
-//! 
+//!
 //! The file exports two items:
 //!  - baseline_comparison: A generic function to compare a data-structure
 //!    with and without a log.
-//! - `ScaleBenchBuilder`: A struct that helps to configure criterion 
+//! - `ScaleBenchBuilder`: A struct that helps to configure criterion
 //!    to evaluate the scalability of a data-structure with node-replication.
 #![allow(unused)]
 
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::{Duration, Instant};
-use std::fmt;
 
 use criterion::{black_box, BenchmarkId, Criterion, Throughput};
 use log::*;
@@ -122,7 +122,6 @@ where
     batch_size: usize,
     /// Benchmark function to execute
     f: BenchFn<T>,
-
 }
 
 impl<T: Dispatch + Default + Send> ScaleBenchmark<T>
@@ -214,7 +213,14 @@ where
                     b.wait();
                     let start = Instant::now();
                     for _i in 0..iters {
-                        black_box((f)(core_id, replica_token, &log, &replica, &operations, batch_size));
+                        black_box((f)(
+                            core_id,
+                            replica_token,
+                            &log,
+                            &replica,
+                            &operations,
+                            batch_size,
+                        ));
                     }
                     let elapsed = start.elapsed();
                     b.wait();
@@ -263,7 +269,7 @@ where
         tm: ThreadMapping,
         ts: usize,
     ) -> HashMap<usize, Vec<Cpu>> {
-        let cpus = topology.allocate(tm, ts, false);
+        let cpus = topology.allocate(tm, ts, true);
         debug_assert_eq!(ts, cpus.len());
 
         trace!(
@@ -381,6 +387,34 @@ where
         }
     }
 
+    /// Configures the builder automatically based on the underlying machine properties.
+    pub fn machine_defaults(&mut self) -> &mut Self {
+        let topology = MachineTopology::new();
+
+        self.thread_mapping(ThreadMapping::Sequential);
+        // Currently can only use one replica as rest has a bug:
+        self.replica_strategy(ReplicaStrategy::One);
+
+        // On larger machines thread increments are bigger than on
+        // smaller machines:
+        let thread_incremements = if topology.cores() > 24 {
+            8
+        } else if topology.cores() > 16 {
+            4
+        } else {
+            2
+        };
+
+        for t in (1..topology.cores()).step_by(thread_incremements) {
+            self.threads(t);
+        }
+
+        // TODO: large because we don't have GC atm.
+        self.log_size(5 * 1024 * 1024 * 1024);
+
+        self
+    }
+
     /// Run benchmark with batching of size `b`.
     pub fn add_batch(&mut self, b: usize) -> &mut Self {
         self.batches.push(b);
@@ -443,9 +477,11 @@ where
                         );
                         let name = format!("{:?} {:?} BS={}", *rs, *tm, *b);
                         group.throughput(Throughput::Elements((self.operations.len() * ts) as u64));
-                        group.bench_with_input(BenchmarkId::new(name, *ts), &runner, |cb, runner| {
-                            cb.iter_custom(|iters| runner.execute(iters))
-                        });
+                        group.bench_with_input(
+                            BenchmarkId::new(name, *ts),
+                            &runner,
+                            |cb, runner| cb.iter_custom(|iters| runner.execute(iters)),
+                        );
                     }
                 }
             }
