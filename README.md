@@ -47,9 +47,9 @@ To run the example execute: `cargo run --example stack`
 
 ## Benchmarks
 
-Executing `cargo bench` will run many benchmarks (described in more detail
-in the following subsections) to evaluate the performance of the library. The
-code is located in the `benches` folder. We use
+Executing `cargo bench` will run many benchmarks (described in more detail in
+the following subsections) to evaluate the performance of the library. The code
+is located in the `benches` folder. We use
 [criterion](https://crates.io/crates/criterion) as a harness runner for
 benchmarks. After execution, the summary of the results are best viewed in a
 browser by opening `target/criterion/report/index.html`.
@@ -94,6 +94,7 @@ To run these benchmarks execute:
 
 Example: To run a specific benchmark of the synthetic data-structure with 8 threads
 (using one replica, sequential thread mapping, and batch size 1):
+
 `RUST_TEST_THREADS=1 cargo bench --bench criterion -- 'synthetic-scaleout/RS=System TM=Sequential BS=1/8'`
 
 ### VSpace [[src](benches/vspace.rs)]
@@ -103,3 +104,11 @@ replication (using an x86-64 4-level address space layout).
 
 To run these benchmarks execute:
 `RUST_TEST_THREADS=1 cargo bench --bench vspace`
+
+### NRbench [[src](benches/nrbench.rs)]
+
+NRbench is a CLI tool that can quickly run a benchmark (stack or synthetic)
+configured by command-line parameters.
+
+Use `RUST_TEST_THREADS=1 cargo bench --bench nrbench -- --help` to see an
+overview of supported configuration.
