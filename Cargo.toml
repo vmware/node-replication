@@ -8,6 +8,7 @@ readme = "README.md"
 description = "An operation-log based approach for data replication."
 keywords = ["numa", "log", "x86", "black-box", "replication"]
 categories = ["algorithms", "concurrency", "data-structures", "no-std", "os"]
+autobenches = false
 
 [[bench]]
 name = "nrbench"
