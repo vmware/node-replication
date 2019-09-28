@@ -58,7 +58,7 @@ Please ensure to always set `RUST_TEST_THREADS=1` in your environment for
 benchmarking since the scale-out benchmarks will spawn multiple threads
 internally that can utilize the entire machine for certain runs.
 
-### Log append
+### Log append [[data-structure](benches/nop.rs)] [[runner](benches/criterion.rs)]
 
 A benchmark that evaluates the append performance (in terms of throughput
 ops/s) of the log by varying the batch size and the amount of threads
