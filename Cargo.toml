@@ -17,9 +17,9 @@ harness = false
 name = "criterion"
 harness = false
 
-#[[bench]]
-#name = "vspace"
-#harness = false
+[[bench]]
+name = "vspace"
+harness = false
 
 [dependencies]
 crossbeam-utils = { version = "0.6", default-features = false }
