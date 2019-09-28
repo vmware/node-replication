@@ -1,11 +1,12 @@
 stages:
   - build
   - test
+  - bench
 
 build:
   stage: build
   script:
-    - sudo apt install libfreetype6-dev gnuplot --yes
+    - sudo apt install libhwloc-dev libfreetype6 libfreetype6-dev gnuplot --yes
     - cargo build
 test:
   stage: test
@@ -14,5 +15,14 @@ test:
     - cargo test
   dependencies:
     - build
+  variables:
+    GIT_STRATEGY: none
+
+bench:
+  stage: bench
+  script:
+    - cargo bench
+  dependencies:
+    - test
   variables:
     GIT_STRATEGY: none
