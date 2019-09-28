@@ -1,28 +1,26 @@
 // Copyright © 2019 VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-#![feature(alloc_layout_extra, thread_local)]
+//! Replays a system-call trace against a vspace implementation to
+//! evaluate performance of a replicated x86-64 address space.
 
-#[macro_use]
-extern crate criterion;
+#![feature(alloc, alloc_layout_extra, thread_local)]
+
 #[macro_use]
 extern crate log;
 extern crate alloc;
-extern crate core_affinity;
-extern crate hwloc;
-
-use criterion::Criterion;
 
 use std::fs::File;
 use std::io;
 use std::io::prelude::*;
 
-mod mkbench;
-mod utils;
-
 use node_replication::Dispatch;
 
+mod mkbench;
 mod os_workload;
+mod utils;
+
+use criterion::{criterion_group, criterion_main, Criterion};
 use os_workload::kpi::{ProcessOperation, SystemCall, VSpaceOperation};
 
 /// Operations that go on the log
@@ -200,8 +198,6 @@ fn parse_syscall_trace(file: &str) -> io::Result<Vec<Opcode>> {
 /// and then replays them using on our `os_workload` implementation
 /// of a syscall handler code.
 fn bespin_vspace_single_threaded(c: &mut Criterion) {
-    env_logger::init();
-
     // Use a 10 GiB log size
     const LOG_SIZE_BYTES: usize = 10 * 1024 * 1024 * 1024;
 
@@ -236,8 +232,9 @@ fn vspace_scale_out(c: &mut Criterion) {
 }
 
 criterion_group!(
-    name = vspace;
+    name = benches;
     config = Criterion::default().sample_size(10);
     targets = bespin_vspace_single_threaded, posix_vspace_single_threaded, vspace_scale_out
 );
-criterion_main!(vspace);
+
+criterion_main!(benches);

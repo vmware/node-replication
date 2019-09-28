@@ -41,10 +41,6 @@ pub fn get_kcb() -> &'static mut Kcb {
 
 /// The Kernel Control Block for a given core. It contains all core-local state of the kernel.
 pub struct Kcb {
-    /// Pointer to the syscall stack (this is referenced in assembly early on in exec.S)
-    /// and should therefore always be at offset 0 of the Kcb struct!
-    syscall_stack_top: *mut u8,
-
     /// Pointer to the save area of the core,
     /// this is referenced on trap/syscall entries to save the CPU state into it.
     ///
@@ -66,21 +62,6 @@ pub struct Kcb {
 
     /// A handle to the physical memory manager.
     pmanager: RefCell<BuddyFrameAllocator>,
-
-    /// A handle to the core-local interrupt driver.
-    //apic: RefCell<XAPIC>,
-
-    /// The interrupt stack (that is used by the CPU on interrupts/traps/faults)
-    ///
-    /// The CPU switches to this memory location automatically (see gdt.rs).
-    /// This member should probably not be touched from normal code.
-    interrupt_stack: Option<Pin<Box<[u8; 64 * 0x1000]>>>,
-
-    /// A handle to the syscall stack memory location.
-    ///
-    /// We switch rsp/rbp to point in here in exec.S.
-    /// This member should probably not be touched from normal code.
-    syscall_stack: Option<Pin<Box<[u8; 64 * 0x1000]>>>,
 }
 
 impl Kcb {
@@ -92,7 +73,6 @@ impl Kcb {
         //apic: XAPIC,
     ) -> Kcb {
         Kcb {
-            syscall_stack_top: ptr::null_mut(),
             save_area: None,
             current_process: RefCell::new(None),
             //kernel_args: RefCell::new(kernel_args),
@@ -100,25 +80,12 @@ impl Kcb {
             //init_vspace: RefCell::new(init_vspace),
             pmanager: RefCell::new(pmanager),
             //apic: RefCell::new(apic),
-            interrupt_stack: None,
-            syscall_stack: None,
+            //interrupt_stack: None,
+            //syscall_stack: None,
         }
     }
 
-    pub fn set_syscall_stack(&mut self, mut stack: Pin<Box<[u8; 64 * 0x1000]>>) {
-        unsafe {
-            self.syscall_stack_top = stack.as_mut_ptr().offset((stack.len()) as isize);
-        }
-        info!("syscall_stack_top {:p}", self.syscall_stack_top);
-        self.syscall_stack = Some(stack);
-
-        // TODO: need static assert and offsetof!
-        debug_assert_eq!(
-            (&self.syscall_stack_top as *const _ as usize) - (self as *const _ as usize),
-            0,
-            "syscall_stack_top should be at offset 0 (for assembly)"
-        );
-    }
+    pub fn set_syscall_stack(&mut self, mut stack: Pin<Box<[u8; 64 * 0x1000]>>) {}
 
     pub fn set_save_area(&mut self, save_area: Pin<Box<kpi::arch::SaveArea>>) {
         self.save_area = Some(save_area);

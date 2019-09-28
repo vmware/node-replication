@@ -10,20 +10,16 @@ keywords = ["numa", "log", "x86", "black-box", "replication"]
 categories = ["algorithms", "concurrency", "data-structures", "no-std", "os"]
 
 [[bench]]
-name = "log"
+name = "nrbench"
 harness = false
 
 [[bench]]
-name = "vspace"
+name = "criterion"
 harness = false
 
-[[bench]]
-name = "stack"
-harness = false
-
-[[bench]]
-name = "synthetic"
-harness = false
+#[[bench]]
+#name = "vspace"
+#harness = false
 
 [dependencies]
 crossbeam-utils = { version = "0.6", default-features = false }
@@ -37,12 +33,9 @@ debug = true
 debug = true
 
 [dev-dependencies]
-chrono = "0.4"
 criterion = { git = "https://github.com/gz/criterion.rs", branch = "tput" }
-#criterion = { path = "../criterion.rs" }
 clap = { version = "2", features = ["yaml"] }
 rand = "0.7"
-plotters = "=0.2.2"
 nix = "0.14.1"
 log = "0.4"
 hwloc = "0.5.0"
@@ -52,12 +45,3 @@ x86 = "0.19"
 custom_error = "1.6.0"
 slabmalloc = "0.3.1"
 core_affinity = { git = "https://github.com/nau/core_affinity_rs", branch = "patch-1" }
-csv = "0.*"
-nom = "^1.2.3"
-rustc-serialize = "0.3"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-
-[features]
-# Run all benchmarks with just a 1 or 2 threads for CI.
-bench_small = []

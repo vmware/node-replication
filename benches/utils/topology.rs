@@ -38,7 +38,7 @@ impl fmt::Debug for ThreadMapping {
 }
 
 /// NUMA Node information.
-#[derive(Debug, Eq, PartialEq, Ord, PartialOrd, Copy, Clone, RustcEncodable)]
+#[derive(Debug, Eq, PartialEq, Ord, PartialOrd, Copy, Clone)]
 pub struct NodeInfo {
     /// Node index
     pub node: Node,
@@ -47,7 +47,7 @@ pub struct NodeInfo {
 }
 
 /// Information about a CPU in the system.
-#[derive(Eq, PartialEq, RustcEncodable, Clone, Copy)]
+#[derive(Eq, PartialEq, Clone, Copy)]
 pub struct CpuInfo {
     pub node: Option<NodeInfo>,
     pub socket: Socket,

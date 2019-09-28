@@ -48,6 +48,7 @@ pub fn baseline_comparison<T: Dispatch + Default>(
     ops: Vec<<T as Dispatch>::Operation>,
     log_size_bytes: usize,
 ) {
+    utils::disable_dvfs();
     let s: T = Default::default();
 
     // First benchmark is just a stack on a single thread:
@@ -164,8 +165,6 @@ where
     }
 
     fn execute(&self, iters: u64) -> Duration {
-        utils::disable_dvfs();
-
         let thread_num = self.threads();
         // Need a barrier to synchronize starting of threads
         let barrier = Arc::new(Barrier::new(thread_num));
@@ -460,6 +459,7 @@ where
     /// possible triplet: (replica strategy, thread mapping, #threads).
     pub fn configure(&self, c: &mut Criterion, name: &str, f: BenchFn<T>) {
         let topology = MachineTopology::new();
+        utils::disable_dvfs();
 
         let mut group = c.benchmark_group(name);
 

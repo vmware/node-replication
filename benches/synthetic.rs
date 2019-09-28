@@ -1,7 +1,7 @@
 // Copyright © 2019 VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! Benchmark of a synthetic node replicated data-structure.
+//! Defines a synthethic data-structure that can be replicated.
 //!
 //! The data-structure is configurable with 4 parameters: cold_reads, cold_writes, hot_reads, hot_writes
 //! which simulates how many cold/random and hot/cached cache-lines are touched for every operation.
@@ -11,18 +11,14 @@
 
 use std::cell::RefCell;
 
-use criterion::{criterion_group, criterion_main, Criterion};
 use crossbeam_utils::CachePadded;
 use rand::{thread_rng, Rng};
 
 use node_replication::Dispatch;
 
-mod mkbench;
-mod utils;
-
 /// Operations we can perform on the AbstractDataStructure.
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
-enum Op {
+pub enum Op {
     /// Read a bunch of local memory.
     ReadOnly(usize, usize, usize),
     /// Write a bunch of local memory.
@@ -35,7 +31,7 @@ enum Op {
 
 impl Op {
     #[inline(always)]
-    fn set_tid(&mut self, tid: usize) {
+    pub fn set_tid(&mut self, tid: usize) {
         match self {
             Op::ReadOnly(ref mut a, _b, _c) => *a = tid,
             Op::WriteOnly(ref mut a, _b, _c) => *a = tid,
@@ -52,7 +48,7 @@ impl Default for Op {
 }
 
 #[derive(Debug, Clone)]
-struct AbstractDataStructure {
+pub struct AbstractDataStructure {
     /// Total cache-lines
     n: usize,
     /// Amount of reads for cold-reads.
@@ -196,7 +192,7 @@ impl Dispatch for AbstractDataStructure {
 ///
 /// Flag determines which types of operation we allow on the data-structure.
 /// The split is approximately equal among the operations we allow.
-fn generate_random_operations(
+pub fn generate_operations(
     nop: usize,
     tid: usize,
     readonly: bool,
@@ -241,45 +237,3 @@ fn generate_random_operations(
 
     ops
 }
-
-/// Compare a synthetic benchmark against a single-threaded implementation.
-fn synthetic_single_threaded(c: &mut Criterion) {
-    // How many operations per iteration
-    const NOP: usize = 1_000;
-    // Size of the log.
-    const LOG_SIZE_BYTES: usize = 4 * 1024 * 1024 * 1024;
-
-    let ops = generate_random_operations(NOP, 0, false, false, true);
-    mkbench::baseline_comparison::<AbstractDataStructure>(c, "synthetic", ops, LOG_SIZE_BYTES);
-}
-
-fn synthetic_scale_out(c: &mut Criterion) {
-    env_logger::init();
-
-    // How many operations per iteration
-    const NOP: usize = 10_000;
-
-    let ops = generate_random_operations(NOP, 0, false, false, true);
-
-    mkbench::ScaleBenchBuilder::<AbstractDataStructure>::new(ops)
-        .machine_defaults()
-        .configure(
-            c,
-            "synthetic-scaleout",
-            |cid, rid, _log, replica, ops, _batch_size| {
-                for op in ops {
-                    let mut op = *op;
-                    op.set_tid(cid as usize);
-                    replica.execute(op, rid);
-                }
-            },
-        );
-}
-
-criterion_group!(
-    name = benches;
-    config = Criterion::default().sample_size(10);
-    targets = synthetic_single_threaded, synthetic_scale_out
-);
-
-criterion_main!(benches);
