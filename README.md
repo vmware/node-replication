@@ -40,7 +40,7 @@ You can run the tests by executing: `cargo test --lib`
 
 ## Examples
 
-### Stack [[src](examples/stack)]
+### Stack [[src](examples/stack.rs)]
 
 A working example of a replicated stack.
 To run the example execute: `cargo run --example stack`
@@ -69,7 +69,7 @@ within a replica).
 To run these benchmarks execute:
 `RUST_TEST_THREADS=1 cargo bench --bench criterion -- log`
 
-### Stack cost [[stack](benches/stack.rs)] [[runner](benches/criterion.rs)]
+### Stack cost [[data-structure](benches/stack.rs)] [[runner](benches/criterion.rs)]
 
 One benchmark that evaluate the COST (overhead of added synchronization) by
 comparing a node-replicated stack against a single-threaded stack (without a
