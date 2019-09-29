@@ -21,7 +21,7 @@ The following system libraries are required if you want to run the
 examples/benchmarks:
 
 ```
-$ apt-get install libhwloc-dev libfreetype6 libfreetype6-dev gnuplot numactl
+$ apt-get install libhwloc-dev libfreetype6 libfreetype6-dev gnuplot numactl libfuse-dev
 ```
 
 Running the tests require the use of a nightly rust compiler:

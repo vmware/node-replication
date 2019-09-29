@@ -6,7 +6,7 @@ stages:
 build:
   stage: build
   script:
-    - sudo apt install libhwloc-dev libfreetype6 libfreetype6-dev gnuplot --yes
+    - sudo apt install libhwloc-dev libfreetype6 libfreetype6-dev gnuplot libfuse-dev --yes
     - cargo build
 test:
   stage: test
