@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! A minimal example to implement a replicated stack (single-thread).
-use std::sync::Arc;
 use std::cell::RefCell;
+use std::sync::Arc;
 
 use node_replication::log::Log;
 use node_replication::replica::Replica;
@@ -87,7 +87,7 @@ fn main() {
         match i % 2 {
             0 => replica.execute(Op::Push(i as u32), ridx),
             1 => replica.execute(Op::Pop, ridx),
-            _ => unreachable!()
+            _ => unreachable!(),
         };
     }
 }

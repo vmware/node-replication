@@ -4,7 +4,6 @@
 //! Replays a system-call trace against a vspace implementation to
 //! evaluate performance of a replicated x86-64 address space.
 #![allow(unused)]
-
 #![feature(alloc_layout_extra, thread_local)]
 
 #[macro_use]
@@ -17,9 +16,9 @@ use std::io::prelude::*;
 
 use node_replication::Dispatch;
 
-mod utils;
 mod mkbench;
 mod os_workload;
+mod utils;
 
 use criterion::{criterion_group, criterion_main, Criterion};
 use os_workload::kpi::{ProcessOperation, SystemCall, VSpaceOperation};
