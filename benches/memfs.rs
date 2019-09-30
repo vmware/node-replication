@@ -8,6 +8,9 @@
 //! This is inspired from https://github.com/bparli/bpfs and was modified to
 //! work with node-replication for benchmarking a file-system use-case.
 
+#![allow(unused_imports, unused)]
+#![feature(result_map_or_else)]
+
 mod mkbench;
 mod utils;
 
@@ -36,17 +39,7 @@ pub enum Operation {
     },
     SetAttr {
         ino: u64,
-        mode: Option<u32>,
-        uid: Option<u32>,
-        gid: Option<u32>,
-        size: Option<u64>,
-        atime: Option<Timespec>,
-        mtime: Option<Timespec>,
-        fh: Option<u64>,
-        crtime: Option<Timespec>,
-        chgtime: Option<Timespec>,
-        bkuptime: Option<Timespec>,
-        flags: Option<u32>,
+        new_attrs: SetAttrRequest,
     },
     ReadDir {
         ino: u64,
@@ -110,9 +103,9 @@ impl Default for Operation {
 }
 
 /// Potential returns from the file-system
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone)]
 pub enum Response {
-    Attr,
+    Attr(FileAttr),
     Directory,
     Entry,
     Empty,
@@ -120,12 +113,35 @@ pub enum Response {
     Create,
     Write,
     Data,
+    // XXX: this is a bit of a mess atm. once we return a Result<> as part of the log
+    // drop this and the associated glue-code
+    Err(Error),
 }
 
 impl Default for Response {
     fn default() -> Response {
         Response::Empty
     }
+}
+
+#[derive(Debug, Eq, PartialEq, Clone, Copy)]
+pub enum Error {
+    NoEntry,
+}
+
+#[derive(Debug, Eq, PartialEq, Copy, Clone)]
+pub struct SetAttrRequest {
+    pub mode: Option<u32>,
+    pub uid: Option<u32>,
+    pub gid: Option<u32>,
+    pub size: Option<u64>,
+    pub atime: Option<Timespec>,
+    pub mtime: Option<Timespec>,
+    pub fh: Option<u64>,
+    pub crtime: Option<Timespec>,
+    pub chgtime: Option<Timespec>,
+    pub bkuptime: Option<Timespec>,
+    pub flags: Option<u32>,
 }
 
 #[derive(Clone, Debug)]
@@ -218,9 +234,48 @@ impl MemFilesystem {
         }
     }
 
+    /// Generates inode numbers.
     fn get_next_ino(&mut self) -> u64 {
         self.next_inode += 1;
         self.next_inode
+    }
+
+    /// Updates the attributes on an inode with values in `new_attrs`.
+    fn set_attribute(
+        &mut self,
+        ino: u64,
+        new_attrs: SetAttrRequest,
+    ) -> Result<Option<&FileAttr>, Error> {
+        let mut file_attrs = self.attrs.get_mut(&ino).ok_or(Error::NoEntry)?;
+
+        new_attrs.uid.map(|new_uid| file_attrs.uid = new_uid);
+        new_attrs.gid.map(|new_gid| file_attrs.gid = new_gid);
+        new_attrs
+            .atime
+            .map(|new_atime| file_attrs.atime = new_atime);
+        new_attrs
+            .mtime
+            .map(|new_mtime| file_attrs.mtime = new_mtime);
+        new_attrs
+            .crtime
+            .map(|new_crtime| file_attrs.crtime = new_crtime);
+
+        // Do we need to update the size of file?
+        if new_attrs.size.is_some() {
+            let mut memfile = self.files.get_mut(&ino);
+
+            match (new_attrs.size, memfile) {
+                (Some(new_size), Some(file)) => {
+                    file.truncate(new_size);
+                    file_attrs.size = new_size;
+                    Ok(Some(file_attrs))
+                }
+                (Some(new_size), None) => Err(Error::NoEntry), // Can't update size on a non-file inode
+                _ => Ok(None),
+            }
+        } else {
+            Ok(None)
+        }
     }
 }
 
@@ -229,7 +284,59 @@ impl Dispatch for MemFilesystem {
     type Response = Response;
 
     /// Implements how we execute operation from the log against our local stack
-    fn dispatch(&self, op: Self::Operation) -> Self::Response {
+    fn dispatch(&mut self, op: Self::Operation) -> Self::Response {
+        match op {
+            Operation::GetAttr { ino } => self
+                .attrs
+                .get(&ino)
+                .map_or(Response::Err(Error::NoEntry), |attr| Response::Attr(*attr)),
+            Operation::SetAttr { ino, new_attrs } => {
+                self.set_attribute(ino, new_attrs).map_or_else(
+                    |e| Response::Err(e),
+                    |r| match r {
+                        Some(fattrs) => Response::Attr(*fattrs),
+                        None => Response::Empty,
+                    },
+                )
+            }
+            Operation::ReadDir { ino, fh, offset } => unreachable!("got op"),
+            Operation::Lookup { parent, name } => unreachable!("got op"),
+            Operation::RmDir { parent, name } => unreachable!("got op"),
+            Operation::MkDir {
+                parent,
+                name,
+                _mode,
+            } => unreachable!("got op"),
+            Operation::Open { ino, flags } => unreachable!("got op"),
+            Operation::Unlink { parent, name } => unreachable!("got op"),
+            Operation::Create {
+                parent,
+                name,
+                _mode,
+                _flags,
+            } => unreachable!("got op"),
+            Operation::Write {
+                ino,
+                fh,
+                offset,
+                data,
+                flags,
+            } => unreachable!("got op"),
+            Operation::Read {
+                ino,
+                fh,
+                offset,
+                size,
+            } => unreachable!("got op"),
+            Operation::Rename {
+                parent,
+                name,
+                newparent,
+                newname,
+            } => unreachable!("got op"),
+            Operation::Invalid => unreachable!("Got invalid OP"),
+        };
+
         Response::Empty
     }
 }
@@ -258,72 +365,49 @@ impl Filesystem for MemFilesystem {
         &mut self,
         _req: &Request,
         ino: u64,
-        _mode: Option<u32>,
+        mode: Option<u32>,
         uid: Option<u32>,
         gid: Option<u32>,
         size: Option<u64>,
         atime: Option<Timespec>,
         mtime: Option<Timespec>,
-        _fh: Option<u64>,
+        fh: Option<u64>,
         crtime: Option<Timespec>,
-        _chgtime: Option<Timespec>,
-        _bkuptime: Option<Timespec>,
-        _flags: Option<u32>,
+        chgtime: Option<Timespec>,
+        bkuptime: Option<Timespec>,
+        flags: Option<u32>,
         reply: ReplyAttr,
     ) {
-        debug!("setattr(ino={})", ino);
-        match self.attrs.get_mut(&ino) {
-            Some(fp) => {
-                match uid {
-                    Some(new_uid) => {
-                        debug!("setattr(ino={}, uid={}, new_uid={})", ino, fp.uid, new_uid);
-                        fp.uid = new_uid;
-                    }
-                    None => {}
-                }
-                match gid {
-                    Some(new_gid) => {
-                        debug!("setattr(ino={}, gid={}, new_gid={})", ino, fp.gid, new_gid);
-                        fp.gid = new_gid;
-                    }
-                    None => {}
-                }
-                match atime {
-                    Some(new_atime) => fp.atime = new_atime,
-                    None => {}
-                }
-                match mtime {
-                    Some(new_mtime) => fp.mtime = new_mtime,
-                    None => {}
-                }
-                match crtime {
-                    Some(new_crtime) => fp.crtime = new_crtime,
-                    None => {}
-                }
-                match size {
-                    Some(new_size) => {
-                        if let Some(memfile) = self.files.get_mut(&ino) {
-                            debug!(
-                                "setattr(ino={}, size={}, new_size={})",
-                                ino, fp.size, new_size
-                            );
-                            memfile.truncate(new_size);
-                            fp.size = new_size;
-                        } else {
-                            error!("setattr: inode {} has no memfile", ino);
-                            reply.error(ENOENT);
-                            return;
-                        }
-                    }
-                    None => {}
-                }
-                reply.attr(&TTL, fp);
+        trace!("setattr(ino={})", ino);
+        let new_attrs = SetAttrRequest {
+            mode,
+            uid,
+            gid,
+            size,
+            atime,
+            mtime,
+            fh,
+            crtime,
+            chgtime,
+            bkuptime,
+            flags,
+        };
+
+        let r = self.set_attribute(ino, new_attrs);
+        match r {
+            Ok(Some(fattrs)) => {
+                reply.attr(&TTL, fattrs);
             }
-            None => {
-                error!("setattr: inode {} is not in filesystem's attributes", ino);
+            Ok(None) => { /* Do nothing */ }
+            Err(Error::NoEntry) => {
                 reply.error(ENOENT);
             }
-        }
+            _ => {
+                // TODO: Ideally we should have an automatic
+                // conversion of Error to `fuse` errors.
+                unreachable!("Got new error from setattr?")
+            }
+        };
     }
 
     fn readdir(

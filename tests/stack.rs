@@ -113,16 +113,8 @@ fn sequential_test() {
 
     unsafe {
         let s = r.data();
-        assert_eq!(
-            correct_popped,
-            s.popped,
-            "Pop operation error detected"
-        );
-        assert_eq!(
-            correct_stack,
-            s.storage,
-            "Push operation error detected"
-        );
+        assert_eq!(correct_popped, s.popped, "Pop operation error detected");
+        assert_eq!(correct_stack, s.storage, "Push operation error detected");
     }
 }
 
