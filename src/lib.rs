@@ -14,12 +14,14 @@ mod context;
 pub mod log;
 pub mod replica;
 
+use core::fmt::Debug;
+
 /// Trait that a data structure must implement to be usable with this library. When this
 /// library executes an operation against the data structure, it invokes the `dispatch()`
 /// method with the operation as an argument.
 pub trait Dispatch {
-    type Operation: Sized + Copy + Default + PartialEq + core::fmt::Debug;
+    type Operation: Sized + Copy + Default + PartialEq + Debug;
     type Response: Sized + Copy + Default;
 
-    fn dispatch(&self, op: Self::Operation) -> Self::Response;
+    fn dispatch(&mut self, op: Self::Operation) -> Self::Response;
 }

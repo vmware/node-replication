@@ -69,7 +69,7 @@ where
 
     /// The underlying replicated data structure. Shared between threads registered
     /// with this replica. Each replica maintains its own.
-    data: D,
+    data: RefCell<D>,
 
     /// Array of locks, one per context. These locks are required to synchronize between
     /// a thread issuing operations to it's local batch and the flat combiner reading
@@ -118,7 +118,7 @@ where
                     ),
             )),
             slog: log.clone(),
-            data: D::default(),
+            data: RefCell::new(D::default()),
             locks: arr![Default::default(); 128],
         }
     }
@@ -207,14 +207,15 @@ where
     /// # TODO
     /// Most likely not very safe (and currently only used for testing purposes).
     pub unsafe fn data(self) -> D {
+        let mut data = self.data.into_inner();
         // Execute any operations on the shared log against this replica.
         let f = |o: <D as Dispatch>::Operation| {
-            self.data.dispatch(o);
+            data.dispatch(o);
         };
         let t = self.tail.get();
         self.tail.set(t + self.slog.exec(t, f));
 
-        self.data
+        data
     }
 
     /// Enqueues an operation inside a thread local context.
@@ -279,7 +280,8 @@ where
             b.clear();
 
             // Execute any operations on the shared log against this replica.
-            let f = |o: <D as Dispatch>::Operation| r.push(self.data.dispatch(o));
+            let mut data = self.data.borrow_mut();
+            let f = |o: <D as Dispatch>::Operation| r.push(data.dispatch(o));
 
             let t = self.tail.get();
             self.tail.set(t + self.slog.exec(t, f));

@@ -49,7 +49,7 @@ pub fn baseline_comparison<T: Dispatch + Default>(
     log_size_bytes: usize,
 ) {
     utils::disable_dvfs();
-    let s: T = Default::default();
+    let mut s: T = Default::default();
 
     // First benchmark is just a stack on a single thread:
     let mut group = c.benchmark_group(name);

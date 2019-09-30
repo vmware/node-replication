@@ -29,23 +29,23 @@ impl Default for Op {
 /// We just use a vector.
 #[derive(Debug, Clone)]
 pub struct Stack {
-    storage: RefCell<Vec<u32>>,
+    storage: Vec<u32>,
 }
 
 impl Stack {
-    pub fn push(&self, data: u32) {
-        self.storage.borrow_mut().push(data);
+    pub fn push(&mut self, data: u32) {
+        self.storage.push(data);
     }
 
-    pub fn pop(&self) -> Option<u32> {
-        self.storage.borrow_mut().pop()
+    pub fn pop(&mut self) -> Option<u32> {
+        self.storage.pop()
     }
 }
 
 impl Default for Stack {
     /// Return a dummy stack with some initial (50k) elements.
     fn default() -> Stack {
-        let s = Stack {
+        let mut s = Stack {
             storage: Default::default(),
         };
 
@@ -62,7 +62,7 @@ impl Dispatch for Stack {
     type Response = Option<u32>;
 
     /// Implements how we execute operation from the log against our local stack
-    fn dispatch(&self, op: Self::Operation) -> Self::Response {
+    fn dispatch(&mut self, op: Self::Operation) -> Self::Response {
         match op {
             Op::Push(v) => {
                 self.push(v);

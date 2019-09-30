@@ -50,7 +50,7 @@ impl Dispatch for BespinDispatcher {
     type Operation = Opcode;
     type Response = (u64, u64);
 
-    fn dispatch(&self, op: Self::Operation) -> Self::Response {
+    fn dispatch(&mut self, op: Self::Operation) -> Self::Response {
         match op {
             Opcode::Process(op, a1, a2, a3, a4) => {
                 return os_workload::syscall_handle(
@@ -88,7 +88,7 @@ impl Dispatch for PosixDispatcher {
     type Operation = Opcode;
     type Response = ();
 
-    fn dispatch(&self, op: Self::Operation) {
+    fn dispatch(&mut self, op: Self::Operation) {
         use nix::sys::mman::{MapFlags, ProtFlags};
 
         match op {

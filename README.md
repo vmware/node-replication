@@ -36,7 +36,7 @@ There are a series of unit tests as part of the implementation and a few
 [integration tests](./tests) that verify the correctness of the implementation
 using a stack.
 
-You can run the tests by executing: `cargo test --lib`
+You can run the tests by executing: `cargo test`
 
 ## Examples
 
@@ -104,6 +104,14 @@ replication (using an x86-64 4-level address space layout).
 
 To run these benchmarks execute:
 `RUST_TEST_THREADS=1 cargo bench --bench vspace`
+
+### MemFs [[src](benches/vspace.rs)]
+
+A benchmark to evaluate the performance of the NR library for file-system like
+operations, by using a simple in-memory file-system.
+
+To run these benchmarks execute:
+`RUST_TEST_THREADS=1 cargo bench --bench memfs`
 
 ### NRbench [[src](benches/nrbench.rs)]
 

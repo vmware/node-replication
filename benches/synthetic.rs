@@ -60,7 +60,7 @@ pub struct AbstractDataStructure {
     /// Amount of hot writes to cache-lines
     hot_writes: usize,
     /// Backing memory
-    storage: RefCell<Vec<CachePadded<usize>>>,
+    storage: Vec<CachePadded<usize>>,
 }
 
 impl Default for AbstractDataStructure {
@@ -85,12 +85,9 @@ impl AbstractDataStructure {
         const MAX_BUFFER_SIZE: usize = 400_000;
         debug_assert!(n < MAX_BUFFER_SIZE);
 
-        let storage = RefCell::new(Vec::with_capacity(n));
-        {
-            let mut storage = storage.borrow_mut();
-            for i in 0..n {
-                storage.push(CachePadded::from(i));
-            }
+        let mut storage = Vec::with_capacity(n);
+        for i in 0..n {
+            storage.push(CachePadded::from(i));
         }
 
         AbstractDataStructure {
@@ -104,7 +101,6 @@ impl AbstractDataStructure {
     }
 
     pub fn read(&self, tid: usize, rnd1: usize, rnd2: usize) -> usize {
-        let storage = self.storage.borrow();
         let mut sum = 0;
 
         // Hot cache-lines (reads sequential)
@@ -112,7 +108,7 @@ impl AbstractDataStructure {
         let end = begin + self.hot_writes;
         for i in begin..end {
             let index = i % self.hot_reads;
-            sum += *storage[index];
+            sum += *self.storage[index];
         }
 
         // Cold cache-lines (random stride reads)
@@ -120,21 +116,19 @@ impl AbstractDataStructure {
         for _i in 0..self.cold_reads {
             let index = begin % (self.n - self.hot_reads) + self.hot_reads;
             begin += rnd2;
-            sum += *storage[index];
+            sum += *self.storage[index];
         }
 
         sum
     }
 
-    pub fn write(&self, tid: usize, rnd1: usize, rnd2: usize) -> usize {
-        let mut storage = self.storage.borrow_mut();
-
+    pub fn write(&mut self, tid: usize, rnd1: usize, rnd2: usize) -> usize {
         // Hot cache-lines (updates sequential)
         let begin = rnd2;
         let end = begin + self.hot_writes;
         for i in begin..end {
             let index = i % self.hot_reads;
-            storage[index] = CachePadded::new(tid);
+            self.storage[index] = CachePadded::new(tid);
         }
 
         // Cold cache-lines (random stride updates)
@@ -142,21 +136,19 @@ impl AbstractDataStructure {
         for _i in 0..self.cold_writes {
             let index = begin % (self.n - self.hot_reads) + self.hot_reads;
             begin += rnd2;
-            storage[index] = CachePadded::new(tid);
+            self.storage[index] = CachePadded::new(tid);
         }
 
         0
     }
 
-    pub fn read_write(&self, tid: usize, rnd1: usize, rnd2: usize) -> usize {
-        let mut storage = self.storage.borrow_mut();
-
+    pub fn read_write(&mut self, tid: usize, rnd1: usize, rnd2: usize) -> usize {
         // Hot cache-lines (sequential updates)
         let begin = rnd2;
         let end = begin + self.hot_writes;
         for i in begin..end {
             let index = i % self.hot_reads;
-            storage[index] = CachePadded::new(*storage[index] + 1);
+            self.storage[index] = CachePadded::new(*self.storage[index] + 1);
         }
 
         // Cold cache-lines (random stride updates)
@@ -165,8 +157,8 @@ impl AbstractDataStructure {
         for _i in 0..self.cold_writes {
             let index = begin % (self.n - self.hot_reads) + self.hot_reads;
             begin += rnd2;
-            sum += *storage[index];
-            storage[index] = CachePadded::new(*storage[index] + 1);
+            sum += *self.storage[index];
+            self.storage[index] = CachePadded::new(*self.storage[index] + 1);
         }
 
         sum
@@ -178,7 +170,7 @@ impl Dispatch for AbstractDataStructure {
     type Response = usize;
 
     /// Implements how we execute operation from the log against abstract DS
-    fn dispatch(&self, op: Self::Operation) -> Self::Response {
+    fn dispatch(&mut self, op: Self::Operation) -> Self::Response {
         match op {
             Op::ReadOnly(a, b, c) => return self.read(a, b, c),
             Op::WriteOnly(a, b, c) => return self.write(a, b, c),

@@ -31,18 +31,18 @@ impl Default for Op {
 
 #[derive(Eq, PartialEq)]
 struct Stack {
-    storage: RefCell<Vec<u32>>,
-    popped: RefCell<Vec<Option<u32>>>,
+    storage: Vec<u32>,
+    popped: Vec<Option<u32>>,
 }
 
 impl Stack {
-    pub fn push(&self, data: u32) {
-        self.storage.borrow_mut().push(data);
+    pub fn push(&mut self, data: u32) {
+        self.storage.push(data);
     }
 
-    pub fn pop(&self) {
-        let r = self.storage.borrow_mut().pop();
-        self.popped.borrow_mut().push(r);
+    pub fn pop(&mut self) {
+        let r = self.storage.pop();
+        self.popped.push(r);
     }
 }
 
@@ -61,7 +61,7 @@ impl Dispatch for Stack {
     type Operation = Op;
     type Response = Option<u32>;
 
-    fn dispatch(&self, op: Self::Operation) -> Self::Response {
+    fn dispatch(&mut self, op: Self::Operation) -> Self::Response {
         match op {
             Op::Push(v) => self.push(v),
             Op::Pop => self.pop(),
@@ -115,12 +115,12 @@ fn sequential_test() {
         let s = r.data();
         assert_eq!(
             correct_popped,
-            *s.popped.borrow_mut(),
+            s.popped,
             "Pop operation error detected"
         );
         assert_eq!(
             correct_stack,
-            *s.storage.borrow_mut(),
+            s.storage,
             "Push operation error detected"
         );
     }
@@ -158,7 +158,7 @@ impl Dispatch for VerifyStack {
     type Operation = Op;
     type Response = Option<u32>;
 
-    fn dispatch(&self, op: Self::Operation) -> Self::Response {
+    fn dispatch(&mut self, op: Self::Operation) -> Self::Response {
         match op {
             Op::Push(v) => {
                 let _tid = (v & 0xffff) as u16;

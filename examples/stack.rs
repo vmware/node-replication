@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! A minimal example to implement a replicated stack (single-thread).
-use std::cell::RefCell;
 use std::sync::Arc;
 
 use node_replication::log::Log;
@@ -26,18 +25,18 @@ impl Default for Op {
 
 /// The actual stack, it's represented by a vector underneath.
 struct Stack {
-    storage: RefCell<Vec<u32>>,
+    storage: Vec<u32>,
 }
 
 impl Stack {
     /// Push adds an element from the underlying storage.
-    pub fn push(&self, data: u32) {
-        self.storage.borrow_mut().push(data);
+    pub fn push(&mut self, data: u32) {
+        self.storage.push(data);
     }
 
     /// Pop removes an element from the underlying storage.
-    pub fn pop(&self) -> Option<u32> {
-        self.storage.borrow_mut().pop()
+    pub fn pop(&mut self) -> Option<u32> {
+        self.storage.pop()
     }
 }
 
@@ -46,7 +45,7 @@ impl Default for Stack {
     fn default() -> Stack {
         const DEFAULT_STACK_SIZE: u32 = 1_000u32;
 
-        let s = Stack {
+        let mut s = Stack {
             storage: Default::default(),
         };
 
@@ -64,7 +63,7 @@ impl Dispatch for Stack {
 
     /// The dispatch traint defines how operations coming from the log
     /// are execute against our local stack within a replica.
-    fn dispatch(&self, op: Self::Operation) -> Self::Response {
+    fn dispatch(&mut self, op: Self::Operation) -> Self::Response {
         match op {
             Op::Push(v) => {
                 self.push(v);
@@ -79,7 +78,8 @@ impl Dispatch for Stack {
 /// We initialize a log, a replica for a stack, register with the reploca and
 /// then execute operations on the replica.
 fn main() {
-    let log = Arc::new(Log::<<Stack as Dispatch>::Operation>::new(1 * 1024 * 1024));
+    const ONE_MIB: usize = 1 * 1024 * 1024;
+    let log = Arc::new(Log::<<Stack as Dispatch>::Operation>::new(ONE_MIB));
     let replica = Replica::<Stack>::new(&log);
     let ridx = replica.register().expect("Couldn't register with replica");
 

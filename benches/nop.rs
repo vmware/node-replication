@@ -11,7 +11,7 @@ impl Dispatch for Nop {
     type Operation = usize;
     type Response = ();
 
-    fn dispatch(&self, _op: Self::Operation) -> Self::Response {
+    fn dispatch(&mut self, _op: Self::Operation) -> Self::Response {
         unreachable!()
     }
 }
