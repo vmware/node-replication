@@ -105,7 +105,7 @@ replication (using an x86-64 4-level address space layout).
 To run these benchmarks execute:
 `RUST_TEST_THREADS=1 cargo bench --bench vspace`
 
-### MemFs [[src](benches/vspace.rs)]
+### MemFS [[src](benches/memfs.rs)]
 
 A benchmark to evaluate the performance of the NR library for file-system like
 operations, by using a simple in-memory file-system.

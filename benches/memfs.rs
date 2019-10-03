@@ -31,6 +31,8 @@ use criterion::{criterion_group, criterion_main, Criterion};
 
 const TTL: Timespec = Timespec { sec: 1, nsec: 0 };
 
+type InodeId = u64;
+
 /// All FS operations we can perform through the log.
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
 pub enum Operation {
@@ -277,6 +279,28 @@ impl MemFilesystem {
             Ok(None)
         }
     }
+
+    fn read_directory(
+        &mut self,
+        ino: InodeId,
+        _fh: u64,
+    ) -> Result<Vec<(InodeId, FileType, String)>, Error> {
+        trace!("read_directory(ino={}, fh={})", ino, _fh);
+        let mut entries: Vec<(u64, FileType, String)> = Vec::with_capacity(32);
+        entries.push((ino, FileType::Directory, String::from(".")));
+
+        self.inodes.get(&ino).map_or(Err(Error::NoEntry), |inode| {
+            entries.push((inode.parent, FileType::Directory, String::from("..")));
+
+            for (child, child_ino) in inode.children.iter() {
+                let child_attrs = &self.attrs.get(child_ino).unwrap();
+                trace!("\t inode={}, child={}", child_ino, child);
+                entries.push((child_attrs.ino, child_attrs.kind, String::from(child)));
+            }
+
+            Ok(entries)
+        })
+    }
 }
 
 impl Dispatch for MemFilesystem {
@@ -299,7 +323,24 @@ impl Dispatch for MemFilesystem {
                     },
                 )
             }
-            Operation::ReadDir { ino, fh, offset } => unreachable!("got op"),
+            Operation::ReadDir { ino, fh, offset } => {
+                debug!("ReadDir(ino={}, fh={}, offset={})", ino, fh, offset);
+                match self.read_directory(ino, fh) {
+                    Ok(entries) => {
+                        // Offset of 0 means no offset.
+                        // Non-zero offset means the passed offset has already been seen,
+                        // and we should start after it.
+                        let to_skip = if offset == 0 { 0 } else { offset + 1 } as usize;
+                        let entries: Vec<(InodeId, FileType, String)> =
+                            entries.into_iter().skip(to_skip).collect();
+                        Response::Directory
+                    }
+                    Err(e) => {
+                        error!("readdir: inode {} is not in filesystem's inodes", ino);
+                        Response::Err(e)
+                    }
+                }
+            }
             Operation::Lookup { parent, name } => unreachable!("got op"),
             Operation::RmDir { parent, name } => unreachable!("got op"),
             Operation::MkDir {
@@ -419,30 +460,22 @@ impl Filesystem for MemFilesystem {
         mut reply: ReplyDirectory,
     ) {
         debug!("readdir(ino={}, fh={}, offset={})", ino, fh, offset);
-        let mut entries = vec![];
-        entries.push((ino, FileType::Directory, "."));
-        if let Some(inode) = self.inodes.get(&ino) {
-            entries.push((inode.parent, FileType::Directory, ".."));
-            for (child, child_ino) in &inode.children {
-                let child_attrs = &self.attrs.get(child_ino).unwrap();
-                debug!("\t inode={}, child={}", child_ino, child);
-                entries.push((child_attrs.ino, child_attrs.kind, &child));
-            }
-
-            if entries.len() > 0 {
+        match self.read_directory(ino, fh) {
+            Ok(entries) => {
                 // Offset of 0 means no offset.
-                // Non-zero offset means the passed offset has already been seen, and we should start after
-                // it.
-                let to_skip = if offset == 0 { offset } else { offset + 1 } as usize;
+                // Non-zero offset means the passed offset has already been seen,
+                // and we should start after it.
+                let to_skip = if offset == 0 { 0 } else { offset + 1 } as usize;
                 for (i, entry) in entries.into_iter().enumerate().skip(to_skip) {
                     reply.add(entry.0, i as i64, entry.1, entry.2);
                 }
+                reply.ok();
             }
-            reply.ok();
-        } else {
-            error!("readdir: inode {} is not in filesystem's inodes", ino);
-            reply.error(ENOENT)
-        }
+            Err(e) => {
+                error!("readdir: inode {} is not in filesystem's inodes", ino);
+                reply.error(ENOENT)
+            }
+        };
     }
 
     fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
