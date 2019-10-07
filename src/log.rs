@@ -9,7 +9,7 @@ use core::fmt;
 use core::mem::{align_of, size_of};
 use core::ops::{Drop, FnMut};
 use core::slice::from_raw_parts_mut;
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicUsize, Ordering, compiler_fence};
 
 use crossbeam_utils::CachePadded;
 
@@ -21,22 +21,19 @@ const DEFAULT_LOG_BYTES: usize = 1024 * 1024 * 1024;
 /// The maximum number of replicas that can be used against the log.
 const MAX_REPLICAS: usize = 32;
 
-/// Required for garbage collection. When this fraction of the log is full of valid
-/// operations, then one round of garbage collection will be performed.
-const GC_FRACTION: f64 = 0.8;
+/// Constant required for garbage collection. When the tail and the head are
+/// these many entries apart on the circular buffer, garbage collection will
+/// be performed by one of the replicas registered with the log.
+const GC_FROM_HEAD: usize = 1024;
 
 /// An entry that sits on the log. Each entry consists of two fields: The operation to
 /// be performed when a thread reaches this entry on the log, and a flag indicating whether
 /// this entry is valid.
 ///
-/// `T` is the type on the operation. It is required that this type be sized, copyable,
-/// and default constructable.
+/// `T` is the type on the operation - typically an enum class containing opcodes as well as
+/// arguments. It is required that this type be sized, copyable, and default constructable.
 ///
-/// `alivef` indicates whether this entry is valid (true) or has been garbage
-/// collected and should be ignored (false).
-///
-/// Entries are cache-line aligned to 64 bytes.
-#[repr(align(64))]
+/// `alivef` indicates whether this entry represents a valid operation when on the log.
 #[derive(Clone, Copy, Default)]
 struct Entry<T>
 where
@@ -52,10 +49,12 @@ where
     T: Sized + Copy + Default,
 {
     /// Given an operation (`op`), constructs and returns an entry that can go onto the shared log.
+    /// `alivef` is initialized to false. The caller will have to reset it appropriately based on
+    /// the mechanism used for garbage collection.
     fn new(op: T) -> Entry<T> {
         Entry {
             operation: op,
-            alivef: true,
+            alivef: false,
         }
     }
 }
@@ -66,10 +65,11 @@ where
 /// providing a list of operations to be performed.
 ///
 /// Operations already on the log can be executed by calling the `exec()` method
-/// and providing an offset and a closure. All operations from the offset will be
-/// executed by invoking the supplied closure over each one of them.
+/// and providing a replica-id and a closure. Operations added to the log since the
+/// replica last called `exec()` will be executed by invoking the supplied closure over
+/// each one of them.
 ///
-/// Accepts one type parameters. `T` defines the type of operations and their arguments
+/// Accepts one type parameter; `T` defines the type of operations and their arguments
 /// that will go on the log and would typically be an enum class.
 ///
 /// This struct is cache aligned to 64 bytes.
@@ -106,6 +106,16 @@ where
     /// Identifier that will be allocated to the next replica that registers with
     /// this Log. Required to index into ltails above.
     next: CachePadded<AtomicUsize>,
+
+    /// Required for garbage collection. This mask indicates what `alivef` within a
+    /// log entry signifies. If `mask == false`, then `alivef == false` implies that
+    /// the entry is alive and holds a valid operation to be executed.
+    mask: Cell<bool>,
+
+    /// Array consisting of local alive masks for each registered replica. Required
+    /// because replicas make independent progress over the log, so we need to
+    /// track wrap-arounds for each of their local tails.
+    lmasks: [CachePadded<Cell<bool>>; MAX_REPLICAS],
 }
 
 impl<'a, T> fmt::Debug for Log<'a, T>
@@ -121,11 +131,11 @@ where
     }
 }
 
-/// The Log is Sync. The *mut u8 (`rawp`) is never dereferenced.
+/// The Log is Send. The *mut u8 (`rawp`) is never dereferenced.
 unsafe impl<'a, T> Send for Log<'a, T> where T: Sized + Copy + Default {}
 
 /// The Log is Sync. We know this because: `head` and `tail` are atomic variables, `append()`
-/// reserves entries using a CAS, and exec() does not mutate state on the log.
+/// reserves entries using a CAS, and exec() does not concurrently mutate entries on the log.
 unsafe impl<'a, T> Sync for Log<'a, T> where T: Sized + Copy + Default {}
 
 impl<'a, T> Log<'a, T>
@@ -151,10 +161,13 @@ where
         let num = bytes / Log::<T>::entry_size();
         let raw = unsafe { from_raw_parts_mut(mem as *mut Cell<Entry<T>>, num) };
 
-        // Initialize all log entries to empty/dead by calling the default constructor.
+        // Initialize all log entries by calling the default constructor.
         for e in &mut raw[..] {
             e.set(Entry::default());
         }
+
+        let fls: [CachePadded<Cell<bool>>; MAX_REPLICAS] = Default::default();
+        for idx in 0..MAX_REPLICAS { fls[idx].set(true) };
 
         Log {
             rawp: mem,
@@ -165,6 +178,8 @@ where
             tail: CachePadded::new(AtomicUsize::new(0usize)),
             ltails: Default::default(),
             next: CachePadded::new(AtomicUsize::new(1usize)),
+            mask: Cell::new(true),
+            lmasks: fls,
         }
     }
 
@@ -174,93 +189,97 @@ where
     }
 
     /// Registers a replica against the log. Returns an identifier that the replica
-    /// can use while executing operations on the log.
+    /// can to execute operations on the log.
     pub fn register(&self) -> Option<usize> {
-        let n = self.next.load(Ordering::SeqCst);
+        // Loop until we either run out of identifiers or we manage to increment `next`.
+        loop {
+            let n = self.next.load(Ordering::SeqCst);
 
-        // Check if we've exceeded the maximum number of replicas the log can support.
-        if n >= MAX_REPLICAS {
-            return None;
+            // Check if we've exceeded the maximum number of replicas the log can support.
+            if n >= MAX_REPLICAS { return None };
+
+            if self.next.compare_and_swap(n, n + 1, Ordering::SeqCst) != n { continue };
+
+            return Some(n);
         }
-
-        Some(self.next.fetch_add(1, Ordering::SeqCst))
     }
 
-    /// Adds a batch of operations to the shared log. Returns true if the operations
-    /// were added. Returns false if they couldn't because there was no space.
-    pub fn append(&self, ops: &[T]) -> Option<usize> {
+    /// Adds a batch of operations to the shared log. If there isn't enough space
+    /// to perform the append, this method busy waits until the head is advanced.
+    pub fn append(&self, ops: &[T]) {
         let n = ops.len();
 
         // Keep trying to reserve entries and add operations to the log until
-        // we succeed in doing so or we run out of space on the log.
+        // we succeed in doing so.
         loop {
             let t = self.tail.load(Ordering::SeqCst);
             let h = self.head.load(Ordering::SeqCst);
 
-            // If there isn't space on the log, then return None.
-            if t - h + n > self.size {
-                return None;
-            }
+            // If there are fewer than `GC_FROM_HEAD` entries on the log, then just
+            // try again. The replica that reserved entry (h + self.size - GC_FROM_HEAD)
+            // is currently trying to advance the head of the log.
+            if t > h + self.size - GC_FROM_HEAD { continue };
+
+            // If on adding in the above entries there would be fewer than `GC_FROM_HEAD`
+            // entries left on the log, then we need to advance the head of the log.
+            let mut advance = false;
+            if t + n > h + self.size - GC_FROM_HEAD { advance = true };
 
             // Try reserving slots for the operations. If that fails, then restart
             // from the beginning of this loop.
-            if self.tail.compare_and_swap(t, t + n, Ordering::SeqCst) != t {
-                continue;
-            }
+            if self.tail.compare_and_swap(t, t + n, Ordering::SeqCst) != t { continue };
 
             // Successfully reserved entries on the shared log. Add the operations in.
-            for idx in 0..n {
-                self.slog[self.index(t + idx)].set(Entry::new(ops[idx]));
-            }
+            for i in 0..n {
+                let e = self.slog[self.index(t + i)].as_ptr();
+                unsafe { (*e).operation = ops[i] };
+                compiler_fence(Ordering::AcqRel);
+                unsafe { (*e).alivef = self.mask.get() };
 
-            // Check if we need to perform one round of garbage collection. First compute
-            // the number of live entries at which we need to kick-off garbage collection.
-            // Next, check if this append operation made us exceed the number of these
-            // live entries. If it did, then perform garbage collection.
-            let i = (GC_FRACTION * (self.size as f64)) as usize;
-            if t - h < i && t + n - h > i {
-                self.gc();
-            }
+                // We just filled up the last entry in the circular array. Time to flip
+                // what it means for an entry to be alive/dead on the log.
+                if self.index(t + i) == self.size - 1 { self.mask.set(!self.mask.get()) };
+            };
 
-            return Some(t);
+            // If needed, advance the head of the log forward to make room on the log.
+            if advance { self.advance_head() };
+            return;
         }
     }
 
-    /// Executes a passed in closure (`dispatch`) on all operations starting from
+    /// Executes a passed in closure (`d`) on all operations starting from
     /// a replica's local tail on the shared log. The replica is identified through an
     /// `idx` passed in as an argument.
     ///
     /// The passed in closure is expected to take in one argument: The operation
     /// from the shared log to be executed.
-    pub fn exec<F: FnMut(T)>(&self, idx: usize, mut dispatch: F) -> usize {
+    pub fn exec<F: FnMut(T)>(&self, idx: usize, mut d: F) {
         let t = self.tail.load(Ordering::SeqCst);
         let h = self.head.load(Ordering::SeqCst);
 
         // Load the logical log offset from which we must execute operations.
-        let from = self.ltails[idx - 1].load(Ordering::SeqCst);
+        let f = self.ltails[idx - 1].load(Ordering::SeqCst);
 
-        // Make sure we're within the shared log. If we aren't, then return since there
-        // anyway aren't any operations to execute.
-        if from > t || from < h {
-            return from;
-        }
+        // Make sure we're within the shared log. If we aren't, then panic.
+        if f > t || f < h { panic!("Local tail not within the shared log!") };
 
-        // Execute all operations from the passed in offset to the shared log's tail.
-        for idx in from..t {
-            let mut entry;
+        // Execute all operations from the passed in offset to the shared log's tail. Check if
+        // the entry is live first; we could have a replica that has reserved entries, but not
+        // filled them into the log yet.
+        for i in f..t {
             loop {
-                entry = self.slog[self.index(idx)].get();
-                if entry.alivef {
-                    break;
-                }
+                let e = self.slog[self.index(i)].get();
+                if e.alivef == self.lmasks[idx - 1].get() { d(e.operation) } else { continue };
+                break;
             }
-            dispatch(entry.operation);
+
+            // Looks like this replica's local tail is going to wrap around. Time to flip
+            // the replica's understanding of what it means for an entry to be alive/dead.
+            if self.index(i) == self.size - 1 { self.lmasks[idx - 1].set(!self.lmasks[idx - 1].get()) };
         }
 
         // Update the replica's local tail.
         self.ltails[idx - 1].store(t, Ordering::SeqCst);
-
-        from
     }
 
     /// Returns a physical index given a logical index into the shared log.
@@ -269,36 +288,31 @@ where
         logical % self.size
     }
 
-    /// Garbage collects entries on the log.
-    fn gc(&self) {
-        // First, look at all replica-local tails and find the minimum. It
-        // is safe to garbage collect entries from the head upto this minimum.
-        let n = self.next.load(Ordering::SeqCst);
-        let h = self.head.load(Ordering::SeqCst);
+    /// Advances the head of the log forward. If a replica has stopped making progress,
+    /// then this method will never return.
+    fn advance_head(&self) {
+        // Keep looping until we can advance the head and create some free space
+        // on the log. If one of the replicas has stopped making progress, then
+        // this method might never return.
+        loop {
+            let r = self.next.load(Ordering::SeqCst);
+            let h = self.head.load(Ordering::SeqCst);
 
-        let mut new = self.ltails[0].load(Ordering::SeqCst);
+            let mut n = self.ltails[0].load(Ordering::SeqCst);
 
-        for idx in 0..n {
-            let t = self.ltails[idx].load(Ordering::SeqCst);
-            if new > t {
-                new = t;
+            // Find the smallest local tail across all replicas.
+            for idx in 1..r {
+                let t = self.ltails[idx - 1].load(Ordering::SeqCst);
+                if n > t { n = t };
             }
-        }
 
-        // No entries to garbage collect. Return empty-handed.
-        if new <= h {
+            // If we cannot advance the head further, then start
+            // from the beginning of this loop again.
+            if n == h { continue };
+
+            // There are entries that can be freed up; update the head offset.
+            self.head.store(n, Ordering::SeqCst);
             return;
-        }
-
-        // Update the head of the log to point to the minimum of all replica-local
-        // tails. Next, mark all entries between the old and new heads as dead by
-        // setting their `alivef` to false.
-        self.head.store(new, Ordering::SeqCst);
-
-        for idx in h..new {
-            let mut e = self.slog[self.index(idx)].get();
-            e.alivef = false;
-            self.slog[self.index(idx)].set(e);
         }
     }
 
@@ -374,7 +388,7 @@ mod tests {
     fn test_entry_create_basic() {
         let e: Entry<u64> = Entry::new(121);
         assert_eq!(e.operation, 121);
-        assert_eq!(e.alivef, true);
+        assert_eq!(e.alivef, false);
     }
 
     // Test that we can construct entries correctly. Use a richer type for T
@@ -383,7 +397,7 @@ mod tests {
     fn test_entry_create() {
         let e = Entry::<Operation>::new(Operation::Write(121));
         assert_eq!(e.operation, Operation::Write(121));
-        assert_eq!(e.alivef, true);
+        assert_eq!(e.alivef, false);
     }
 
     // Test that we can default construct entries correctly.
@@ -397,13 +411,7 @@ mod tests {
     // Test that our entry_size() method returns the correct size.
     #[test]
     fn test_log_entry_size() {
-        assert_eq!(Log::<Operation>::entry_size(), 64);
-    }
-
-    // Test that entries are cache aligned.
-    #[test]
-    fn test_entry_alignment() {
-        assert_eq!(Log::<Operation>::entry_size() % 64, 0);
+        assert_eq!(Log::<Operation>::entry_size(), 24);
     }
 
     // Tests if a small log can be correctly constructed.
@@ -416,6 +424,16 @@ mod tests {
         assert_eq!(l.slog.len(), n);
         assert_eq!(l.head.load(Ordering::Relaxed), 0);
         assert_eq!(l.tail.load(Ordering::Relaxed), 0);
+        assert_eq!(l.next.load(Ordering::Relaxed), 1);
+        assert_eq!(l.mask.get(), true);
+
+        for i in 0..MAX_REPLICAS {
+            assert_eq!(l.ltails[i].load(Ordering::Relaxed), 0);
+        }
+
+        for i in 0..MAX_REPLICAS {
+            assert_eq!(l.lmasks[i].get(), true);
+        }
     }
 
     // Tests if the log can be successfully default constructed.
@@ -428,21 +446,49 @@ mod tests {
         assert_eq!(l.slog.len(), n);
         assert_eq!(l.head.load(Ordering::Relaxed), 0);
         assert_eq!(l.tail.load(Ordering::Relaxed), 0);
+        assert_eq!(l.next.load(Ordering::Relaxed), 1);
+        assert_eq!(l.mask.get(), true);
+
+        for i in 0..MAX_REPLICAS {
+            assert_eq!(l.ltails[i].load(Ordering::Relaxed), 0);
+        }
+
+        for i in 0..MAX_REPLICAS {
+            assert_eq!(l.lmasks[i].get(), true);
+        }
     }
 
-    // Test if we can correctly index into the shared log.
+    // Tests if we can correctly index into the shared log.
     #[test]
     fn test_log_index() {
+        let l = Log::<Operation>::new(2400);
+        assert_eq!(l.index(104), 4);
+    }
+
+    // Tests if we can correctly register with the shared log.
+    #[test]
+    fn test_log_register() {
         let l = Log::<Operation>::new(1024);
-        assert_eq!(l.index(100), 4);
+        assert_eq!(l.register(), Some(1));
+        assert_eq!(l.next.load(Ordering::Relaxed), 2);
+    }
+
+    // Tests that we cannot register more than 32 replicas with the log.
+    #[test]
+    fn test_log_register_none() {
+        let l = Log::<Operation>::new(1024);
+        l.next.store(32, Ordering::Relaxed);
+        assert!(l.register().is_none());
+        assert_eq!(l.next.load(Ordering::Relaxed), 32);
     }
 
     // Test that we can correctly append an entry into the log.
     #[test]
     fn test_log_append() {
-        let l = Log::<Operation>::new(1024);
+        let l = Log::<Operation>::default();
         let o = [Operation::Read];
-        assert!(l.append(&o).is_some());
+        l.append(&o);
+
         assert_eq!(l.head.load(Ordering::Relaxed), 0);
         assert_eq!(l.tail.load(Ordering::Relaxed), 1);
         assert_eq!(l.slog[0].get().operation, Operation::Read);
@@ -451,59 +497,106 @@ mod tests {
     // Test that multiple entries can be appended to the log.
     #[test]
     fn test_log_append_multiple() {
-        let l = Log::<Operation>::new(1024);
+        let l = Log::<Operation>::default();
         let o = [Operation::Read, Operation::Write(119)];
-        assert!(l.append(&o).is_some());
+        l.append(&o);
+
+        assert_eq!(l.head.load(Ordering::Relaxed), 0);
+        assert_eq!(l.tail.load(Ordering::Relaxed), 2);
     }
 
-    // Test that appends fail when the log is full.
+    // Tests that we can advance the head of the log to the smallest of all replica-local tails.
     #[test]
-    fn test_log_append_full() {
-        let l = Log::<Operation>::new(64);
-        let o = [Operation::Read];
-        assert!(l.append(&o).is_some()); // First append should succeed.
-        assert!(l.append(&o).is_none()); // Second append must fail.
+    fn test_log_advance_head() {
+        let l = Log::<Operation>::default();
+
+        l.next.store(5, Ordering::Relaxed);
+        l.ltails[0].store(1023, Ordering::Relaxed);
+        l.ltails[1].store( 224, Ordering::Relaxed);
+        l.ltails[2].store(4096, Ordering::Relaxed);
+        l.ltails[3].store( 799, Ordering::Relaxed);
+
+        l.advance_head();
+        assert_eq!(l.head.load(Ordering::Relaxed), 224);
+    }
+
+    // Tests that the head of the log is advanced when we're close to filling up the entire log.
+    #[test]
+    fn test_log_append_gc() {
+        let l = Log::<Operation>::default();
+        let o = [Operation::Read; 4];
+
+        l.next.store(2, Ordering::Relaxed);
+        l.tail.store(l.size - GC_FROM_HEAD - 1, Ordering::Relaxed);
+        l.ltails[0].store(1024, Ordering::Relaxed);
+        l.append(&o);
+
+        assert_eq!(l.head.load(Ordering::Relaxed), 1024);
+        assert_eq!(l.tail.load(Ordering::Relaxed), l.size - GC_FROM_HEAD + 3);
+    }
+
+    // Tests that on log wrap around, the global mask gets flipped, but the local mask stays
+    // the same because entries have not been executed yet.
+    #[test]
+    fn test_log_append_wrap() {
+        let l = Log::<Operation>::default();
+        let o = [Operation::Read; 1024];
+
+        l.next.store(2, Ordering::Relaxed);
+        l.head.store(4096, Ordering::Relaxed);
+        l.tail.store(l.size - 10, Ordering::Relaxed);
+        l.append(&o);
+
+        assert_eq!(l.mask.get(), false);
+        assert_eq!(l.lmasks[0].get(), true);
+        assert_eq!(l.tail.load(Ordering::Relaxed), l.size + 1014);
     }
 
     // Test that we can execute operations appended to the log.
     #[test]
     fn test_log_exec() {
-        let l = Log::<Operation>::new(1024);
+        let l = Log::<Operation>::default();
         let o = [Operation::Read];
         let f = |op: Operation| {
             assert_eq!(op, Operation::Read);
         };
-        assert!(l.append(&o).is_some());
-        assert_eq!(l.exec(1, f), 0);
+
+        l.append(&o);
+        l.exec(1, f);
     }
 
     // Test that exec() doesn't do anything when the log is empty.
     #[test]
     fn test_log_exec_empty() {
-        let l = Log::<Operation>::new(1024);
+        let l = Log::<Operation>::default();
         let f = |_op: Operation| {
             assert!(false);
         };
-        assert_eq!(l.exec(1, f), 0);
+
+        l.exec(1, f);
     }
 
-    // Test that exec() doesn't do anything if the supplied offset is
-    // greater than or equal to the tail of the shared log.
+    // Test that exec() doesn't do anything if we're already up-to-date.
     #[test]
     fn test_log_exec_zero() {
-        let l = Log::<Operation>::new(1024);
+        let l = Log::<Operation>::default();
         let o = [Operation::Read];
-        let f = |_op: Operation| {
-            // assert!(false);
+        let f = |op: Operation| {
+            assert_eq!(op, Operation::Read);
         };
-        assert!(l.append(&o).is_some());
-        assert_eq!(l.exec(1, f), 0);
+        let g = |_op: Operation| {
+            assert!(false);
+        };
+
+        l.append(&o);
+        l.exec(1, f);
+        l.exec(1, g);
     }
 
     // Test that multiple entries on the log can be executed correctly.
     #[test]
     fn test_log_exec_multiple() {
-        let l = Log::<Operation>::new(1024);
+        let l = Log::<Operation>::default();
         let o = [Operation::Read, Operation::Write(119)];
         let mut s = 0;
         let f = |op: Operation| match op {
@@ -511,24 +604,32 @@ mod tests {
             Operation::Write(v) => s += v,
             Operation::Invalid => assert!(false),
         };
-        assert!(l.append(&o).is_some());
-        assert_eq!(l.exec(1, f), 0);
+
+        l.append(&o);
+        l.exec(1, f);
         assert_eq!(s, 240);
     }
 
-    // Test that a subset of all entries on the log can be executed correctly.
+    // Test that the replica local mask is updated correctly when executing over
+    // a wrapped around log.
     #[test]
-    fn test_log_exec_subset() {
-        let l = Log::<Operation>::new(1024);
-        let o = [Operation::Read, Operation::Write(119)];
-        let mut s = 0;
-        let f = |op: Operation| match op {
-            Operation::Read => s += 121,
-            Operation::Write(v) => s += v,
-            Operation::Invalid => assert!(false),
+    fn test_log_exec_wrap() {
+        let l = Log::<Operation>::default();
+        let o = [Operation::Read; 1024];
+        let f = |op: Operation| {
+            assert_eq!(op, Operation::Read);
         };
-        assert!(l.append(&o).is_some());
-        assert_eq!(l.exec(1, f), 0); // Execute only the second entry.
-        assert_eq!(s, 240);
+
+        l.next.store(2, Ordering::SeqCst);
+        l.head.store(4096, Ordering::SeqCst);
+        l.tail.store(l.size - 10, Ordering::SeqCst);
+        l.append(&o);
+
+        l.ltails[0].store(l.size - 10, Ordering::SeqCst);
+        l.exec(1, f);
+
+        assert_eq!(l.mask.get(), false);
+        assert_eq!(l.lmasks[0].get(), false);
+        assert_eq!(l.tail.load(Ordering::Relaxed), l.size + 1014);
     }
 }

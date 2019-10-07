@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use core::cell::{RefCell};
+use core::mem::transmute;
 use core::sync::atomic::{spin_loop_hint, AtomicBool, AtomicUsize, Ordering};
 
 use alloc::sync::Arc;
@@ -27,7 +28,7 @@ const MAX_THREADS_PER_REPLICA: usize = 128;
 /// Takes in one type argument: `D` represents the replicated data structure against which
 /// said operations will be run. `D` must implement the `Dispatch` trait.
 ///
-/// A thread can be executed against the replica by calling `register()`. An operation can
+/// A thread can be registered against the replica by calling `register()`. An operation can
 /// be issued by calling `execute()`. This operation will be eventually executed against the
 /// replica along with those that were received on other replicas that share the same
 /// underlying log.
@@ -35,10 +36,13 @@ pub struct Replica<'a, D>
 where
     D: Sized + Default + Dispatch,
 {
+    /// A replica-identifier received when the replica is registered against the
+    /// the shared-log. Required when consuming operations from the log.
     idx: usize,
 
     /// Thread idx of the thread currently responsible for flat combining. Zero
     /// if there isn't any thread actively performing flat combining on the log.
+    /// This also doubles up as the combiner lock.
     combiner: CachePadded<AtomicUsize>,
 
     /// Idx that will be handed out to the next thread that registers with the replica.
@@ -54,11 +58,12 @@ where
     buffer: RefCell<Vec<<D as Dispatch>::Operation>>,
 
     /// Number of operations collected by the combiner from each thread at any
-    /// given point of time.
+    /// given point of time. Index `i` holds the number of operations collected from
+    /// thread with identifier `i + 1`.
     inflight: RefCell<[usize; MAX_THREADS_PER_REPLICA]>,
 
     /// A buffer of results collected after flat combining. With the help of `inflight`,
-    /// the combiner enqueues this results into the appropriate thread context.
+    /// the combiner enqueues these results into the appropriate thread context.
     result: RefCell<Vec<<D as Dispatch>::Response>>,
 
     /// Reference to the shared log that operations will be appended to and the
@@ -75,7 +80,7 @@ where
     locks: [CachePadded<AtomicBool>; MAX_THREADS_PER_REPLICA],
 }
 
-/// The Replica is Sync. `tail` and `buffer` are protected by a CAS on `combiner`.
+/// The Replica is Sync. Member variables are protected by a CAS on `combiner`.
 /// `contexts` are protected by fine-grained locks.
 unsafe impl<'a, D> Sync for Replica<'a, D> where D: Sized + Default + Dispatch {}
 
@@ -124,18 +129,15 @@ where
     /// Registers a thread with this replica. Returns an idx inside an Option if the registration
     /// was successfull. None if the registration failed.
     pub fn register(&self) -> Option<usize> {
-        // Spin until we allocate an identifier for the thread or until we run out
-        // of identifiers in which case we return None.
+        // Loop until we either run out of identifiers or we manage to increment `next`.
         loop {
             let idx = self.next.load(Ordering::SeqCst);
 
-            if idx > MAX_THREADS_PER_REPLICA {
-                return None;
-            }
+            if idx > MAX_THREADS_PER_REPLICA { return None };
 
-            if self.next.compare_and_swap(idx, idx + 1, Ordering::SeqCst) == idx {
-                return Some(idx);
-            }
+            if self.next.compare_and_swap(idx, idx + 1, Ordering::SeqCst) != idx { continue };
+
+            return Some(idx);
         }
     }
 
@@ -156,13 +158,9 @@ where
         // First, check if there already is a flat combiner. If there is no active flat combiner
         // then try to perform combining on this thread.
         let mut combine = 0;
-        for _idx in 0..4 {
-            combine += self.combiner.load(Ordering::Relaxed);
-        }
+        for _i in 0..4 { combine += unsafe { transmute::<&AtomicUsize, &usize>(&self.combiner) } };
 
-        if combine == 0 {
-            self.try_combine(idx);
-        }
+        if combine == 0 { self.try_combine(idx) };
 
         // Return pending responses on this thread if any.
         self.get_responses(idx, false)
@@ -251,7 +249,9 @@ where
             let mut r = self.result.borrow_mut();
             let mut b = self.buffer.borrow_mut();
 
-            for idx in 1..self.next.load(Ordering::SeqCst) {
+            let n = self.next.load(Ordering::SeqCst);
+
+            for idx in 1..n {
                 self.acquire(idx);
 
                 {
@@ -267,29 +267,22 @@ where
             }
 
             // Append all collected operations into the shared log and clear the buffer.
-            let mut v;
-            loop {
-                v = self.slog.append(&b);
-                if v.is_some() {
-                    break;
-                }
-            }
-
+            self.slog.append(&b);
             b.clear();
 
             // Execute any operations on the shared log against this replica.
             let mut data = self.data.borrow_mut();
             let f = |o: <D as Dispatch>::Operation| r.push(data.dispatch(o));
 
-            let t = self.slog.exec(self.idx, f);
+            self.slog.exec(self.idx, f);
 
             // Now that we've executed these operations and collected their results, enqueue
             // them onto the appropriate thread local contexts. 'l' and 'r' help determine
             // which set of results go into which thread context.
-            let mut l = v.unwrap() - t;
-            let mut e = v.unwrap() - t;
+            let mut l = 0;
+            let mut e = 0;
 
-            for idx in 1..self.next.load(Ordering::SeqCst) {
+            for idx in 1..n {
                 self.acquire(idx);
 
                 {
