@@ -9,8 +9,6 @@ build:
   script:
     # Dependency for node-replication
     - sudo apt install libhwloc-dev libfreetype6 libfreetype6-dev gnuplot libfuse-dev --yes
-    # Dependency for CI
-    - cargo install cobalt-bin
     - cargo build
 test:
   stage: test
