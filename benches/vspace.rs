@@ -21,6 +21,7 @@ mod os_workload;
 mod utils;
 
 use criterion::{criterion_group, criterion_main, Criterion};
+use mkbench::{ReplicaStrategy, ThreadMapping};
 use os_workload::kpi::{ProcessOperation, SystemCall, VSpaceOperation};
 
 /// Operations that go on the log
