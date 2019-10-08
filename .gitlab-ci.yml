@@ -23,10 +23,11 @@ test:
 bench:
   stage: bench
   script:
-    # Run complete suite
-    #- RUST_TEST_THREADS=1 cargo bench
-    # For testing .gitlab-ci.yml run a small benchmark only:
-    - RUST_TEST_THREADS=1 cargo bench --bench criterion -- synthetic/log
+    # For now only run stack and synthetic benchmarks as part of CI:
+    - RUST_TEST_THREADS=1 cargo bench --bench criterion -- synthetic
+    - RUST_TEST_THREADS=1 cargo bench --bench criterion -- stack
+    # This would run the complete suite
+    # - RUST_TEST_THREADS=1 cargo bench
   dependencies:
     - test
   variables:
@@ -38,7 +39,7 @@ deploy:
     # Deploy the benchmark go gh-pages:
     - export GIT_REV_CURRENT=`git rev-parse --short HEAD`
     - export CSV_LINE=`date +%Y-%m-%d`,$GIT_REV_CURRENT,"criterion/$GIT_REV_CURRENT/report/index.html"
-    - git clone --depth 1 --single-branch --branch gh-pages git@github.com:gz/node-replication.git
+    - git clone --depth 1 --single-branch --branch gh-pages git@github.com:gz/node-replication.git gh-pages
     - echo $CSV_LINE >> gh-pages/_data/criterion_b1641.csv
     - rm -rf gh-pages/criterion/$GIT_REV_CURRENT
     - mkdir -p gh-pages/criterion/$GIT_REV_CURRENT
