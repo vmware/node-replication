@@ -24,6 +24,7 @@ bench:
   stage: bench
   script:
     # For now only run stack and synthetic benchmarks as part of CI:
+    - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench criterion -- log
     - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench criterion -- synthetic
     - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench criterion -- stack
     # This would run the complete suite
