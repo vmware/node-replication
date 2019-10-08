@@ -38,12 +38,12 @@ deploy:
   script:
     # Deploy the benchmark go gh-pages:
     - export GIT_REV_CURRENT=`git rev-parse --short HEAD`
-    - export CSV_LINE=`date +%Y-%m-%d`,$GIT_REV_CURRENT,"criterion/$GIT_REV_CURRENT/report/index.html"
+    - export CSV_LINE=`date +%Y-%m-%d`,$GIT_REV_CURRENT,"criterion/$GIT_REV_CURRENT/report/index.html\n"
     - git clone --depth 1 --single-branch --branch gh-pages git@github.com:gz/node-replication.git gh-pages
-    - echo $CSV_LINE >> gh-pages/_data/b1641.csv
+    - echo -e $CSV_LINE >> gh-pages/_data/b1641.csv
     - rm -rf gh-pages/criterion/$GIT_REV_CURRENT
     - mkdir -p gh-pages/criterion/$GIT_REV_CURRENT
-    - cp -r target/criterion gh-pages/criterion/$GIT_REV_CURRENT
+    - cp -r target/criterion/* gh-pages/criterion/$GIT_REV_CURRENT
     - cd gh-pages
     - git add .
     - git commit -a -m "Added benchmark results for $GIT_REV_CURRENT."
