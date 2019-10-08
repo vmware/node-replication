@@ -45,6 +45,8 @@ deploy:
     - mkdir -p gh-pages/criterion/$GIT_REV_CURRENT
     - cp -r target/criterion/* gh-pages/criterion/$GIT_REV_CURRENT
     - cd gh-pages
+    - pip3 install -r requirements.txt
+    - python3 history_plots.py
     - git add .
     - git commit -a -m "Added benchmark results for $GIT_REV_CURRENT."
     - git push origin gh-pages
