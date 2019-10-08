@@ -219,7 +219,12 @@ fn vspace_scale_out(c: &mut Criterion) {
     let ops = parse_syscall_trace("benches/os_workload/bsd_init.log").unwrap();
 
     mkbench::ScaleBenchBuilder::<BespinDispatcher>::new(ops)
-        .machine_defaults()
+        //.machine_defaults()
+        .replica_strategy(ReplicaStrategy::One)
+        .thread_mapping(ThreadMapping::Sequential)
+        .threads(1)
+        .threads(4)
+        .threads(8)
         .configure(
             c,
             "vspace-scaleout",

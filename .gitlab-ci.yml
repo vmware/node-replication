@@ -2,11 +2,15 @@ stages:
   - build
   - test
   - bench
+  - deploy
 
 build:
   stage: build
   script:
+    # Dependency for node-replication
     - sudo apt install libhwloc-dev libfreetype6 libfreetype6-dev gnuplot libfuse-dev --yes
+    # Dependency for CI
+    - cargo install cobalt-bin
     - cargo build
 test:
   stage: test
@@ -21,8 +25,31 @@ test:
 bench:
   stage: bench
   script:
-    - cargo bench
+    # Run complete suite
+    #- RUST_TEST_THREADS=1 cargo bench
+    # For testing .gitlab-ci.yml run a small benchmark only:
+    - RUST_TEST_THREADS=1 cargo bench --bench criterion -- synthetic/log
   dependencies:
     - test
+  variables:
+    GIT_STRATEGY: none
+
+deploy:
+  stage: deploy
+  script:
+    # Deploy the benchmark go gh-pages:
+    - export GIT_REV_CURRENT=`git rev-parse --short HEAD`
+    - export CSV_LINE=`date +%Y-%m-%d`,$GIT_REV_CURRENT,"criterion/$GIT_REV_CURRENT/report/index.html"
+    - git clone --depth 1 --single-branch --branch gh-pages git@github.com:gz/node-replication.git
+    - echo $CSV_LINE >> gh-pages/_data/criterion_b1641.csv
+    - rm -rf gh-pages/criterion/$GIT_REV_CURRENT
+    - mkdir -p gh-pages/criterion/$GIT_REV_CURRENT
+    - cp -r target/criterion gh-pages/criterion/$GIT_REV_CURRENT
+    - cd gh-pages && git add .
+    - cd gh-pages && git commit -m "Added benchmark results for $GIT_REV_CURRENT."
+    - cd gh-pages && git push origin gh-pages
+    - rm -rf gh-pages
+  dependencies:
+    - bench
   variables:
     GIT_STRATEGY: none
