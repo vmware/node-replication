@@ -14,7 +14,7 @@ test:
   stage: test
   script:
     - cargo +nightly fmt -- --check
-    - cargo test
+    - timeout 1h cargo test
   dependencies:
     - build
   variables:
@@ -24,10 +24,10 @@ bench:
   stage: bench
   script:
     # For now only run stack and synthetic benchmarks as part of CI:
-    - RUST_TEST_THREADS=1 cargo bench --bench criterion -- synthetic
-    - RUST_TEST_THREADS=1 cargo bench --bench criterion -- stack
+    - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench criterion -- synthetic
+    - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench criterion -- stack
     # This would run the complete suite
-    # - RUST_TEST_THREADS=1 cargo bench
+    # - RUST_TEST_THREADS=1 timeout 2h cargo bench
   dependencies:
     - test
   variables:
