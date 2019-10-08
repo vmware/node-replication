@@ -132,7 +132,7 @@ where
     <T as node_replication::Dispatch>::Response: std::marker::Send,
     T: 'static,
 {
-    /// Create a new ScaleBenchmark.    
+    /// Create a new ScaleBenchmark.
     fn new(
         topology: &MachineTopology,
         rs: ReplicaStrategy,
@@ -403,7 +403,7 @@ where
             2
         };
 
-        for t in (0..topology.cores()).step_by(thread_incremements) {
+        for t in (0..(topology.cores() + 1)).step_by(thread_incremements) {
             if t == 0 {
                 // Can't run on 0 threads
                 self.threads(t + 1);
