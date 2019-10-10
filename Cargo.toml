@@ -51,6 +51,4 @@ x86 = "0.19"
 custom_error = "1.6.0"
 slabmalloc = "0.3.1"
 core_affinity = { git = "https://github.com/nau/core_affinity_rs", branch = "patch-1" }
-fuse = "0.3.1"
-libc = "0.2.42"
-time = "0.1.40"
+btfs = "0.0.3"

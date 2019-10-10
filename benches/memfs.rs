@@ -1,37 +1,19 @@
-// Copyright © 2018 Ben Parli (https://github.com/bparli/bpfs)
 // Copyright © 2019 VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
-
-//! A simple implementation of an in-memory files-sytem written in Rust using the BTreeMap
-//! data-structure.
-//!
-//! This is inspired from https://github.com/bparli/bpfs and was modified to
-//! work with node-replication for benchmarking a file-system use-case.
 
 #![allow(unused_imports, unused)]
 #![feature(result_map_or_else)]
 
+use std::ffi::OsStr;
+
 mod mkbench;
 mod utils;
 
-use fuse::{
-    FileAttr, FileType, Filesystem, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty,
-    ReplyEntry, ReplyOpen, ReplyWrite, Request,
-};
-use libc::{c_int, EEXIST, EINVAL, ENOENT, ENOTEMPTY};
-use std::collections::BTreeMap;
-use std::ffi::OsStr;
-use time::Timespec;
-
-use log::{debug, error, info, trace, warn};
-
+use criterion::{criterion_group, criterion_main, Criterion};
+use log::warn;
 use node_replication::Dispatch;
 
-use criterion::{criterion_group, criterion_main, Criterion};
-
-const TTL: Timespec = Timespec { sec: 1, nsec: 0 };
-
-type InodeId = u64;
+use btfs::{Error, FileAttr, FileType, InodeId, MemFilesystem, SetAttrRequest};
 
 /// All FS operations we can perform through the log.
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
@@ -113,409 +95,113 @@ pub enum Response {
     Empty,
     Open,
     Create,
-    Write,
-    Data,
+    Written(u64),
+    Data(&'static [u8]),
     // XXX: this is a bit of a mess atm. once we return a Result<> as part of the log
     // drop this and the associated glue-code
     Err(Error),
+    Invalid,
 }
 
 impl Default for Response {
     fn default() -> Response {
-        Response::Empty
+        Response::Invalid
     }
 }
 
-#[derive(Debug, Eq, PartialEq, Clone, Copy)]
-pub enum Error {
-    NoEntry,
-    NotEmpty,
-    AlreadyExists,
-    ParentNotFound,
-    InvalidInput,
-}
+struct NrMemFilesystem(MemFilesystem);
 
-/// Converts FS Errors to FUSE compatible libc errno types.
-impl Into<c_int> for Error {
-    fn into(self) -> c_int {
-        match self {
-            Error::NoEntry => ENOENT,
-            Error::NotEmpty => ENOTEMPTY,
-            Error::AlreadyExists => EEXIST,
-            Error::InvalidInput => EINVAL,
-            Error::ParentNotFound => EINVAL,
-        }
+impl Default for NrMemFilesystem {
+    fn default() -> NrMemFilesystem {
+        let memfs = MemFilesystem::new();
+        // TODO Add an initial directory tree here:
+
+        NrMemFilesystem(memfs)
     }
 }
 
-#[derive(Debug, Eq, PartialEq, Copy, Clone)]
-pub struct SetAttrRequest {
-    pub mode: Option<u32>,
-    pub uid: Option<u32>,
-    pub gid: Option<u32>,
-    pub size: Option<u64>,
-    pub atime: Option<Timespec>,
-    pub mtime: Option<Timespec>,
-    pub fh: Option<u64>,
-    pub crtime: Option<Timespec>,
-    pub chgtime: Option<Timespec>,
-    pub bkuptime: Option<Timespec>,
-    pub flags: Option<u32>,
-}
-
-#[derive(Clone, Debug)]
-pub struct MemFile {
-    bytes: Vec<u8>,
-}
-
-impl MemFile {
-    pub fn new() -> MemFile {
-        MemFile { bytes: Vec::new() }
-    }
-    fn size(&self) -> u64 {
-        self.bytes.len() as u64
-    }
-    fn update(&mut self, new_bytes: &[u8], offset: i64) -> u64 {
-        let mut counter = offset as usize;
-        for &byte in new_bytes {
-            self.bytes.insert(counter, byte);
-            counter += 1;
-        }
-        debug!(
-            "update(): len of new bytes is {}, total len is {}, offset was {}",
-            new_bytes.len(),
-            self.size(),
-            offset
-        );
-        new_bytes.len() as u64
-    }
-    fn truncate(&mut self, size: u64) {
-        self.bytes.truncate(size as usize);
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Inode {
-    name: String,
-    children: BTreeMap<String, u64>,
-    parent: u64,
-}
-
-impl Inode {
-    fn new(name: String, parent: u64) -> Inode {
-        Inode {
-            name: name,
-            children: BTreeMap::new(),
-            parent: parent,
-        }
-    }
-}
-
-pub struct MemFilesystem {
-    files: BTreeMap<u64, MemFile>,
-    attrs: BTreeMap<u64, FileAttr>,
-    inodes: BTreeMap<u64, Inode>,
-    next_inode: u64,
-}
-
-impl MemFilesystem {
-    pub fn new() -> MemFilesystem {
-        let files = BTreeMap::new();
-
-        let root = Inode::new("/".to_string(), 1 as u64);
-
-        let mut attrs = BTreeMap::new();
-        let mut inodes = BTreeMap::new();
-        let ts = time::now().to_timespec();
-        let attr = FileAttr {
-            ino: 1,
-            size: 0,
-            blocks: 0,
-            atime: ts,
-            mtime: ts,
-            ctime: ts,
-            crtime: ts,
-            kind: FileType::Directory,
-            perm: 0o755,
-            nlink: 0,
-            uid: 0,
-            gid: 0,
-            rdev: 0,
-            flags: 0,
-        };
-        attrs.insert(1, attr);
-        inodes.insert(1, root);
-        MemFilesystem {
-            files: files,
-            attrs: attrs,
-            inodes: inodes,
-            next_inode: 2,
-        }
+impl NrMemFilesystem {
+    pub fn getattr(&mut self, ino: u64) -> Result<&FileAttr, Error> {
+        self.0.getattr(ino)
     }
 
-    /// Generates inode numbers.
-    fn get_next_ino(&mut self) -> u64 {
-        self.next_inode += 1;
-        self.next_inode
+    pub fn setattr(&mut self, ino: u64, new_attrs: SetAttrRequest) -> Result<&FileAttr, Error> {
+        self.0.setattr(ino, new_attrs)
     }
 
-    /// Updates the attributes on an inode with values in `new_attrs`.
-    fn set_attribute(
-        &mut self,
-        ino: u64,
-        new_attrs: SetAttrRequest,
-    ) -> Result<Option<&FileAttr>, Error> {
-        trace!("set_attribute(ino={}, new_attrs={:?})", ino, new_attrs);
-        let mut file_attrs = self.attrs.get_mut(&ino).ok_or(Error::NoEntry)?;
-
-        new_attrs.uid.map(|new_uid| file_attrs.uid = new_uid);
-        new_attrs.gid.map(|new_gid| file_attrs.gid = new_gid);
-        new_attrs
-            .atime
-            .map(|new_atime| file_attrs.atime = new_atime);
-        new_attrs
-            .mtime
-            .map(|new_mtime| file_attrs.mtime = new_mtime);
-        new_attrs
-            .crtime
-            .map(|new_crtime| file_attrs.crtime = new_crtime);
-
-        // Do we need to update the size of file?
-        if new_attrs.size.is_some() {
-            let mut memfile = self.files.get_mut(&ino);
-
-            match (new_attrs.size, memfile) {
-                (Some(new_size), Some(file)) => {
-                    file.truncate(new_size);
-                    file_attrs.size = new_size;
-                    Ok(Some(file_attrs))
-                }
-                (Some(new_size), None) => Err(Error::NoEntry), // Can't update size on a non-file inode
-                _ => Ok(None),
-            }
-        } else {
-            Ok(None)
-        }
+    pub fn readdir(&mut self, ino: u64, fh: u64) -> Result<Vec<(u64, FileType, String)>, Error> {
+        self.0.readdir(ino, fh)
     }
 
-    fn read_directory(
-        &mut self,
-        ino: InodeId,
-        _fh: u64,
-    ) -> Result<Vec<(InodeId, FileType, String)>, Error> {
-        trace!("read_directory(ino={}, fh={})", ino, _fh);
-        let mut entries: Vec<(u64, FileType, String)> = Vec::with_capacity(32);
-        entries.push((ino, FileType::Directory, String::from(".")));
-
-        self.inodes.get(&ino).map_or(Err(Error::NoEntry), |inode| {
-            entries.push((inode.parent, FileType::Directory, String::from("..")));
-
-            for (child, child_ino) in inode.children.iter() {
-                let child_attrs = &self.attrs.get(child_ino).unwrap();
-                trace!("\t inode={}, child={}", child_ino, child);
-                entries.push((child_attrs.ino, child_attrs.kind, String::from(child)));
-            }
-
-            Ok(entries)
-        })
+    pub fn lookup(&mut self, parent: u64, name: &OsStr) -> Result<&FileAttr, Error> {
+        self.0.lookup(parent, name)
     }
 
-    fn lookup(&mut self, parent: u64, name: &OsStr) -> Result<&FileAttr, Error> {
-        let name_str = name.to_str().unwrap();
-        trace!("lookup(parent={}, name={})", parent, name_str);
-
-        let parent_inode = self.inodes.get(&parent).ok_or(Error::NoEntry)?;
-        let inode = parent_inode.children.get(name_str).ok_or(Error::NoEntry)?;
-        self.attrs.get(inode).ok_or(Error::NoEntry)
+    pub fn rmdir(&mut self, parent: u64, name: &OsStr) -> Result<(), Error> {
+        self.0.rmdir(parent, name)
     }
 
-    fn rmdir(&mut self, parent: u64, name: &OsStr) -> Result<(), Error> {
-        let name_str = name.to_str().unwrap();
-        trace!("rmdir(parent={}, name={})", parent, name_str);
-
-        let parent_inode: &Inode = self.inodes.get(&parent).ok_or(Error::ParentNotFound)?;
-        let rmdir_inode_id: InodeId = *parent_inode.children.get(name_str).ok_or(Error::NoEntry)?;
-
-        let dir = self.inodes.get(&rmdir_inode_id).ok_or(Error::NoEntry)?;
-        if dir.children.is_empty() {
-            self.attrs.remove(&rmdir_inode_id);
-            let parent_inode: &mut Inode =
-                self.inodes.get_mut(&parent).ok_or(Error::ParentNotFound)?;
-            parent_inode
-                .children
-                .remove(&name.to_str().unwrap().to_string());
-            self.inodes.remove(&rmdir_inode_id);
-            Ok(())
-        } else {
-            Err(Error::NotEmpty)
-        }
+    pub fn mkdir(&mut self, parent: u64, name: &OsStr, mode: u32) -> Result<&FileAttr, Error> {
+        self.0.mkdir(parent, name, mode)
     }
 
-    fn mkdir(&mut self, parent: u64, name: &OsStr, mode: u32) -> Result<&FileAttr, Error> {
-        let name_str = name.to_str().unwrap();
-        trace!("mkdir(parent={}, name={})", parent, name_str);
-
-        let new_inode_nr = self.get_next_ino();
-        let parent_ino = self.inodes.get_mut(&parent).ok_or(Error::ParentNotFound)?;
-        if !parent_ino.children.contains_key(name_str) {
-            let ts = time::now().to_timespec();
-            let attr = FileAttr {
-                ino: new_inode_nr,
-                size: 0,
-                blocks: 0,
-                atime: ts,
-                mtime: ts,
-                ctime: ts,
-                crtime: ts,
-                kind: FileType::Directory,
-                perm: 0o644,
-                nlink: 0,
-                uid: 0,
-                gid: 0,
-                rdev: 0,
-                flags: 0,
-            };
-
-            parent_ino
-                .children
-                .insert(name_str.to_string(), new_inode_nr);
-            self.attrs.insert(new_inode_nr, attr);
-            self.inodes
-                .insert(new_inode_nr, Inode::new(name_str.to_string(), parent));
-
-            let stored_attr = self
-                .attrs
-                .get(&new_inode_nr)
-                .expect("Shouldn't fail we just inserted it");
-            Ok(stored_attr)
-        } else {
-            // A child with the given name already exists
-            Err(Error::AlreadyExists)
-        }
+    pub fn unlink(&mut self, parent: u64, name: &OsStr) -> Result<(), Error> {
+        self.0.unlink(parent, name)
     }
 
-    fn unlink(&mut self, parent: u64, name: &OsStr) -> Result<(), Error> {
-        let name_str = name.to_str().unwrap();
-        trace!("unlink(parent={}, name={})", parent, name_str);
-
-        let parent_ino = self.inodes.get_mut(&parent).ok_or(Error::ParentNotFound)?;
-        trace!("parent is {} for name={}", parent_ino.name, name_str);
-
-        let old_ino = parent_ino
-            .children
-            .remove(&name_str.to_string())
-            .ok_or(Error::NoEntry)?;
-
-        let attr = self
-            .attrs
-            .remove(&old_ino)
-            .expect("Inode needs to be in `attrs`.");
-
-        if attr.kind == FileType::RegularFile {
-            self.files
-                .remove(&old_ino)
-                .expect("Regular file inode needs to be in `files`.");
-        }
-
-        self.inodes
-            .remove(&old_ino)
-            .expect("Child inode (to be unlinked) needs to in `inodes`.");
-        Ok(())
-    }
-
-    fn create(
+    pub fn create(
         &mut self,
         parent: u64,
         name: &OsStr,
         mode: u32,
         flags: u32,
     ) -> Result<&FileAttr, Error> {
-        let name_str = name.to_str().unwrap();
-        trace!(
-            "create(parent={}, name={}, mode={}, flags={})",
-            parent,
-            name_str,
-            mode,
-            flags,
-        );
+        self.0.create(parent, name, mode, flags)
+    }
 
-        let new_inode_nr = self.get_next_ino(); // TODO: should only generate it when we're sure it'll succeed.
-        let parent_ino = self.inodes.get_mut(&parent).ok_or(Error::ParentNotFound)?;
-        match parent_ino.children.get_mut(&name_str.to_string()) {
-            Some(child_ino) => {
-                let attrs = self
-                    .attrs
-                    .get(&child_ino)
-                    .expect("Existing child inode needs to be in `attrs`.");
-                Ok(attrs)
-            }
-            None => {
-                trace!(
-                    "create file not found( parent={}, name={})",
-                    parent,
-                    name_str
-                );
+    pub fn write(
+        &mut self,
+        ino: u64,
+        fh: u64,
+        offset: i64,
+        data: &[u8],
+        flags: u32,
+    ) -> Result<u64, Error> {
+        self.0.write(ino, fh, offset, data, flags)
+    }
 
-                let ts = time::now().to_timespec();
-                self.attrs.insert(
-                    new_inode_nr,
-                    FileAttr {
-                        ino: new_inode_nr,
-                        size: 0,
-                        blocks: 0,
-                        atime: ts,
-                        mtime: ts,
-                        ctime: ts,
-                        crtime: ts,
-                        kind: FileType::RegularFile,
-                        perm: 0o644,
-                        nlink: 0,
-                        uid: 0,
-                        gid: 0,
-                        rdev: 0,
-                        flags: 0,
-                    },
-                );
-                self.files.insert(new_inode_nr, MemFile::new());
-                parent_ino
-                    .children
-                    .insert(name_str.to_string(), new_inode_nr);
-                self.inodes
-                    .insert(new_inode_nr, Inode::new(name_str.to_string(), parent));
+    pub fn read(&mut self, ino: u64, fh: u64, offset: i64, size: u32) -> Result<&[u8], Error> {
+        self.0.read(ino, fh, offset, size)
+    }
 
-                let stored_attr = self
-                    .attrs
-                    .get(&new_inode_nr)
-                    .expect("Shouldn't fail we just inserted it.");
-                Ok(stored_attr)
-            }
-        }
+    pub fn rename(
+        &mut self,
+        parent: u64,
+        current_name: &OsStr,
+        new_parent: u64,
+        new_name: &OsStr,
+    ) -> Result<(), Error> {
+        self.0.rename(parent, current_name, new_parent, new_name)
     }
 }
 
-impl Dispatch for MemFilesystem {
+impl Dispatch for NrMemFilesystem {
     type Operation = Operation;
     type Response = Response;
 
     /// Implements how we execute operation from the log against our local stack
     fn dispatch(&mut self, op: Self::Operation) -> Self::Response {
         match op {
-            Operation::GetAttr { ino } => self
-                .attrs
-                .get(&ino)
-                .map_or(Response::Err(Error::NoEntry), |attr| Response::Attr(*attr)),
-            Operation::SetAttr { ino, new_attrs } => {
-                self.set_attribute(ino, new_attrs).map_or_else(
-                    |e| Response::Err(e),
-                    |r| match r {
-                        Some(fattrs) => Response::Attr(*fattrs),
-                        None => Response::Empty,
-                    },
-                )
-            }
+            Operation::GetAttr { ino } => match self.getattr(ino) {
+                Ok(attr) => Response::Attr(*attr),
+                Err(e) => Response::Err(e),
+            },
+            Operation::SetAttr { ino, new_attrs } => match self.setattr(ino, new_attrs) {
+                Ok(fattr) => Response::Attr(*fattr),
+                Err(e) => Response::Err(e),
+            },
             Operation::ReadDir { ino, fh, offset } => {
-                debug!("ReadDir(ino={}, fh={}, offset={})", ino, fh, offset);
-                match self.read_directory(ino, fh) {
+                match self.readdir(ino, fh) {
                     Ok(entries) => {
                         // Offset of 0 means no offset.
                         // Non-zero offset means the passed offset has already been seen,
@@ -525,10 +211,7 @@ impl Dispatch for MemFilesystem {
                             entries.into_iter().skip(to_skip).collect();
                         Response::Directory
                     }
-                    Err(e) => {
-                        error!("readdir: inode {} is not in filesystem's inodes", ino);
-                        Response::Err(e)
-                    }
+                    Err(e) => Response::Err(e),
                 }
             }
             Operation::Lookup { parent, name } => match self.lookup(parent, name) {
@@ -566,278 +249,43 @@ impl Dispatch for MemFilesystem {
                 offset,
                 data,
                 flags,
-            } => unreachable!("got op"),
+            } => match self.write(ino, fh, offset, data, flags) {
+                Ok(written) => Response::Written(written),
+                Err(e) => Response::Err(e),
+            },
             Operation::Read {
                 ino,
                 fh,
                 offset,
                 size,
-            } => unreachable!("got op"),
+            } => match self.read(ino, fh, offset, size) {
+                Ok(slice) => {
+                    // TODO: We make a heap allocation for the data, thn leak it below
+                    // since we currently don't have a good way to return non copy things to clients:
+                    let bytes_as_vec = slice.to_vec();
+
+                    // create an alias to bytes as vec so we can leak:
+                    let slice = unsafe {
+                        std::slice::from_raw_parts(bytes_as_vec.as_ptr(), bytes_as_vec.len())
+                    };
+                    let response = Response::Data(slice);
+
+                    std::mem::forget(bytes_as_vec); // XXX leaking here
+                    response
+                }
+                Err(e) => Response::Err(e),
+            },
             Operation::Rename {
                 parent,
                 name,
                 newparent,
                 newname,
-            } => unreachable!("got op"),
+            } => match self.rename(parent, name, newparent, newname) {
+                Ok(()) => Response::Empty,
+                Err(e) => Response::Err(e),
+            },
             Operation::Invalid => unreachable!("Got invalid OP"),
-        };
-
-        Response::Empty
-    }
-}
-
-impl Default for MemFilesystem {
-    fn default() -> Self {
-        MemFilesystem::new()
-    }
-}
-
-impl Filesystem for MemFilesystem {
-    fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
-        debug!("getattr(ino={})", ino);
-        match self.attrs.get(&ino) {
-            Some(attr) => {
-                reply.attr(&TTL, attr);
-            }
-            None => {
-                error!("getattr: inode {} is not in filesystem's attributes", ino);
-                reply.error(ENOENT);
-            }
-        };
-    }
-
-    fn setattr(
-        &mut self,
-        _req: &Request,
-        ino: u64,
-        mode: Option<u32>,
-        uid: Option<u32>,
-        gid: Option<u32>,
-        size: Option<u64>,
-        atime: Option<Timespec>,
-        mtime: Option<Timespec>,
-        fh: Option<u64>,
-        crtime: Option<Timespec>,
-        chgtime: Option<Timespec>,
-        bkuptime: Option<Timespec>,
-        flags: Option<u32>,
-        reply: ReplyAttr,
-    ) {
-        trace!("setattr(ino={})", ino);
-        let new_attrs = SetAttrRequest {
-            mode,
-            uid,
-            gid,
-            size,
-            atime,
-            mtime,
-            fh,
-            crtime,
-            chgtime,
-            bkuptime,
-            flags,
-        };
-
-        let r = self.set_attribute(ino, new_attrs);
-        match r {
-            Ok(Some(fattrs)) => {
-                reply.attr(&TTL, fattrs);
-            }
-            Ok(None) => { /* Do nothing */ }
-            Err(e) => reply.error(e.into()),
-        };
-    }
-
-    fn readdir(
-        &mut self,
-        _req: &Request,
-        ino: u64,
-        fh: u64,
-        offset: i64,
-        mut reply: ReplyDirectory,
-    ) {
-        debug!("readdir(ino={}, fh={}, offset={})", ino, fh, offset);
-        match self.read_directory(ino, fh) {
-            Ok(entries) => {
-                // Offset of 0 means no offset.
-                // Non-zero offset means the passed offset has already been seen,
-                // and we should start after it.
-                let to_skip = if offset == 0 { 0 } else { offset + 1 } as usize;
-                for (i, entry) in entries.into_iter().enumerate().skip(to_skip) {
-                    reply.add(entry.0, i as i64, entry.1, entry.2);
-                }
-                reply.ok();
-            }
-            Err(e) => {
-                error!("readdir: inode {} is not in filesystem's inodes", ino);
-                reply.error(e.into())
-            }
-        };
-    }
-
-    fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
-        match self.lookup(parent, name) {
-            Ok(attr) => {
-                reply.entry(&TTL, attr, 0);
-            }
-            Err(e) => {
-                reply.error(e.into());
-            }
         }
-    }
-
-    fn rmdir(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEmpty) {
-        match self.rmdir(parent, name) {
-            Ok(()) => reply.ok(),
-            Err(e) => reply.error(e.into()),
-        }
-    }
-
-    fn mkdir(&mut self, _req: &Request, parent: u64, name: &OsStr, mode: u32, reply: ReplyEntry) {
-        match self.mkdir(parent, name, mode) {
-            Ok(attr) => reply.entry(&TTL, &attr, 0),
-            Err(e) => reply.error(e.into()),
-        }
-    }
-
-    fn open(&mut self, _req: &Request, _ino: u64, flags: u32, reply: ReplyOpen) {
-        trace!("open(ino={}, _flags={})", _ino, flags);
-        reply.opened(0, 0);
-    }
-
-    fn unlink(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEmpty) {
-        match self.unlink(parent, name) {
-            Ok(attr) => reply.ok(),
-            Err(e) => reply.error(e.into()),
-        }
-    }
-
-    fn create(
-        &mut self,
-        _req: &Request,
-        parent: u64,
-        name: &OsStr,
-        mode: u32,
-        flags: u32,
-        reply: ReplyCreate,
-    ) {
-        match self.create(parent, name, mode, flags) {
-            Ok(attr) => reply.created(&TTL, attr, 0, 0, 0),
-            Err(e) => reply.error(e.into()),
-        }
-    }
-
-    fn write(
-        &mut self,
-        _req: &Request,
-        ino: u64,
-        _fh: u64,
-        offset: i64,
-        data: &[u8],
-        _flags: u32,
-        reply: ReplyWrite,
-    ) {
-        debug!("write(ino={}, fh={}, offset={})", ino, _fh, offset);
-        let ts = time::now().to_timespec();
-        match self.files.get_mut(&ino) {
-            Some(fp) => {
-                let size = fp.update(data, offset);
-                match self.attrs.get_mut(&ino) {
-                    Some(attr) => {
-                        attr.atime = ts;
-                        attr.mtime = ts;
-                        attr.size = fp.size();
-                        reply.written(size as u32);
-                        debug!(
-                            "write(ino={}, wrote={}, offset={}, new size={})",
-                            ino,
-                            size,
-                            offset,
-                            fp.size()
-                        );
-                    }
-                    None => {
-                        error!("write: ino {} is not in filesystem's attributes", ino);
-                        reply.error(ENOENT);
-                    }
-                }
-            }
-            None => reply.error(ENOENT),
-        }
-    }
-
-    fn read(
-        &mut self,
-        _req: &Request,
-        ino: u64,
-        fh: u64,
-        offset: i64,
-        size: u32,
-        reply: ReplyData,
-    ) {
-        debug!(
-            "read(ino={}, fh={}, offset={}, size={})",
-            ino, fh, offset, size
-        );
-        match self.files.get(&ino) {
-            Some(fp) => {
-                reply.data(&fp.bytes[offset as usize..]);
-            }
-            None => {
-                reply.error(ENOENT);
-            }
-        }
-    }
-
-    /// Rename a file.
-    fn rename(
-        &mut self,
-        _req: &Request,
-        parent: u64,
-        name: &OsStr,
-        newparent: u64,
-        newname: &OsStr,
-        reply: ReplyEmpty,
-    ) {
-        debug!(
-            "rename(parent={}, name={}, newparent={}, newname={})",
-            parent,
-            name.to_str().unwrap().to_string(),
-            newparent,
-            newname.to_str().unwrap().to_string()
-        );
-        if self.inodes.contains_key(&parent) && self.inodes.contains_key(&newparent) {
-            let file_ino;
-            match self.inodes.get_mut(&parent) {
-                Some(parent_ino) => {
-                    if let Some(ino) = parent_ino
-                        .children
-                        .remove(&name.to_str().unwrap().to_string())
-                    {
-                        file_ino = ino;
-                    } else {
-                        error!(
-                            "{} not found in parent {}",
-                            name.to_str().unwrap().to_string(),
-                            parent
-                        );
-                        reply.error(ENOENT);
-                        return;
-                    }
-                }
-                None => {
-                    error!("rename: parent {} is not in filesystem inodes", parent);
-                    reply.error(EINVAL);
-                    return;
-                }
-            }
-            if let Some(newparent_ino) = self.inodes.get_mut(&newparent) {
-                newparent_ino
-                    .children
-                    .insert(newname.to_str().unwrap().to_string(), file_ino);
-            }
-        }
-        reply.ok();
     }
 }
 
@@ -845,7 +293,7 @@ fn memfs_single_threaded(c: &mut Criterion) {
     // Use a 10 GiB log size
     const LOG_SIZE_BYTES: usize = 10 * 1024 * 1024 * 1024;
     let ops = vec![];
-    mkbench::baseline_comparison::<MemFilesystem>(c, "memfs", ops, LOG_SIZE_BYTES);
+    mkbench::baseline_comparison::<NrMemFilesystem>(c, "memfs", ops, LOG_SIZE_BYTES);
 }
 
 criterion_group!(
