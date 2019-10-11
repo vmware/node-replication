@@ -1,10 +1,10 @@
 // Copyright © 2019 VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-#![allow(unused_imports, unused)]
-#![feature(result_map_or_else)]
-
 use std::ffi::OsStr;
+
+use rand::seq::SliceRandom;
+use rand::{thread_rng, Rng};
 
 mod mkbench;
 mod utils;
@@ -16,7 +16,7 @@ use node_replication::Dispatch;
 use btfs::{Error, FileAttr, FileType, InodeId, MemFilesystem, SetAttrRequest};
 
 /// All FS operations we can perform through the log.
-#[derive(Debug, Eq, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum Operation {
     GetAttr {
         ino: u64,
@@ -113,8 +113,20 @@ struct NrMemFilesystem(MemFilesystem);
 
 impl Default for NrMemFilesystem {
     fn default() -> NrMemFilesystem {
-        let memfs = MemFilesystem::new();
-        // TODO Add an initial directory tree here:
+        let mut memfs = MemFilesystem::new();
+
+        fn setup_initial_structure(memfs: &mut MemFilesystem) -> Result<(), Error> {
+            let ino = 1; // TODO: hard-coded root inode, get through a lookup()
+            let ino = memfs.mkdir(ino, &OsStr::new("tmp"), 0)?.ino;
+            let ino = memfs.mkdir(ino, &OsStr::new("largefile1"), 0)?.ino;
+
+            let ino = memfs.create(ino, &OsStr::new("00000001"), 0, 0)?.ino;
+            memfs.write(ino, 0, 0, &[1; 4096], 0)?;
+            assert_eq!(ino, 5, "Adjust `generate_fs_operations` accordingly!");
+            Ok(())
+        }
+
+        setup_initial_structure(&mut memfs).expect("Can't initialize FS");
 
         NrMemFilesystem(memfs)
     }
@@ -207,7 +219,7 @@ impl Dispatch for NrMemFilesystem {
                         // Non-zero offset means the passed offset has already been seen,
                         // and we should start after it.
                         let to_skip = if offset == 0 { 0 } else { offset + 1 } as usize;
-                        let entries: Vec<(InodeId, FileType, String)> =
+                        let _entries: Vec<(InodeId, FileType, String)> =
                             entries.into_iter().skip(to_skip).collect();
                         Response::Directory
                     }
@@ -227,11 +239,11 @@ impl Dispatch for NrMemFilesystem {
                 Err(e) => Response::Err(e),
             },
             Operation::Open { ino, flags } => {
-                warn!("Don't do `open` for now...");
+                warn!("Don't do `open` for now... {} {}", ino, flags);
                 Response::Empty
             }
             Operation::Unlink { parent, name } => match self.unlink(parent, name) {
-                Ok(attr) => Response::Empty,
+                Ok(_attr) => Response::Empty,
                 Err(e) => Response::Err(e),
             },
             Operation::Create {
@@ -240,7 +252,7 @@ impl Dispatch for NrMemFilesystem {
                 mode,
                 flags,
             } => match self.create(parent, name, mode, flags) {
-                Ok(attr) => Response::Empty,
+                Ok(_attr) => Response::Empty,
                 Err(e) => Response::Err(e),
             },
             Operation::Write {
@@ -289,17 +301,70 @@ impl Dispatch for NrMemFilesystem {
     }
 }
 
+fn generate_fs_operations(nop: usize, write_ratio: usize) -> Vec<Operation> {
+    let mut ops = Vec::with_capacity(nop);
+    let mut rng = rand::thread_rng();
+
+    for idx in 0..nop {
+        if idx % 100 < write_ratio {
+            ops.push(Operation::Write {
+                ino: 5, // XXX: hard-coded ino of file `00000001`
+                fh: 0,
+                offset: rng.gen_range(0, 4096 - 256),
+                data: &[3; 128],
+                flags: 0,
+            })
+        } else {
+            let offset = rng.gen_range(0, 4096 - 256);
+            let size = rng.gen_range(0, 128);
+
+            ops.push(Operation::Read {
+                ino: 5, // XXX: hard-coded ino of file `00000001`
+                fh: 0,
+                offset: offset,
+                size: size,
+            })
+        }
+    }
+
+    ops.shuffle(&mut thread_rng());
+    ops
+}
+
 fn memfs_single_threaded(c: &mut Criterion) {
-    // Use a 10 GiB log size
-    const LOG_SIZE_BYTES: usize = 10 * 1024 * 1024 * 1024;
-    let ops = vec![];
+    env_logger::init();
+    const LOG_SIZE_BYTES: usize = 1 * 1024 * 1024 * 1024;
+    const NOP: usize = 1000;
+    const WRITE_RATIO: usize = 10; //% out of 100
+
+    let ops = generate_fs_operations(NOP, WRITE_RATIO);
     mkbench::baseline_comparison::<NrMemFilesystem>(c, "memfs", ops, LOG_SIZE_BYTES);
+}
+
+/// Compare scale-out behaviour of memfs.
+fn memfs_scale_out(c: &mut Criterion) {
+    const NOP: usize = 1000;
+    const WRITE_RATIO: usize = 10; //% out of 100
+
+    let ops = generate_fs_operations(NOP, WRITE_RATIO);
+
+    mkbench::ScaleBenchBuilder::<NrMemFilesystem>::new(ops)
+        .machine_defaults()
+        .configure(
+            c,
+            "memfs-scaleout",
+            |_cid, rid, _log, replica, ops, _batch_size| {
+                for op in ops {
+                    replica.execute(*op, rid);
+                }
+            },
+        );
 }
 
 criterion_group!(
     name = benches;
     config = Criterion::default().sample_size(10);
-    targets = memfs_single_threaded
+    targets = memfs_single_threaded, memfs_scale_out
 );
 
 criterion_main!(benches);

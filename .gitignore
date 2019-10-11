@@ -11,5 +11,5 @@ Cargo.lock
 
 .gdb_history
 .vscode
+*.code-workspace
 .DS_Store
-
