@@ -108,7 +108,7 @@ To run these benchmarks execute:
 ### MemFS [[src](benches/memfs.rs)]
 
 A benchmark to evaluate the performance of the NR library for file-system like
-operations, by using a simple in-memory file-system([[btfs](https://crates.io/crates/btfs)]).
+operations, by using a simple in-memory file-system ([btfs](https://crates.io/crates/btfs)).
 
 To run these benchmarks execute:
 `RUST_TEST_THREADS=1 cargo bench --bench memfs`
