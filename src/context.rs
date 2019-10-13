@@ -23,7 +23,7 @@ const MAX_PENDING_OPS: usize = 32;
 /// `R` is a type parameter required by the struct. It is the type on the result obtained
 /// when an operation is executed against the replica.
 #[repr(align(64))]
-#[derive(Default, Copy, Clone)]
+#[derive(Default)]
 pub struct Context<T, R>
 where
     T: Sized + Copy + Default,

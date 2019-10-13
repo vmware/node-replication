@@ -50,7 +50,7 @@ where
 
     /// Static array of thread contexts. Threads buffer operations in here when they
     /// cannot perform flat combining (because another thread might be doing so).
-    pub contexts: [Context<<D as Dispatch>::Operation, <D as Dispatch>::Response>;
+    contexts: [Context<<D as Dispatch>::Operation, <D as Dispatch>::Response>;
         MAX_THREADS_PER_REPLICA],
 
     /// A buffer of operations for flat combining. The combiner stages operations in
@@ -175,7 +175,7 @@ where
     ///
     /// # TODO
     /// Most likely not very safe (and currently only used for testing purposes).
-    pub unsafe fn data(self) -> D {
+    pub fn data(self) -> D {
         // Execute any operations on the shared log against this replica.
         let mut data = self.data.into_inner();
         let f = |o: <D as Dispatch>::Operation, _i: usize| { data.dispatch(o); };
@@ -261,20 +261,19 @@ mod test {
     extern crate std;
 
     use super::*;
-    use std::cell::Cell;
 
     // Really dumb data structure to test against the Replica and shared log.
     #[derive(Default)]
     struct Data {
-        junk: Cell<u64>,
+        junk: u64,
     }
 
     impl Dispatch for Data {
         type Operation = u64;
         type Response  = u64;
 
-        fn dispatch(&self, _op: Self::Operation) -> Self::Response {
-            self.junk.set(self.junk.get() + 1);
+        fn dispatch(&mut self, _op: Self::Operation) -> Self::Response {
+            self.junk += 1;
             return 107;
         }
     }
@@ -294,13 +293,13 @@ mod test {
         );
         assert_eq!(
             repl.inflight.borrow().len(),
-            Context::<u64, u64>::batch_size()
+            MAX_THREADS_PER_REPLICA
         );
         assert_eq!(
             repl.result.borrow().capacity(),
             MAX_THREADS_PER_REPLICA * Context::<u64, u64>::batch_size()
         );
-        assert_eq!(repl.data.junk.get(), 0);
+        assert_eq!(repl.data.borrow().junk, 0);
     }
 
     // Tests whether we can register with this replica and receive an idx.
@@ -361,7 +360,7 @@ mod test {
         repl.contexts[0].res(&mut r);
 
         assert_eq!(repl.combiner.load(Ordering::SeqCst), 0);
-        assert_eq!(repl.data.junk.get(), 1);
+        assert_eq!(repl.data.borrow().junk, 1);
         assert_eq!(r.len(), 1);
         assert_eq!(r[0], 107);
     }
@@ -378,7 +377,7 @@ mod test {
         repl.try_combine(1);
         repl.contexts[7].res(&mut r);
 
-        assert_eq!(repl.data.junk.get(), 1);
+        assert_eq!(repl.data.borrow().junk, 1);
         assert_eq!(r.len(), 1);
         assert_eq!(r[0], 107);
     }
@@ -396,7 +395,7 @@ mod test {
         repl.try_combine(1);
         repl.contexts[0].res(&mut r);
 
-        assert_eq!(repl.data.junk.get(), 0);
+        assert_eq!(repl.data.borrow().junk, 0);
         assert_eq!(r.len(), 0);
     }
 
@@ -409,7 +408,7 @@ mod test {
 
         repl.execute(121, 1);
 
-        assert_eq!(repl.data.junk.get(), 1);
+        assert_eq!(repl.data.borrow().junk, 1);
     }
 
     // Tests whether calling execute() when there already is a combiner makes the operation
@@ -426,7 +425,7 @@ mod test {
         assert_eq!(repl.contexts[0].ops(&mut o), 1);
         assert_eq!(o.len(), 1);
         assert_eq!(o[0],  121);
-        assert_eq!(repl.data.junk.get(), 0);
+        assert_eq!(repl.data.borrow().junk, 0);
     }
 
     // Tests whether get_responses() retrieves responses to an operation that was executed

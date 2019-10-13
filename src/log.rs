@@ -24,7 +24,7 @@ const MAX_REPLICAS: usize = 32;
 /// Constant required for garbage collection. When the tail and the head are
 /// these many entries apart on the circular buffer, garbage collection will
 /// be performed by one of the replicas registered with the log.
-const GC_FROM_HEAD: usize = 1024;
+const GC_FROM_HEAD: usize = 1024 * 4;
 
 /// An entry that sits on the log. Each entry consists of two fields: The operation to
 /// be performed when a thread reaches this entry on the log, and a flag indicating whether
