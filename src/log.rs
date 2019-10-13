@@ -33,6 +33,8 @@ const GC_FROM_HEAD: usize = 1024;
 /// `T` is the type on the operation - typically an enum class containing opcodes as well as
 /// arguments. It is required that this type be sized, copyable, and default constructable.
 ///
+/// `replica` identifies the replica that issued the above operation.
+///
 /// `alivef` indicates whether this entry represents a valid operation when on the log.
 #[derive(Clone, Copy, Default)]
 struct Entry<T>
@@ -41,22 +43,9 @@ where
 {
     operation: T,
 
-    alivef: bool,
-}
+    replica: usize,
 
-impl<T> Entry<T>
-where
-    T: Sized + Copy + Default,
-{
-    /// Given an operation (`op`), constructs and returns an entry that can go onto the shared log.
-    /// `alivef` is initialized to false. The caller will have to reset it appropriately based on
-    /// the mechanism used for garbage collection.
-    fn new(op: T) -> Entry<T> {
-        Entry {
-            operation: op,
-            alivef: false,
-        }
-    }
+    alivef: bool,
 }
 
 /// A log of operations that can be shared between multiple NUMA nodes.
@@ -206,7 +195,9 @@ where
 
     /// Adds a batch of operations to the shared log. If there isn't enough space
     /// to perform the append, this method busy waits until the head is advanced.
-    pub fn append(&self, ops: &[T]) {
+    /// Accepts a replica `idx`; all appended operations/entries will be marked
+    /// with this replica-identifier.
+    pub fn append(&self, ops: &[T], idx: usize) {
         let n = ops.len();
 
         // Keep trying to reserve entries and add operations to the log until
@@ -233,6 +224,7 @@ where
             for i in 0..n {
                 let e = self.slog[self.index(t + i)].as_ptr();
                 unsafe { (*e).operation = ops[i] };
+                unsafe { (*e).replica = idx };
                 compiler_fence(Ordering::AcqRel);
                 unsafe { (*e).alivef = self.mask.get() };
 
@@ -251,9 +243,9 @@ where
     /// a replica's local tail on the shared log. The replica is identified through an
     /// `idx` passed in as an argument.
     ///
-    /// The passed in closure is expected to take in one argument: The operation
-    /// from the shared log to be executed.
-    pub fn exec<F: FnMut(T)>(&self, idx: usize, mut d: F) {
+    /// The passed in closure is expected to take in two arguments: The operation
+    /// from the shared log to be executed and the replica that issued it.
+    pub fn exec<F: FnMut(T, usize)>(&self, idx: usize, mut d: F) {
         let t = self.tail.load(Ordering::SeqCst);
         let h = self.head.load(Ordering::SeqCst);
 
@@ -269,7 +261,9 @@ where
         for i in f..t {
             loop {
                 let e = self.slog[self.index(i)].get();
-                if e.alivef == self.lmasks[idx - 1].get() { d(e.operation) } else { continue };
+                if e.alivef != self.lmasks[idx - 1].get() { continue };
+
+                d(e.operation, e.replica);
                 break;
             }
 
@@ -316,21 +310,33 @@ where
         }
     }
 
-    /// Resets the log; *for testing only since we don't have GC*.
+    /// Resets the log. Required for microbenchmarking the log; with this method, we
+    /// can re-use the log across experimental runs without having to re-allocate the
+    /// log over and over again.
     ///
-    /// # TODO
-    /// Remove when we have GC.
+    /// *To be used for testing/benchmarking only, hence marked unsafe*. Before calling
+    /// this method, please make sure that there aren't any replicas/threads actively
+    /// issuing/executing operations to/from this log.
     #[inline(always)]
     pub unsafe fn reset(&self) {
-        for e in self.slog {
-            e.set(Entry::default());
+        // First, reset global metadata.
+        self.head.store(0, Ordering::SeqCst);
+        self.tail.store(0, Ordering::SeqCst);
+        self.next.store(1, Ordering::SeqCst);
+        self.mask.set(true);
+
+        // Next, reset replica-local metadata.
+        for r in 0..MAX_REPLICAS {
+            self.ltails[r].store(0, Ordering::SeqCst);
+            self.lmasks[r].set(true);
         }
 
-        let t = self.tail.load(Ordering::SeqCst);
-        let h = self.head.load(Ordering::SeqCst);
-
-        self.tail.compare_and_swap(t, 0, Ordering::SeqCst);
-        self.head.compare_and_swap(h, 0, Ordering::SeqCst);
+        // Next, free up all log entries. Use pointers to avoid memcpy and speed up
+        // the reset of the log here.
+        for i in 0..self.size {
+            let e = self.slog[self.index(i)].as_ptr();
+            (*e).alivef = false;
+        }
     }
 }
 
@@ -382,36 +388,19 @@ mod tests {
         }
     }
 
-    // Test that we can construct entries correctly. The type `T` is deliberately
-    // kept simple for this unit test.
-    #[test]
-    fn test_entry_create_basic() {
-        let e: Entry<u64> = Entry::new(121);
-        assert_eq!(e.operation, 121);
-        assert_eq!(e.alivef, false);
-    }
-
-    // Test that we can construct entries correctly. Use a richer type for T
-    // in this unit test.
-    #[test]
-    fn test_entry_create() {
-        let e = Entry::<Operation>::new(Operation::Write(121));
-        assert_eq!(e.operation, Operation::Write(121));
-        assert_eq!(e.alivef, false);
-    }
-
     // Test that we can default construct entries correctly.
     #[test]
     fn test_entry_create_default() {
         let e = Entry::<Operation>::default();
         assert_eq!(e.operation, Operation::default());
+        assert_eq!(e.replica, 0);
         assert_eq!(e.alivef, false);
     }
 
     // Test that our entry_size() method returns the correct size.
     #[test]
     fn test_log_entry_size() {
-        assert_eq!(Log::<Operation>::entry_size(), 24);
+        assert_eq!(Log::<Operation>::entry_size(), 32);
     }
 
     // Tests if a small log can be correctly constructed.
@@ -461,7 +450,7 @@ mod tests {
     // Tests if we can correctly index into the shared log.
     #[test]
     fn test_log_index() {
-        let l = Log::<Operation>::new(2400);
+        let l = Log::<Operation>::new(3200);
         assert_eq!(l.index(104), 4);
     }
 
@@ -487,11 +476,12 @@ mod tests {
     fn test_log_append() {
         let l = Log::<Operation>::default();
         let o = [Operation::Read];
-        l.append(&o);
+        l.append(&o, 1);
 
         assert_eq!(l.head.load(Ordering::Relaxed), 0);
         assert_eq!(l.tail.load(Ordering::Relaxed), 1);
         assert_eq!(l.slog[0].get().operation, Operation::Read);
+        assert_eq!(l.slog[0].get().replica, 1);
     }
 
     // Test that multiple entries can be appended to the log.
@@ -499,7 +489,7 @@ mod tests {
     fn test_log_append_multiple() {
         let l = Log::<Operation>::default();
         let o = [Operation::Read, Operation::Write(119)];
-        l.append(&o);
+        l.append(&o, 1);
 
         assert_eq!(l.head.load(Ordering::Relaxed), 0);
         assert_eq!(l.tail.load(Ordering::Relaxed), 2);
@@ -529,7 +519,7 @@ mod tests {
         l.next.store(2, Ordering::Relaxed);
         l.tail.store(l.size - GC_FROM_HEAD - 1, Ordering::Relaxed);
         l.ltails[0].store(1024, Ordering::Relaxed);
-        l.append(&o);
+        l.append(&o, 1);
 
         assert_eq!(l.head.load(Ordering::Relaxed), 1024);
         assert_eq!(l.tail.load(Ordering::Relaxed), l.size - GC_FROM_HEAD + 3);
@@ -545,7 +535,7 @@ mod tests {
         l.next.store(2, Ordering::Relaxed);
         l.head.store(4096, Ordering::Relaxed);
         l.tail.store(l.size - 10, Ordering::Relaxed);
-        l.append(&o);
+        l.append(&o, 1);
 
         assert_eq!(l.mask.get(), false);
         assert_eq!(l.lmasks[0].get(), true);
@@ -557,11 +547,12 @@ mod tests {
     fn test_log_exec() {
         let l = Log::<Operation>::default();
         let o = [Operation::Read];
-        let f = |op: Operation| {
+        let f = |op: Operation, i: usize| {
             assert_eq!(op, Operation::Read);
+            assert_eq!(i, 1);
         };
 
-        l.append(&o);
+        l.append(&o, 1);
         l.exec(1, f);
     }
 
@@ -569,7 +560,7 @@ mod tests {
     #[test]
     fn test_log_exec_empty() {
         let l = Log::<Operation>::default();
-        let f = |_op: Operation| {
+        let f = |_o: Operation, _i: usize| {
             assert!(false);
         };
 
@@ -581,14 +572,15 @@ mod tests {
     fn test_log_exec_zero() {
         let l = Log::<Operation>::default();
         let o = [Operation::Read];
-        let f = |op: Operation| {
+        let f = |op: Operation, i: usize| {
             assert_eq!(op, Operation::Read);
+            assert_eq!(i, 1);
         };
-        let g = |_op: Operation| {
+        let g = |_op: Operation, _i: usize| {
             assert!(false);
         };
 
-        l.append(&o);
+        l.append(&o, 1);
         l.exec(1, f);
         l.exec(1, g);
     }
@@ -599,13 +591,13 @@ mod tests {
         let l = Log::<Operation>::default();
         let o = [Operation::Read, Operation::Write(119)];
         let mut s = 0;
-        let f = |op: Operation| match op {
+        let f = |op: Operation, _i: usize| match op {
             Operation::Read => s += 121,
             Operation::Write(v) => s += v,
             Operation::Invalid => assert!(false),
         };
 
-        l.append(&o);
+        l.append(&o, 1);
         l.exec(1, f);
         assert_eq!(s, 240);
     }
@@ -616,14 +608,15 @@ mod tests {
     fn test_log_exec_wrap() {
         let l = Log::<Operation>::default();
         let o = [Operation::Read; 1024];
-        let f = |op: Operation| {
+        let f = |op: Operation, i: usize| {
             assert_eq!(op, Operation::Read);
+            assert_eq!(i, 1);
         };
 
         l.next.store(2, Ordering::SeqCst);
         l.head.store(4096, Ordering::SeqCst);
         l.tail.store(l.size - 10, Ordering::SeqCst);
-        l.append(&o);
+        l.append(&o, 1);
 
         l.ltails[0].store(l.size - 10, Ordering::SeqCst);
         l.exec(1, f);

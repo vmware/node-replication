@@ -85,6 +85,7 @@ fn sequential_test() {
 
     let r = Replica::<Stack>::new(&log);
     let idx = r.register().expect("Failed to register with Replica.");
+    let mut o = vec![];
     let mut correct_stack: Vec<u32> = Vec::new();
     let mut correct_popped: Vec<Option<u32>> = Vec::new();
 
@@ -92,6 +93,8 @@ fn sequential_test() {
     for _i in 0..50 {
         let element = orng.gen();
         r.execute(Op::Push(element), idx);
+        r.get_responses(idx, &mut o);
+        o.clear();
         correct_stack.push(element);
     }
 
@@ -109,6 +112,8 @@ fn sequential_test() {
             }
             _ => unreachable!(),
         }
+        r.get_responses(idx, &mut o);
+        o.clear();
     }
 
     unsafe {
@@ -224,11 +229,14 @@ fn parallel_push_sequential_pop_test() {
                 let idx = replica
                     .register()
                     .expect("Failed to register with replica.");
+                let mut o = vec![];
 
                 // 1. Insert phase
                 b.wait();
                 for i in 0..nop {
                     replica.execute(Op::Push((i as u32) << 16 | tid), idx);
+                    while replica.get_responses(idx, &mut o) == 0 {};
+                    o.clear();
                 }
             });
             threads.push(child);
@@ -246,9 +254,12 @@ fn parallel_push_sequential_pop_test() {
     // Verify by popping everything off all replicas:
     for i in 0..r {
         let replica = replicas[i].clone();
+        let mut o = vec![];
         for _j in 0..t {
             for _z in 0..nop {
                 replica.execute(Op::Pop, 1);
+                replica.get_responses(1, &mut o);
+                o.clear();
             }
         }
     }
@@ -286,17 +297,22 @@ fn parallel_push_and_pop_test() {
                 let idx = replica
                     .register()
                     .expect("Failed to register with replica.");
+                let mut o = vec![];
 
                 // 1. Insert phase
                 b.wait();
                 for i in 0..nop {
                     replica.execute(Op::Push((i as u32) << 16 | tid), idx);
+                    while replica.get_responses(idx, &mut o) == 0 {};
+                    o.clear();
                 }
 
                 // 2. Dequeue phase, verification
                 b.wait();
                 for _i in 0..nop {
                     replica.execute(Op::Pop, idx);
+                    while replica.get_responses(idx, &mut o) == 0 {};
+                    o.clear();
                 }
             });
             threads.push(child);
@@ -315,6 +331,7 @@ fn parallel_push_and_pop_test() {
 fn bench(r: Arc<Replica<Stack>>, nop: usize, barrier: Arc<Barrier>) -> (u64, u64) {
     let idx = r.register().expect("Failed to register with Replica.");
 
+    let mut o = vec![];
     let mut orng = thread_rng();
     let mut arng = thread_rng();
 
@@ -331,6 +348,8 @@ fn bench(r: Arc<Replica<Stack>>, nop: usize, barrier: Arc<Barrier>) -> (u64, u64
 
     for i in 0..nop {
         r.execute(ops[i], idx);
+        while r.get_responses(idx, &mut o) == 0 {};
+        o.clear();
     }
 
     barrier.wait();

@@ -241,7 +241,7 @@ fn log_exec(iters: u64, thread_num: usize, operations: &Arc<Vec<Opcode>>) -> Dur
     // Our strategy on how we pin the threads to cores
     let mapping = utils::MappingStrategy::Identity;
 
-    let log = Arc::new(Log::<Opcode>::new(1024 * 1024 * 1024 * 4));
+    let log = Arc::new(Log::<Opcode>::new(1024 * 1024 * 16));
     let replica = Arc::new(Replica::<BespinDispatcher>::new(&log));
 
     // Spawn some load generator threads
@@ -255,12 +255,15 @@ fn log_exec(iters: u64, thread_num: usize, operations: &Arc<Vec<Opcode>>) -> Dur
             let idx = replica
                 .register()
                 .expect("Failed to register with Replica.");
+            let mut r = vec![];
             for _i in 0..iters {
                 os_workload::kcb::set_kcb();
                 c.wait();
                 for op in ops.iter() {
                     assert_ne!(*op, Default::default());
                     replica.execute(fix_op(op), idx);
+                    while replica.get_responses(idx, &mut r) == 0 {};
+                    r.clear();
                 }
                 c.wait();
                 os_workload::kcb::drop_kcb();
@@ -276,6 +279,7 @@ fn log_exec(iters: u64, thread_num: usize, operations: &Arc<Vec<Opcode>>) -> Dur
     let idx = replica
         .register()
         .expect("Failed to register with Replica.");
+    let mut r = vec![];
 
     // Measure on our base thread
     let mut elapsed = Duration::new(0, 0);
@@ -287,6 +291,12 @@ fn log_exec(iters: u64, thread_num: usize, operations: &Arc<Vec<Opcode>>) -> Dur
         for op in operations.iter() {
             assert_ne!(*op, Default::default());
             replica.execute(fix_op(op), idx);
+            let mut n = 1000000;
+            while replica.get_responses(idx, &mut r) == 0 {
+                if n == 0 { println!("{} {} {}", replica.contexts[idx - 1].tail.get(), replica.contexts[idx - 1].head.get(), replica.contexts[idx - 1].comb.get()) };
+                n -= 1;
+            }
+            r.clear();
         }
         c.wait();
         elapsed = elapsed + start.elapsed();
@@ -483,7 +493,7 @@ fn generic_log_bench(
 
 fn scale_log(log: &Arc<Log<usize>>, ops: &Arc<Vec<usize>>, batch: usize) {
     for batch_op in ops.rchunks(batch) {
-        log.append(batch_op);
+        log.append(batch_op, 1);
     }
 }
 
@@ -522,7 +532,7 @@ criterion_group!(osbench, node_replication_benchmark);
 criterion_group!(logscale, log_scale_bench);
 criterion_group!(
     name = logbench;
-    config = Criterion::default().sample_size(10);
+    config = Criterion::default().sample_size(100);
     targets = log_overhead
 );
 criterion_main!(osbench, logbench, logscale);
