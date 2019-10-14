@@ -9,7 +9,7 @@ use core::fmt;
 use core::mem::{align_of, size_of};
 use core::ops::{Drop, FnMut};
 use core::slice::from_raw_parts_mut;
-use core::sync::atomic::{AtomicUsize, Ordering, compiler_fence};
+use core::sync::atomic::{compiler_fence, AtomicUsize, Ordering};
 
 use crossbeam_utils::CachePadded;
 
@@ -37,6 +37,7 @@ const GC_FROM_HEAD: usize = 1024 * 4;
 ///
 /// `alivef` indicates whether this entry represents a valid operation when on the log.
 #[derive(Clone, Copy, Default)]
+#[repr(align(64))]
 struct Entry<T>
 where
     T: Sized + Copy + Default,
@@ -156,7 +157,9 @@ where
         }
 
         let fls: [CachePadded<Cell<bool>>; MAX_REPLICAS] = Default::default();
-        for idx in 0..MAX_REPLICAS { fls[idx].set(true) };
+        for idx in 0..MAX_REPLICAS {
+            fls[idx].set(true)
+        }
 
         Log {
             rawp: mem,
@@ -185,9 +188,13 @@ where
             let n = self.next.load(Ordering::SeqCst);
 
             // Check if we've exceeded the maximum number of replicas the log can support.
-            if n >= MAX_REPLICAS { return None };
+            if n >= MAX_REPLICAS {
+                return None;
+            };
 
-            if self.next.compare_and_swap(n, n + 1, Ordering::SeqCst) != n { continue };
+            if self.next.compare_and_swap(n, n + 1, Ordering::SeqCst) != n {
+                continue;
+            };
 
             return Some(n);
         }
@@ -209,16 +216,22 @@ where
             // If there are fewer than `GC_FROM_HEAD` entries on the log, then just
             // try again. The replica that reserved entry (h + self.size - GC_FROM_HEAD)
             // is currently trying to advance the head of the log.
-            if t > h + self.size - GC_FROM_HEAD { continue };
+            if t > h + self.size - GC_FROM_HEAD {
+                continue;
+            };
 
             // If on adding in the above entries there would be fewer than `GC_FROM_HEAD`
             // entries left on the log, then we need to advance the head of the log.
             let mut advance = false;
-            if t + n > h + self.size - GC_FROM_HEAD { advance = true };
+            if t + n > h + self.size - GC_FROM_HEAD {
+                advance = true
+            };
 
             // Try reserving slots for the operations. If that fails, then restart
             // from the beginning of this loop.
-            if self.tail.compare_and_swap(t, t + n, Ordering::SeqCst) != t { continue };
+            if self.tail.compare_and_swap(t, t + n, Ordering::SeqCst) != t {
+                continue;
+            };
 
             // Successfully reserved entries on the shared log. Add the operations in.
             for i in 0..n {
@@ -230,11 +243,15 @@ where
 
                 // We just filled up the last entry in the circular array. Time to flip
                 // what it means for an entry to be alive/dead on the log.
-                if self.index(t + i) == self.size - 1 { self.mask.set(!self.mask.get()) };
-            };
+                if self.index(t + i) == self.size - 1 {
+                    self.mask.set(!self.mask.get())
+                };
+            }
 
             // If needed, advance the head of the log forward to make room on the log.
-            if advance { self.advance_head() };
+            if advance {
+                self.advance_head()
+            };
             return;
         }
     }
@@ -253,7 +270,9 @@ where
         let f = self.ltails[idx - 1].load(Ordering::SeqCst);
 
         // Make sure we're within the shared log. If we aren't, then panic.
-        if f > t || f < h { panic!("Local tail not within the shared log!") };
+        if f > t || f < h {
+            panic!("Local tail not within the shared log!")
+        };
 
         // Execute all operations from the passed in offset to the shared log's tail. Check if
         // the entry is live first; we could have a replica that has reserved entries, but not
@@ -261,7 +280,9 @@ where
         for i in f..t {
             loop {
                 let e = self.slog[self.index(i)].get();
-                if e.alivef != self.lmasks[idx - 1].get() { continue };
+                if e.alivef != self.lmasks[idx - 1].get() {
+                    continue;
+                };
 
                 d(e.operation, e.replica);
                 break;
@@ -269,7 +290,9 @@ where
 
             // Looks like this replica's local tail is going to wrap around. Time to flip
             // the replica's understanding of what it means for an entry to be alive/dead.
-            if self.index(i) == self.size - 1 { self.lmasks[idx - 1].set(!self.lmasks[idx - 1].get()) };
+            if self.index(i) == self.size - 1 {
+                self.lmasks[idx - 1].set(!self.lmasks[idx - 1].get())
+            };
         }
 
         // Update the replica's local tail.
@@ -297,12 +320,16 @@ where
             // Find the smallest local tail across all replicas.
             for idx in 1..r {
                 let t = self.ltails[idx - 1].load(Ordering::SeqCst);
-                if n > t { n = t };
+                if n > t {
+                    n = t
+                };
             }
 
             // If we cannot advance the head further, then start
             // from the beginning of this loop again.
-            if n == h { continue };
+            if n == h {
+                continue;
+            };
 
             // There are entries that can be freed up; update the head offset.
             self.head.store(n, Ordering::SeqCst);
@@ -400,7 +427,7 @@ mod tests {
     // Test that our entry_size() method returns the correct size.
     #[test]
     fn test_log_entry_size() {
-        assert_eq!(Log::<Operation>::entry_size(), 32);
+        assert_eq!(Log::<Operation>::entry_size(), 64);
     }
 
     // Tests if a small log can be correctly constructed.
@@ -502,9 +529,9 @@ mod tests {
 
         l.next.store(5, Ordering::Relaxed);
         l.ltails[0].store(1023, Ordering::Relaxed);
-        l.ltails[1].store( 224, Ordering::Relaxed);
+        l.ltails[1].store(224, Ordering::Relaxed);
         l.ltails[2].store(4096, Ordering::Relaxed);
-        l.ltails[3].store( 799, Ordering::Relaxed);
+        l.ltails[3].store(799, Ordering::Relaxed);
 
         l.advance_head();
         assert_eq!(l.head.load(Ordering::Relaxed), 224);

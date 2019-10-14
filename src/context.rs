@@ -62,7 +62,9 @@ where
 
         // Check if we have space in the batch to hold this operation. If we don't, then
         // return false to the caller thread.
-        if t - h == MAX_PENDING_OPS { return false };
+        if t - h == MAX_PENDING_OPS {
+            return false;
+        };
 
         // Add in the operation to the batch. Once added, update the tail so that the
         // combiner sees this operation. Relying on TSO here to make sure that the tail
@@ -82,7 +84,9 @@ where
         let n = responses.len();
 
         // Empty slice passed in; no work to do, so simply return.
-        if n == 0 { return };
+        if n == 0 {
+            return;
+        };
 
         // Starting from `comb`, write all responses into the batch. Assume here that
         // the slice above doesn't cause us to cross the tail of the batch.
@@ -101,13 +105,17 @@ where
         let t = self.tail.get();
 
         // No operations on this thread; return to the caller indicating so.
-        if h == t { return 0 };
+        if h == t {
+            return 0;
+        };
 
         // Iterate from `comb` to `tail`, adding pending operations into the
         // passed in buffer. Return the number of operations that were added.
         let mut n = 0;
         loop {
-            if h == t { break };
+            if h == t {
+                break;
+            };
 
             buffer.push(self.batch[self.index(h)].get().0);
             h += 1;
@@ -123,12 +131,16 @@ where
         let f = self.comb.get();
 
         // No responses ready yet; return to the caller.
-        if s == f { return };
+        if s == f {
+            return;
+        };
 
         // Iterate from `head` to `comb`, adding responses into the passed in buffer.
         // Once we're done, update `head` to the value of `comb` we read above.
         loop {
-            if s == f { break };
+            if s == f {
+                break;
+            };
 
             buffer.push(self.batch[self.index(s)].get().1);
             s += 1;
@@ -197,7 +209,7 @@ mod test {
         c.enqueue_resps(&r);
 
         assert_eq!(c.tail.get(), 16);
-        assert_eq!(c.head.get(),  0);
+        assert_eq!(c.head.get(), 0);
         assert_eq!(c.comb.get(), 16);
 
         assert_eq!(c.batch[12].get().1, 11);
@@ -218,7 +230,7 @@ mod test {
         c.enqueue_resps(&r);
 
         assert_eq!(c.tail.get(), 16);
-        assert_eq!(c.head.get(),  0);
+        assert_eq!(c.head.get(), 0);
         assert_eq!(c.comb.get(), 12);
     }
 
@@ -228,7 +240,9 @@ mod test {
         let c = Context::<usize, usize>::default();
         let mut o = vec![];
 
-        for idx in 0..MAX_PENDING_OPS / 2 { assert!(c.enqueue(idx * idx)) };
+        for idx in 0..MAX_PENDING_OPS / 2 {
+            assert!(c.enqueue(idx * idx))
+        }
 
         assert_eq!(c.ops(&mut o), MAX_PENDING_OPS / 2);
         assert_eq!(o.len(), MAX_PENDING_OPS / 2);
@@ -236,7 +250,9 @@ mod test {
         assert_eq!(c.head.get(), 0);
         assert_eq!(c.comb.get(), 0);
 
-        for idx in 0..MAX_PENDING_OPS / 2 { assert_eq!(o[idx], idx * idx) };
+        for idx in 0..MAX_PENDING_OPS / 2 {
+            assert_eq!(o[idx], idx * idx)
+        }
     }
 
     // Tests whether ops() returns nothing when we don't have any pending operations.
@@ -267,8 +283,8 @@ mod test {
         c.res(&mut o);
 
         assert_eq!(c.tail.get(), 16);
-        assert_eq!(c.head.get(),  4);
-        assert_eq!(c.comb.get(),  4);
+        assert_eq!(c.head.get(), 4);
+        assert_eq!(c.comb.get(), 4);
 
         assert_eq!(o.len(), 4);
         assert_eq!(&o[..], r);

@@ -124,14 +124,20 @@ fn main() {
 
     if let Builder::Stack(b) = builder {
         b.configure(&mut c, ds, |_cid, rid, _log, replica, ops, _batch_size| {
+            let mut o = vec![];
             for op in ops {
                 replica.execute(*op, rid);
+                while replica.get_responses(rid, &mut o) == 0 {}
+                o.clear();
             }
         });
     } else if let Builder::Synthetic(b) = builder {
         b.configure(&mut c, ds, |_cid, rid, _log, replica, ops, _batch_size| {
+            let mut o = vec![];
             for op in ops {
                 replica.execute(*op, rid);
+                while replica.get_responses(rid, &mut o) == 0 {}
+                o.clear();
             }
         });
     } else {

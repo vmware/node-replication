@@ -4,7 +4,7 @@
 extern crate rand;
 extern crate std;
 
-use std::cell::RefCell;
+use std::cell::{RefCell, RefMut};
 use std::collections::HashMap;
 use std::sync::{Arc, Barrier};
 use std::thread;
@@ -116,11 +116,11 @@ fn sequential_test() {
         o.clear();
     }
 
-    unsafe {
-        let s = r.data();
-        assert_eq!(correct_popped, s.popped, "Pop operation error detected");
-        assert_eq!(correct_stack, s.storage, "Push operation error detected");
-    }
+    let v = |data: RefMut<Stack>| {
+        assert_eq!(correct_popped, data.popped, "Pop operation error detected");
+        assert_eq!(correct_stack, data.storage, "Push operation error detected");
+    };
+    r.verify(v);
 }
 
 /// A stack to verify that the log works correctly with multiple threads.
@@ -235,7 +235,7 @@ fn parallel_push_sequential_pop_test() {
                 b.wait();
                 for i in 0..nop {
                     replica.execute(Op::Push((i as u32) << 16 | tid), idx);
-                    while replica.get_responses(idx, &mut o) == 0 {};
+                    while replica.get_responses(idx, &mut o) == 0 {}
                     o.clear();
                 }
             });
@@ -303,7 +303,7 @@ fn parallel_push_and_pop_test() {
                 b.wait();
                 for i in 0..nop {
                     replica.execute(Op::Push((i as u32) << 16 | tid), idx);
-                    while replica.get_responses(idx, &mut o) == 0 {};
+                    while replica.get_responses(idx, &mut o) == 0 {}
                     o.clear();
                 }
 
@@ -311,7 +311,7 @@ fn parallel_push_and_pop_test() {
                 b.wait();
                 for _i in 0..nop {
                     replica.execute(Op::Pop, idx);
-                    while replica.get_responses(idx, &mut o) == 0 {};
+                    while replica.get_responses(idx, &mut o) == 0 {}
                     o.clear();
                 }
             });
@@ -348,7 +348,7 @@ fn bench(r: Arc<Replica<Stack>>, nop: usize, barrier: Arc<Barrier>) -> (u64, u64
 
     for i in 0..nop {
         r.execute(ops[i], idx);
-        while r.get_responses(idx, &mut o) == 0 {};
+        while r.get_responses(idx, &mut o) == 0 {}
         o.clear();
     }
 
@@ -396,13 +396,22 @@ fn replicas_are_equal() {
             .expect("Thread didn't finish successfully.");
     }
 
-    unsafe {
-        let s0 = Arc::try_unwrap(replicas.pop().unwrap()).unwrap().data();
-        let s1 = Arc::try_unwrap(replicas.pop().unwrap()).unwrap().data();
-        assert_eq!(s0.storage, s1.storage, "Data-structures don't match.");
-        assert_eq!(
-            s0.popped, s1.popped,
-            "Removed elements in each replica dont match."
-        );
-    }
+    let mut d0 = vec![];
+    let mut p0 = vec![];
+    let v = |data: RefMut<Stack>| {
+        d0.extend_from_slice(&data.storage);
+        p0.extend_from_slice(&data.popped);
+    };
+    replicas[0].verify(v);
+
+    let mut d1 = vec![];
+    let mut p1 = vec![];
+    let v = |data: RefMut<Stack>| {
+        d1.extend_from_slice(&data.storage);
+        p1.extend_from_slice(&data.popped);
+    };
+    replicas[1].verify(v);
+
+    assert_eq!(d0, d1, "Data-structures don't match.");
+    assert_eq!(p0, p1, "Removed elements in each replica dont match.");
 }

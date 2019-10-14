@@ -1,7 +1,7 @@
 // Copyright © 2019 VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use core::cell::{RefCell};
+use core::cell::{RefCell, RefMut};
 use core::mem::transmute;
 use core::sync::atomic::{spin_loop_hint, AtomicUsize, Ordering};
 
@@ -50,8 +50,8 @@ where
 
     /// Static array of thread contexts. Threads buffer operations in here when they
     /// cannot perform flat combining (because another thread might be doing so).
-    contexts: [Context<<D as Dispatch>::Operation, <D as Dispatch>::Response>;
-        MAX_THREADS_PER_REPLICA],
+    contexts:
+        [Context<<D as Dispatch>::Operation, <D as Dispatch>::Response>; MAX_THREADS_PER_REPLICA],
 
     /// A buffer of operations for flat combining. The combiner stages operations in
     /// here and then batch appends them into the shared log. This helps amortize
@@ -128,9 +128,13 @@ where
         loop {
             let idx = self.next.load(Ordering::SeqCst);
 
-            if idx > MAX_THREADS_PER_REPLICA { return None };
+            if idx > MAX_THREADS_PER_REPLICA {
+                return None;
+            };
 
-            if self.next.compare_and_swap(idx, idx + 1, Ordering::SeqCst) != idx { continue };
+            if self.next.compare_and_swap(idx, idx + 1, Ordering::SeqCst) != idx {
+                continue;
+            };
 
             return Some(idx);
         }
@@ -142,11 +146,7 @@ where
     ///
     /// In addition to the supplied operation, this method might execute operations that were
     /// received on a different replica and appended to the shared log.
-    pub fn execute(
-        &self,
-        op: <D as Dispatch>::Operation,
-        idx: usize,
-    ) {
+    pub fn execute(&self, op: <D as Dispatch>::Operation, idx: usize) {
         // Enqueue the operation onto the thread local batch and then try to flat combine.
         while !self.make_pending(op, idx) {}
         self.try_combine(idx);
@@ -154,11 +154,7 @@ where
 
     /// Appends any pending responses to operations issued by this thread into a passed in
     /// buffer/vector. Returns the number of responses that were appended.
-    pub fn get_responses(
-        &self,
-        idx: usize,
-        buf: &mut Vec<<D as Dispatch>::Response>,
-    ) -> usize {
+    pub fn get_responses(&self, idx: usize, buf: &mut Vec<<D as Dispatch>::Response>) -> usize {
         // Try to flat combine first. This helps avoid starvation.
         self.try_combine(idx);
 
@@ -169,20 +165,28 @@ where
         next - prev
     }
 
-    /// Consume the replica and return the underlying replicated data structure.
-    ///
-    /// This also makes sure we have applied all updates from the log before returning.
-    ///
-    /// # TODO
-    /// Most likely not very safe (and currently only used for testing purposes).
-    pub fn data(self) -> D {
-        // Execute any operations on the shared log against this replica.
-        let mut data = self.data.into_inner();
-        let f = |o: <D as Dispatch>::Operation, _i: usize| { data.dispatch(o); };
+    /// Executes a passed in closure against the replica's underlying underlying data
+    /// structure. Useful for unit testing; can be used to verify certain properties
+    /// of the data structure after issuing a bunch of operations against it.
+    pub fn verify<F: FnMut(RefMut<D>)>(&self, mut v: F) {
+        // Acquire the combiner lock before attempting anything on the data structure.
+        // Use an idx greater than the maximum that can be allocated.
+        while self
+            .combiner
+            .compare_and_swap(0, MAX_THREADS_PER_REPLICA + 2, Ordering::Acquire)
+            != 0
+        {}
+
+        let mut data = self.data.borrow_mut();
+        let f = |o: <D as Dispatch>::Operation, _i: usize| {
+            data.dispatch(o);
+        };
 
         self.slog.exec(self.idx, f);
 
-        data
+        v(data);
+
+        self.combiner.store(0, Ordering::Release);
     }
 
     /// Enqueues an operation inside a thread local context. Returns a boolean
@@ -198,9 +202,13 @@ where
         // First, check if there already is a flat combiner. If there is no active flat combiner
         // then try to acquire the combiner lock. If there is, then just return.
         let mut combine = 0;
-        for _i in 0..4 { combine += unsafe { transmute::<&AtomicUsize, &usize>(&self.combiner) } };
+        for _i in 0..4 {
+            combine += unsafe { transmute::<&AtomicUsize, &usize>(&self.combiner) }
+        }
 
-        if combine != 0 { return };
+        if combine != 0 {
+            return;
+        };
 
         // Try to become the combiner here. If this fails, then simply return.
         if self.combiner.compare_and_swap(0, tid, Ordering::Acquire) != 0 {
@@ -230,7 +238,9 @@ where
         let n = self.next.load(Ordering::SeqCst);
 
         // Collect operations from each thread registered with this replica.
-        for i in 1..n { o[i - 1] = self.contexts[i - 1].ops(&mut b) };
+        for i in 1..n {
+            o[i - 1] = self.contexts[i - 1].ops(&mut b)
+        }
 
         // Append all collected operations into the shared log.
         self.slog.append(&b, self.idx);
@@ -239,14 +249,18 @@ where
         let mut data = self.data.borrow_mut();
         let f = |o: <D as Dispatch>::Operation, i: usize| {
             let resp = data.dispatch(o);
-            if i == self.idx { r.push(resp) };
+            if i == self.idx {
+                r.push(resp)
+            };
         };
         self.slog.exec(self.idx, f);
 
         // Return/Enqueue responses back into the appropriate thread context(s).
         let (mut s, mut f) = (0, 0);
         for i in 1..n {
-            if o[i - 1] == 0 { continue };
+            if o[i - 1] == 0 {
+                continue;
+            };
 
             f += o[i - 1];
             self.contexts[i - 1].enqueue_resps(&r[s..f]);
@@ -270,7 +284,7 @@ mod test {
 
     impl Dispatch for Data {
         type Operation = u64;
-        type Response  = u64;
+        type Response = u64;
 
         fn dispatch(&mut self, _op: Self::Operation) -> Self::Response {
             self.junk += 1;
@@ -291,10 +305,7 @@ mod test {
             repl.buffer.borrow().capacity(),
             MAX_THREADS_PER_REPLICA * Context::<u64, u64>::batch_size()
         );
-        assert_eq!(
-            repl.inflight.borrow().len(),
-            MAX_THREADS_PER_REPLICA
-        );
+        assert_eq!(repl.inflight.borrow().len(), MAX_THREADS_PER_REPLICA);
         assert_eq!(
             repl.result.borrow().capacity(),
             MAX_THREADS_PER_REPLICA * Context::<u64, u64>::batch_size()
@@ -342,7 +353,9 @@ mod test {
     fn test_replica_make_pending_false() {
         let slog = Arc::new(Log::<<Data as Dispatch>::Operation>::new(1024));
         let repl = Replica::<Data>::new(&slog);
-        for _i in 0..Context::<u64, u64>::batch_size() { assert!(repl.make_pending(121, 1)) };
+        for _i in 0..Context::<u64, u64>::batch_size() {
+            assert!(repl.make_pending(121, 1))
+        }
 
         assert!(!repl.make_pending(11, 1));
     }
@@ -424,7 +437,7 @@ mod test {
 
         assert_eq!(repl.contexts[0].ops(&mut o), 1);
         assert_eq!(o.len(), 1);
-        assert_eq!(o[0],  121);
+        assert_eq!(o[0], 121);
         assert_eq!(repl.data.borrow().junk, 0);
     }
 

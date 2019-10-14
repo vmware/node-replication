@@ -333,7 +333,7 @@ fn generate_fs_operations(nop: usize, write_ratio: usize) -> Vec<Operation> {
 
 fn memfs_single_threaded(c: &mut Criterion) {
     env_logger::init();
-    const LOG_SIZE_BYTES: usize = 4 * 1024 * 1024 * 1024;
+    const LOG_SIZE_BYTES: usize = 1 * 1024 * 1024 * 1024;
     const NOP: usize = 1000;
     const WRITE_RATIO: usize = 10; //% out of 100
 
@@ -354,8 +354,11 @@ fn memfs_scale_out(c: &mut Criterion) {
             c,
             "memfs-scaleout",
             |_cid, rid, _log, replica, ops, _batch_size| {
+                let mut o = vec![];
                 for op in ops {
                     replica.execute(*op, rid);
+                    while replica.get_responses(rid, &mut o) == 0 {}
+                    o.clear();
                 }
             },
         );
