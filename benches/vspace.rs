@@ -199,8 +199,7 @@ fn parse_syscall_trace(file: &str) -> io::Result<Vec<Opcode>> {
 /// and then replays them using on our `os_workload` implementation
 /// of a syscall handler code.
 fn bespin_vspace_single_threaded(c: &mut Criterion) {
-    // Use a 10 GiB log size
-    const LOG_SIZE_BYTES: usize = 10 * 1024 * 1024 * 1024;
+    const LOG_SIZE_BYTES: usize = 12 * 1024 * 1024;
 
     let ops = parse_syscall_trace("benches/os_workload/bsd_init.log").unwrap();
     mkbench::baseline_comparison::<BespinDispatcher>(c, "vspace", ops, LOG_SIZE_BYTES);
@@ -209,8 +208,7 @@ fn bespin_vspace_single_threaded(c: &mut Criterion) {
 /// A simple benchmark that takes a bunch of syscall operations
 /// and replays them on our OS as a apples-to-oranges comparison
 fn posix_vspace_single_threaded(c: &mut Criterion) {
-    // Use a 10 GiB log size
-    const LOG_SIZE_BYTES: usize = 10 * 1024 * 1024 * 1024;
+    const LOG_SIZE_BYTES: usize = 12 * 1024 * 1024;
 
     let ops = parse_syscall_trace("benches/os_workload/bsd_init.log").unwrap();
     mkbench::baseline_comparison::<PosixDispatcher>(c, "posix-vspace", ops, LOG_SIZE_BYTES);
@@ -220,12 +218,7 @@ fn vspace_scale_out(c: &mut Criterion) {
     let ops = parse_syscall_trace("benches/os_workload/bsd_init.log").unwrap();
 
     mkbench::ScaleBenchBuilder::<BespinDispatcher>::new(ops)
-        //.machine_defaults()
-        .replica_strategy(ReplicaStrategy::One)
-        .thread_mapping(ThreadMapping::Sequential)
-        .threads(1)
-        .threads(4)
-        .threads(8)
+        .machine_defaults()
         .configure(
             c,
             "vspace-scaleout",

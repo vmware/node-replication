@@ -415,9 +415,6 @@ where
             }
         }
 
-        // TODO: large because we don't have GC atm.
-        self.log_size(5 * 1024 * 1024 * 1024);
-
         self
     }
 
