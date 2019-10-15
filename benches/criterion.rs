@@ -42,8 +42,11 @@ fn stack_scale_out(c: &mut Criterion) {
             c,
             "stack-scaleout",
             |_cid, rid, _log, replica, ops, _batch_size| {
+                let mut o = vec![];
                 for op in ops {
                     replica.execute(*op, rid);
+                    while replica.get_responses(rid, &mut o) == 0 {}
+                    o.clear();
                 }
             },
         );
@@ -78,10 +81,13 @@ fn synthetic_scale_out(c: &mut Criterion) {
             c,
             "synthetic-scaleout",
             |cid, rid, _log, replica, ops, _batch_size| {
+                let mut o = vec![];
                 for op in ops {
                     let mut op = *op;
                     op.set_tid(cid as usize);
                     replica.execute(op, rid);
+                    while replica.get_responses(rid, &mut o) == 0 {}
+                    o.clear();
                 }
             },
         );
@@ -109,7 +115,7 @@ fn log_scale_bench(c: &mut Criterion) {
             "log-append",
             |_cid, _rid, log, _replica, ops, batch_size| {
                 for batch_op in ops.rchunks(batch_size) {
-                    let _r = log.append(batch_op);
+                    let _r = log.append(batch_op, 1);
                     //assert!(r.is_some());
                 }
             },

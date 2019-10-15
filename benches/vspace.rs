@@ -230,8 +230,11 @@ fn vspace_scale_out(c: &mut Criterion) {
             c,
             "vspace-scaleout",
             |_cid, rid, _log, replica, ops, _batch_size| {
+                let mut o = vec![];
                 for op in ops {
                     replica.execute(*op, rid);
+                    while replica.get_responses(rid, &mut o) == 0 {}
+                    o.clear();
                 }
             },
         );

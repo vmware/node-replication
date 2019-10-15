@@ -69,8 +69,11 @@ pub fn baseline_comparison<T: Dispatch + Default>(
 
     group.bench_function("log", |b| {
         b.iter(|| {
+            let mut o = vec![];
             for i in 0..ops.len() {
                 r.execute(ops[i], ridx);
+                while r.get_responses(ridx, &mut o) == 0 {}
+                o.clear();
             }
         })
     });
