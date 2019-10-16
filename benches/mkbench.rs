@@ -25,6 +25,12 @@ use crate::utils::topology::*;
 
 pub use crate::utils::topology::ThreadMapping;
 
+/// Threshold after how many iterations we log a warning for busy spinning loops.
+///
+/// This helps with debugging to figure out where things may end up blocking.
+/// Should be a power of two to avoid divisions.
+pub const WARN_THRESHOLD: usize = 1 << 28;
+
 type BenchFn<T> = fn(
     crate::utils::ThreadId,
     usize,
@@ -203,13 +209,16 @@ where
                     .expect("Can't register replica, out of slots?");
 
                 let b = barrier.clone();
-                debug!(
-                    "Spawn thread on core {} with replica {} replica register token is {}",
-                    core_id, rid, replica_token
-                );
 
                 handles.push(thread::spawn(move || {
                     utils::pin_thread(core_id);
+                    debug!(
+                        "Spawned {:?} on core {} replica#{} rtoken#{}",
+                        thread::current().id(),
+                        core_id,
+                        rid,
+                        replica_token
+                    );
 
                     b.wait();
                     let start = Instant::now();
@@ -224,6 +233,15 @@ where
                         ));
                     }
                     let elapsed = start.elapsed();
+                    debug!(
+                        "Completed {:?} on core {} replica#{} rtoken#{} in {:?}",
+                        thread::current().id(),
+                        core_id,
+                        rid,
+                        replica_token,
+                        elapsed
+                    );
+
                     b.wait();
 
                     elapsed

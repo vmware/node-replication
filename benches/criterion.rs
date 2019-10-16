@@ -20,6 +20,8 @@ use criterion::{criterion_group, criterion_main, Criterion};
 
 /// Compare against a stack with and without a log in-front.
 fn stack_single_threaded(c: &mut Criterion) {
+    env_logger::try_init();
+
     // Benchmark operations per iteration
     const NOP: usize = 1_000;
     // Log size
@@ -31,6 +33,8 @@ fn stack_single_threaded(c: &mut Criterion) {
 
 /// Compare scalability of a node-replicated stack.
 fn stack_scale_out(c: &mut Criterion) {
+    env_logger::try_init();
+
     // How many operations per iteration
     const NOP: usize = 10_000;
     // Operations to perform
@@ -49,7 +53,16 @@ fn stack_scale_out(c: &mut Criterion) {
                 let mut o = vec![];
                 for op in ops {
                     replica.execute(*op, rid);
-                    while replica.get_responses(rid, &mut o) == 0 {}
+                    let mut i = 1;
+                    while replica.get_responses(rid, &mut o) == 0 {
+                        if i % mkbench::WARN_THRESHOLD == 0 {
+                            log::warn!(
+                                "{:?} Waiting too long for get_responses",
+                                std::thread::current().id()
+                            );
+                        }
+                        i += 1;
+                    }
                     o.clear();
                 }
             },
@@ -58,6 +71,8 @@ fn stack_scale_out(c: &mut Criterion) {
 
 /// Compare a synthetic benchmark against a single-threaded implementation.
 fn synthetic_single_threaded(c: &mut Criterion) {
+    env_logger::try_init();
+
     // How many operations per iteration
     const NOP: usize = 1_000;
     // Size of the log.
@@ -74,6 +89,8 @@ fn synthetic_single_threaded(c: &mut Criterion) {
 
 /// Compare scale-out behaviour of synthetic data-structure.
 fn synthetic_scale_out(c: &mut Criterion) {
+    env_logger::try_init();
+
     // How many operations per iteration
     const NOP: usize = 10_000;
     // Operations to perform
@@ -90,7 +107,16 @@ fn synthetic_scale_out(c: &mut Criterion) {
                     let mut op = *op;
                     op.set_tid(cid as usize);
                     replica.execute(op, rid);
-                    while replica.get_responses(rid, &mut o) == 0 {}
+                    let mut i = 1;
+                    while replica.get_responses(rid, &mut o) == 0 {
+                        if i % mkbench::WARN_THRESHOLD == 0 {
+                            log::warn!(
+                                "{:?} Waiting too long for get_responses",
+                                std::thread::current().id()
+                            );
+                        }
+                        i += 1;
+                    }
                     o.clear();
                 }
             },
@@ -99,6 +125,8 @@ fn synthetic_scale_out(c: &mut Criterion) {
 
 /// Compare scale-out behaviour of log.
 fn log_scale_bench(c: &mut Criterion) {
+    env_logger::try_init();
+
     /// Benchmark #operations per iteration
     const NOP: usize = 50_000;
     /// Log size (needs to be big as we don't have GC in this case but high tput)

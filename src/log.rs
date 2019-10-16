@@ -26,6 +26,12 @@ const MAX_REPLICAS: usize = 32;
 /// be performed by one of the replicas registered with the log.
 const GC_FROM_HEAD: usize = 1024 * 4;
 
+/// Threshold after how many iterations we log a warning for busy spinning loops.
+///
+/// This helps with debugging to figure out where things may end up blocking.
+/// Should be a power of two to avoid divisions.
+const WARN_THRESHOLD: usize = 1 << 28;
+
 /// An entry that sits on the log. Each entry consists of two fields: The operation to
 /// be performed when a thread reaches this entry on the log, and a flag indicating whether
 /// this entry is valid.
@@ -206,10 +212,21 @@ where
     /// with this replica-identifier.
     pub fn append(&self, ops: &[T], idx: usize) {
         let n = ops.len();
-
+        let mut iteration = 1;
         // Keep trying to reserve entries and add operations to the log until
         // we succeed in doing so.
         loop {
+            if iteration % WARN_THRESHOLD == 0 {
+                warn!(
+                    "{:?} append(ops.len()={}, {}) takes too many iterations ({}) to complete...",
+                    std::thread::current().id(),
+                    ops.len(),
+                    idx,
+                    iteration,
+                );
+            }
+            iteration += 1;
+
             let t = self.tail.load(Ordering::SeqCst);
             let h = self.head.load(Ordering::SeqCst);
 
@@ -244,6 +261,12 @@ where
                 // We just filled up the last entry in the circular array. Time to flip
                 // what it means for an entry to be alive/dead on the log.
                 if self.index(t + i) == self.size - 1 {
+                    trace!(
+                        "GC flip global mask at {}: {} -> {}",
+                        t + i,
+                        self.mask.get(),
+                        !self.mask.get()
+                    );
                     self.mask.set(!self.mask.get())
                 };
             }
@@ -278,9 +301,22 @@ where
         // the entry is live first; we could have a replica that has reserved entries, but not
         // filled them into the log yet.
         for i in f..t {
+            let mut iteration = 1;
             loop {
                 let e = self.slog[self.index(i)].get();
                 if e.alivef != self.lmasks[idx - 1].get() {
+                    if iteration % WARN_THRESHOLD == 0 {
+                        warn!(
+                            "{:?} alivef not being set for self.index(i={}) = {} (self.lmasks[{}] is {})...",
+                            std::thread::current().id(),
+                            i,
+                            self.index(i),
+                            idx - 1,
+                            self.lmasks[idx - 1].get()
+                        );
+                    }
+                    iteration += 1;
+
                     continue;
                 };
 
@@ -291,6 +327,13 @@ where
             // Looks like this replica's local tail is going to wrap around. Time to flip
             // the replica's understanding of what it means for an entry to be alive/dead.
             if self.index(i) == self.size - 1 {
+                trace!(
+                    "GC flip lmasks[{}]: {} -> {}",
+                    idx - 1,
+                    self.lmasks[idx - 1].get(),
+                    !self.lmasks[idx - 1].get()
+                );
+
                 self.lmasks[idx - 1].set(!self.lmasks[idx - 1].get())
             };
         }
@@ -311,6 +354,7 @@ where
         // Keep looping until we can advance the head and create some free space
         // on the log. If one of the replicas has stopped making progress, then
         // this method might never return.
+        let mut iteration = 1;
         loop {
             let r = self.next.load(Ordering::SeqCst);
             let h = self.head.load(Ordering::SeqCst);
@@ -328,6 +372,13 @@ where
             // If we cannot advance the head further, then start
             // from the beginning of this loop again.
             if n == h {
+                if iteration % WARN_THRESHOLD == 0 {
+                    warn!(
+                        "{:?} Spending a long time in `advance_head`, are we starving?",
+                        std::thread::current().id()
+                    );
+                }
+                iteration += 1;
                 continue;
             };
 

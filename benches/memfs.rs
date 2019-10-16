@@ -332,7 +332,8 @@ fn generate_fs_operations(nop: usize, write_ratio: usize) -> Vec<Operation> {
 }
 
 fn memfs_single_threaded(c: &mut Criterion) {
-    env_logger::init();
+    env_logger::try_init();
+
     const LOG_SIZE_BYTES: usize = 12 * 1024 * 1024;
     const NOP: usize = 1000;
     const WRITE_RATIO: usize = 10; //% out of 100
@@ -343,6 +344,8 @@ fn memfs_single_threaded(c: &mut Criterion) {
 
 /// Compare scale-out behaviour of memfs.
 fn memfs_scale_out(c: &mut Criterion) {
+    env_logger::try_init();
+
     const NOP: usize = 1000;
     const WRITE_RATIO: usize = 10; //% out of 100
 

@@ -9,6 +9,9 @@ extern crate core;
 
 extern crate crossbeam_utils;
 
+#[macro_use]
+extern crate log as logging;
+
 mod context;
 
 pub mod log;
