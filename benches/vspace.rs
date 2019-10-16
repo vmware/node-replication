@@ -232,7 +232,16 @@ fn vspace_scale_out(c: &mut Criterion) {
                 let mut o = vec![];
                 for op in ops {
                     replica.execute(*op, rid);
-                    while replica.get_responses(rid, &mut o) == 0 {}
+                    let mut i = 1;
+                    while replica.get_responses(rid, &mut o) == 0 {
+                        if i % mkbench::WARN_THRESHOLD == 0 {
+                            log::warn!(
+                                "{:?} Waiting too long for get_responses",
+                                std::thread::current().id()
+                            );
+                        }
+                        i += 1;
+                    }
                     o.clear();
                 }
             },
