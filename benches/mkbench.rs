@@ -12,8 +12,9 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Barrier};
-use std::thread;
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use criterion::{black_box, BenchmarkId, Criterion, Throughput};
@@ -132,6 +133,12 @@ where
     batch_size: usize,
     /// Benchmark function to execute
     f: BenchFn<T>,
+    /// A series of channels to communicate iteration count to every worker.
+    cmd_channels: Vec<Sender<u64>>,
+    /// A result channel
+    result_channel: (Sender<Duration>, Receiver<Duration>),
+    /// Thread handles
+    handles: Vec<JoinHandle<()>>,
 }
 
 impl<T: Dispatch + Default + Send> ScaleBenchmark<T>
@@ -159,6 +166,9 @@ where
             results: Default::default(),
             batch_size,
             f: f,
+            cmd_channels: Default::default(),
+            result_channel: channel(),
+            handles: Default::default(),
         }
     }
 
@@ -173,84 +183,39 @@ where
         self.rm.len()
     }
 
-    fn execute(&self, iters: u64) -> Duration {
-        let thread_num = self.threads();
-        // Need a barrier to synchronize starting of threads
-        let barrier = Arc::new(Barrier::new(thread_num));
-
-        // Thread handles to `join` them at the end
-        let mut handles = Vec::with_capacity(thread_num);
-
-        // TODO: Remove once we have GC
-        unsafe {
-            self.log.reset();
+    /// Terminate the worker threads by sending 0 to the iter channel:
+    fn terminate(&self) {
+        for tx in self.cmd_channels.iter() {
+            tx.send(0).expect("Can't send termination.");
         }
+    }
 
-        let mut replicas: Vec<Arc<Replica<T>>> = Vec::with_capacity(self.replicas());
-        for i in 0..self.replicas() {
-            replicas.push(Arc::new(Replica::<T>::new(&self.log)));
-        }
-
-        debug!(
-            "Execute benchmark with the following replica: [core_id] mapping: {:#?}",
-            self.rm
-        );
-        for (rid, cores) in self.rm.clone().into_iter() {
-            for core_id in cores {
-                let b = barrier.clone();
-
-                let log: Arc<_> = self.log.clone();
-                let replica = replicas[rid].clone();
-                let operations = self.operations.clone();
-                let f = self.f.clone();
-                let batch_size = self.batch_size;
-                let replica_token = replica
-                    .register()
-                    .expect("Can't register replica, out of slots?");
-
-                let b = barrier.clone();
-
-                handles.push(thread::spawn(move || {
-                    utils::pin_thread(core_id);
-                    debug!(
-                        "Spawned {:?} on core {} replica#{} rtoken#{}",
-                        thread::current().id(),
-                        core_id,
-                        rid,
-                        replica_token
-                    );
-
-                    b.wait();
-                    let start = Instant::now();
-                    for _i in 0..iters {
-                        black_box((f)(
-                            core_id,
-                            replica_token,
-                            &log,
-                            &replica,
-                            &operations,
-                            batch_size,
-                        ));
-                    }
-                    let elapsed = start.elapsed();
-                    debug!(
-                        "Completed {:?} on core {} replica#{} rtoken#{} in {:?}",
-                        thread::current().id(),
-                        core_id,
-                        rid,
-                        replica_token,
-                        elapsed
-                    );
-
-                    b.wait();
-
-                    elapsed
-                }));
+    /// Execute sends the iteration count to all worker threads
+    /// then waits to receive the respective duration from the workers
+    /// finally it returns the minimal Duration over all threads
+    /// after ensuring the run was fair.
+    fn execute(&self, iters: u64, reset_log: bool) -> Duration {
+        if reset_log {
+            unsafe {
+                self.log.reset();
             }
         }
 
+        for tx in self.cmd_channels.iter() {
+            tx.send(iters).expect("Can't send iter.");
+        }
+
         // Wait for all threads to finish and gather runtimes
-        let mut durations: Vec<Duration> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        let mut durations: Vec<Duration> = Vec::with_capacity(self.threads());
+        for i in 0..self.threads() {
+            let duration: Duration = self
+                .result_channel
+                .1
+                .recv()
+                .expect("Can't receive a Duration?");
+            debug!("got a duration {:?}", duration);
+            durations.push(duration);
+        }
 
         // Sort floats to get min/max, can't just do sort() because floats are weird:
         durations.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -275,6 +240,93 @@ where
         }
 
         durations[0]
+    }
+
+    fn startup(&mut self) {
+        let thread_num = self.threads();
+        // Need a barrier to synchronize starting of threads
+        let barrier = Arc::new(Barrier::new(thread_num));
+
+        let mut replicas: Vec<Arc<Replica<T>>> = Vec::with_capacity(self.replicas());
+        for i in 0..self.replicas() {
+            replicas.push(Arc::new(Replica::<T>::new(&self.log)));
+        }
+
+        debug!(
+            "Execute benchmark with the following replica: [core_id] mapping: {:#?}",
+            self.rm
+        );
+        let mut tid = 0;
+        for (rid, cores) in self.rm.clone().into_iter() {
+            for core_id in cores {
+                let b = barrier.clone();
+
+                let log: Arc<_> = self.log.clone();
+                let replica = replicas[rid].clone();
+                let operations = self.operations.clone();
+                let f = self.f.clone();
+                let batch_size = self.batch_size;
+                let replica_token = replica
+                    .register()
+                    .expect("Can't register replica, out of slots?");
+
+                let b = barrier.clone();
+
+                let (iter_tx, iter_rx) = channel();
+                self.cmd_channels.push(iter_tx);
+                let result_channel = self.result_channel.0.clone();
+
+                self.handles.push(thread::spawn(move || {
+                    utils::pin_thread(core_id);
+                    debug!(
+                        "Spawned {:?} on core {} replica#{} rtoken#{}",
+                        thread::current().id(),
+                        core_id,
+                        rid,
+                        replica_token
+                    );
+
+                    loop {
+                        let iters = iter_rx.recv().expect("Can't get iter from channel?");
+                        if iters == 0 {
+                            debug!(
+                                "Finished with this ScaleBench, worker thread {} is done.",
+                                tid
+                            );
+                            return;
+                        }
+
+                        b.wait();
+                        let start = Instant::now();
+                        for _i in 0..iters {
+                            black_box((f)(
+                                core_id,
+                                replica_token,
+                                &log,
+                                &replica,
+                                &operations,
+                                batch_size,
+                            ));
+                        }
+                        let elapsed = start.elapsed();
+
+                        debug!(
+                            "Completed {:?} on core {} replica#{} rtoken#{} in {:?}",
+                            thread::current().id(),
+                            core_id,
+                            rid,
+                            replica_token,
+                            elapsed
+                        );
+
+                        result_channel.send(elapsed);
+                        b.wait();
+                    }
+                }));
+
+                tid += 1;
+            }
+        }
     }
 
     /// Calculates how to divide threads among replicas and CPU.
@@ -380,6 +432,9 @@ where
     log_size: usize,
     /// Operations executed on the log.
     operations: Vec<<T as Dispatch>::Operation>,
+    /// Reset the log between different `execute`
+    /// If we have many ops and do tests where there is no GC, we may starve
+    reset_log: bool,
 }
 
 impl<T: Dispatch + Default> ScaleBenchBuilder<T>
@@ -390,7 +445,7 @@ where
     T: 'static,
     T: std::marker::Send,
 {
-    /// Initialize an "empty" ScaleBenchBuilder with a 2 GiB (TODO: reduce with GC) log.
+    /// Initialize an "empty" ScaleBenchBuilder with a  MiB log.
     ///
     /// By default this won't execute any runs,
     /// you have to at least call `threads`, `thread_mapping`
@@ -403,6 +458,7 @@ where
             batches: vec![1usize],
             log_size: 1024 * 1024 * 2,
             operations: ops,
+            reset_log: false,
         }
     }
 
@@ -466,6 +522,12 @@ where
         self
     }
 
+    /// Reset the log for different executions.
+    pub fn reset_log(&mut self) -> &mut Self {
+        self.reset_log = true;
+        self
+    }
+
     /// Creates a benchmark to evalute the scalability properties of the
     /// log for a given data-structure.
     ///
@@ -480,14 +542,12 @@ where
         utils::disable_dvfs();
 
         let mut group = c.benchmark_group(name);
-
-        let log = Arc::new(Log::<<T as Dispatch>::Operation>::new(self.log_size));
-
         for rs in self.replica_strategies.iter() {
             for tm in self.thread_mappings.iter() {
                 for ts in self.threads.iter() {
                     for b in self.batches.iter() {
-                        let runner = ScaleBenchmark::<T>::new(
+                        let log = Arc::new(Log::<<T as Dispatch>::Operation>::new(self.log_size));
+                        let mut runner = ScaleBenchmark::<T>::new(
                             &topology,
                             *rs,
                             *tm,
@@ -497,13 +557,19 @@ where
                             log.clone(),
                             f,
                         );
+                        runner.startup();
+
                         let name = format!("{:?} {:?} BS={}", *rs, *tm, *b);
                         group.throughput(Throughput::Elements((self.operations.len() * ts) as u64));
                         group.bench_with_input(
                             BenchmarkId::new(name, *ts),
                             &runner,
-                            |cb, runner| cb.iter_custom(|iters| runner.execute(iters)),
+                            |cb, runner| {
+                                cb.iter_custom(|iters| runner.execute(iters, self.reset_log))
+                            },
                         );
+
+                        runner.terminate();
                     }
                 }
             }
