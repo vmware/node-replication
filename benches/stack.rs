@@ -85,7 +85,7 @@ pub fn generate_operations(nop: usize) -> Vec<Op> {
         match op % 2usize {
             0usize => ops.push(Op::Pop),
             1usize => ops.push(Op::Push(arng.gen())),
-            _ => ops.push(Op::Invalid),
+            _ => unreachable!(),
         }
     }
 

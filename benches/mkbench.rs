@@ -277,13 +277,6 @@ where
 
                 self.handles.push(thread::spawn(move || {
                     utils::pin_thread(core_id);
-                    debug!(
-                        "Spawned {:?} on core {} replica#{} rtoken#{}",
-                        thread::current().id(),
-                        core_id,
-                        rid,
-                        replica_token
-                    );
 
                     loop {
                         let iters = iter_rx.recv().expect("Can't get iter from channel?");
@@ -294,6 +287,14 @@ where
                             );
                             return;
                         }
+                        debug!(
+                            "Running {:?} on core {} replica#{} rtoken#{} iters={}",
+                            thread::current().id(),
+                            core_id,
+                            rid,
+                            replica_token,
+                            iters
+                        );
 
                         b.wait();
                         let start = Instant::now();
