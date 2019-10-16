@@ -165,7 +165,15 @@ impl MachineTopology {
                 c
             }
             ThreadMapping::Sequential => {
-                cpus.sort_by_key(|c| c.socket);
+                cpus.sort_by(|a, b| {
+                    if a.socket != b.socket {
+                        // Allocate from the same socket first
+                        a.socket.partial_cmp(&b.socket).unwrap()
+                    } else {
+                        // But avoid placing on hyper-threads core until all cores are used
+                        a.cpu.partial_cmp(&b.cpu).unwrap()
+                    }
+                });
                 let c = cpus.iter().take(how_many).map(|c| *c).collect();
                 c
             }
