@@ -213,7 +213,6 @@ where
                 .1
                 .recv()
                 .expect("Can't receive a Duration?");
-            debug!("got a duration {:?}", duration);
             durations.push(duration);
         }
 

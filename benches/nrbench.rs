@@ -109,7 +109,7 @@ fn main() {
 
     // Set log size
     let l = usize::from_str_radix(matches.value_of("logsz").unwrap(), 10).unwrap();
-    builder.log_size(l * 1024 * 1024 * 1024);
+    builder.log_size(l);
 
     let ts: Vec<&str> = matches.values_of("threads").unwrap().collect();
 
