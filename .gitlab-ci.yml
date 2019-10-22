@@ -30,7 +30,7 @@ bench:
     - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench criterion -- hashmap
     - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench vspace
     - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench memfs
-    - timeout 1h bash benches/hashbench_run.sh
+    - timeout 1.5h bash benches/hashbench_run.sh
     # This would run the complete suite
     # - RUST_TEST_THREADS=1 timeout 2h cargo bench
   dependencies:
@@ -55,6 +55,7 @@ deploy:
     - mkdir -p gh-pages/hashbench/$GIT_REV_CURRENT
     - cp results.log write-throughput.png read-throughput.png gh-pages/hashbench/$GIT_REV_CURRENT
     - cd gh-pages
+    - cp hashbench/index.markdown hashbench/$GIT_REV_CURRENT
     - pip3 install -r requirements.txt
     - python3 history_plots.py
     - git add .
