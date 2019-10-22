@@ -8,6 +8,11 @@
 extern crate criterion;
 #[macro_use]
 extern crate log;
+extern crate zipf;
+
+use rand::distributions::Distribution;
+use rand::{Rng, RngCore};
+use zipf::ZipfDistribution;
 
 mod mkbench;
 mod utils;
@@ -156,34 +161,45 @@ fn hashmap_scale_out(c: &mut Criterion) {
     const UNIFORM: &'static str = "uniform";
     //const SKEWED: &'static str = "skewed";
     // Read/Write ratio
-    let write_ratio = 10; //% out of 100
 
-    // Operations to perform
-    let ops = hashmap::generate_operations(NOP, write_ratio, KEY_SPACE, UNIFORM);
-
-    mkbench::ScaleBenchBuilder::<hashmap::NrHashMap>::new(ops)
+    mkbench::ScaleBenchBuilder::<hashmap::NrHashMap>::new(vec![hashmap::Op::Get(1)])
         .machine_defaults()
         .configure(
             c,
             "hashmap-scaleout",
             |cid, rid, _log, replica, ops, _batch_size| {
                 let mut o = vec![];
-                for op in ops {
-                    let mut op = *op;
-                    replica.execute(op, rid);
+                let mut t_rng = rand::thread_rng();
+                let mut zipf = ZipfDistribution::new(KEY_SPACE, 1.03).unwrap();
+                let distribution = UNIFORM;
+                let writers = 0;
 
-                    let mut i = 1;
-                    while replica.get_responses(rid, &mut o) == 0 {
-                        if i % mkbench::WARN_THRESHOLD == 0 {
-                            log::warn!(
-                                "{:?} Waiting too long for get_responses",
-                                std::thread::current().id()
-                            );
-                        }
-                        i += 1;
+                let skewed = distribution == "skewed";
+                let id = if skewed {
+                    zipf.sample(&mut t_rng) as u64
+                } else {
+                    // uniform
+                    t_rng.gen_range(0, KEY_SPACE as u64)
+                };
+
+                let op = if cid < writers {
+                    hashmap::Op::Put(id, t_rng.next_u64())
+                } else {
+                    hashmap::Op::Get(id)
+                };
+
+                replica.execute(op, rid);
+                let mut i = 1;
+                while replica.get_responses(rid, &mut o) == 0 {
+                    if i % mkbench::WARN_THRESHOLD == 0 {
+                        log::warn!(
+                            "{:?} Waiting too long for get_responses",
+                            std::thread::current().id()
+                        );
                     }
-                    o.clear();
+                    i += 1;
                 }
+                o.clear();
             },
         );
 }

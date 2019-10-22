@@ -130,3 +130,11 @@ configured by command-line parameters.
 
 Use `RUST_TEST_THREADS=1 cargo bench --bench nrbench -- --help` to see an
 overview of supported configuration.
+
+### Hashbench [[src](benches/hashbench.rs)]
+
+A benchmark to compare various concurrent Hashtables (originally
+from [evmap](https://github.com/jonhoo/rust-evmap)).
+
+Use `RUST_TEST_THREADS=1 cargo bench --bench hashbench -- --help` to see an
+overview of supported configuration.

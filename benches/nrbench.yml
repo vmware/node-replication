@@ -6,7 +6,7 @@ args:
         - datastructure:
                 takes_value: true
                 help: Which data-structure to use for benchmarking.
-                possible_values: [ "stack", "synthetic" ]
+                possible_values: [ "stack", "synthetic", "hashmap" ]
                 default_value: "stack"
                 required: true
         - replicas:

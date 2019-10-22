@@ -11,6 +11,10 @@ categories = ["algorithms", "concurrency", "data-structures", "no-std", "os"]
 autobenches = false
 
 [[bench]]
+name = "hashbench"
+harness = false
+
+[[bench]]
 name = "nrbench"
 harness = false
 
@@ -34,6 +38,8 @@ log = "0.4"
 # Add debug symbols on the release build so that we can debug performance issues
 [profile.release]
 debug = true
+#lto = true
+#codegen-units = 1
 
 [profile.bench]
 debug = true
@@ -53,3 +59,6 @@ slabmalloc = "0.3.1"
 core_affinity = { git = "https://github.com/nau/core_affinity_rs", branch = "patch-1" }
 btfs = "0.0.4"
 zipf = "6.0.1"
+evmap = "7.1"
+chashmap = "2.2"
+parking_lot = "0.7.1"

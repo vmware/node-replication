@@ -23,13 +23,14 @@ test:
 bench:
   stage: bench
   script:
-    # For now only run stack and synthetic benchmarks as part of CI:
+    # Run criterion and hashbench
     - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench criterion -- log
     - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench criterion -- synthetic
     - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench criterion -- stack
     - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench criterion -- hashmap
     - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench vspace
     - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench memfs
+    - timeout 1h bash benches/hashbench_run.sh
     # This would run the complete suite
     # - RUST_TEST_THREADS=1 timeout 2h cargo bench
   dependencies:
@@ -51,6 +52,8 @@ deploy:
     - rm -rf gh-pages/criterion/$GIT_REV_CURRENT
     - mkdir -p gh-pages/criterion/$GIT_REV_CURRENT
     - cp -r target/criterion/* gh-pages/criterion/$GIT_REV_CURRENT
+    - mkdir -p gh-pages/hashbench/$GIT_REV_CURRENT
+    - cp results.log write-throughput.png read-throughput.png gh-pages/hashbench/$GIT_REV_CURRENT
     - cd gh-pages
     - pip3 install -r requirements.txt
     - python3 history_plots.py

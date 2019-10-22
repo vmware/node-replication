@@ -8,6 +8,7 @@ extern crate clap;
 extern crate criterion;
 extern crate env_logger;
 
+mod hashmap;
 mod mkbench;
 mod stack;
 mod synthetic;
@@ -19,6 +20,7 @@ use mkbench::{ReplicaStrategy, ThreadMapping};
 enum Builder {
     Stack(mkbench::ScaleBenchBuilder<stack::Stack>),
     Synthetic(mkbench::ScaleBenchBuilder<synthetic::AbstractDataStructure>),
+    HashMap(mkbench::ScaleBenchBuilder<hashmap::NrHashMap>),
 }
 
 impl Builder {
@@ -28,6 +30,9 @@ impl Builder {
                 b.replica_strategy(rs);
             }
             Builder::Synthetic(b) => {
+                b.replica_strategy(rs);
+            }
+            Builder::HashMap(b) => {
                 b.replica_strategy(rs);
             }
         }
@@ -41,6 +46,9 @@ impl Builder {
             Builder::Synthetic(b) => {
                 b.thread_mapping(tm);
             }
+            Builder::HashMap(b) => {
+                b.thread_mapping(tm);
+            }
         }
     }
 
@@ -52,6 +60,9 @@ impl Builder {
             Builder::Synthetic(b) => {
                 b.log_size(ls);
             }
+            Builder::HashMap(b) => {
+                b.log_size(ls);
+            }
         }
     }
 
@@ -61,6 +72,9 @@ impl Builder {
                 b.threads(t);
             }
             Builder::Synthetic(b) => {
+                b.threads(t);
+            }
+            Builder::HashMap(b) => {
                 b.threads(t);
             }
         }
@@ -87,6 +101,9 @@ fn main() {
         >::new(synthetic::generate_operations(
             nops, 0, false, false, true,
         ))),
+        "hashmap" => Builder::HashMap(mkbench::ScaleBenchBuilder::<hashmap::NrHashMap>::new(
+            hashmap::generate_operations(nops, 0, 10_000, "uniform"),
+        )),
         _ => unreachable!("Invalid CLI argument, may be clap bug if possible_values doesn't work?"),
     };
 
@@ -123,23 +140,44 @@ fn main() {
         .output_directory(std::path::Path::new("out"));
 
     if let Builder::Stack(b) = builder {
-        b.configure(&mut c, ds, |_cid, rid, _log, replica, ops, _batch_size| {
-            let mut o = vec![];
-            for op in ops {
-                replica.execute(*op, rid);
-                while replica.get_responses(rid, &mut o) == 0 {}
-                o.clear();
-            }
-        });
+        b.configure(
+            &mut c,
+            "nrbench-stack",
+            |_cid, rid, _log, replica, ops, _batch_size| {
+                let mut o = vec![];
+                for op in ops {
+                    replica.execute(*op, rid);
+                    while replica.get_responses(rid, &mut o) == 0 {}
+                    o.clear();
+                }
+            },
+        );
     } else if let Builder::Synthetic(b) = builder {
-        b.configure(&mut c, ds, |_cid, rid, _log, replica, ops, _batch_size| {
-            let mut o = vec![];
-            for op in ops {
-                replica.execute(*op, rid);
-                while replica.get_responses(rid, &mut o) == 0 {}
-                o.clear();
-            }
-        });
+        b.configure(
+            &mut c,
+            "nrbench-synthetic",
+            |_cid, rid, _log, replica, ops, _batch_size| {
+                let mut o = vec![];
+                for op in ops {
+                    replica.execute(*op, rid);
+                    while replica.get_responses(rid, &mut o) == 0 {}
+                    o.clear();
+                }
+            },
+        );
+    } else if let Builder::HashMap(b) = builder {
+        b.configure(
+            &mut c,
+            "nrbench-hashmap",
+            |_cid, rid, _log, replica, ops, _batch_size| {
+                let mut o = vec![];
+                for op in ops {
+                    replica.execute(*op, rid);
+                    while replica.get_responses(rid, &mut o) == 0 {}
+                    o.clear();
+                }
+            },
+        );
     } else {
         unreachable!("Unhandled builder type.");
     }
