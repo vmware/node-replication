@@ -13,4 +13,5 @@ for w in 0 1 2 4 8 14 16 24; do
   done;
 done
 
-R -q --no-readline --no-restore --no-save < hashbench_plot.r
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
+R -q --no-readline --no-restore --no-save < $SCRIPT_DIR/hashbench_plot.r
