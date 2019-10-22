@@ -38,26 +38,32 @@ bench:
   variables:
     GIT_STRATEGY: none
 
+# Deploy the benchmark go gh-pages:
 deploy:
   stage: deploy
   script:
-    # Deploy the benchmark go gh-pages:
+    # Get revision
     - export GIT_REV_CURRENT=`git rev-parse --short HEAD`
-    - export CSV_LINE="`date +%Y-%m-%d`",$GIT_REV_CURRENT,"criterion/$GIT_REV_CURRENT/report/index.html"
+    - export CSV_LINE="`date +%Y-%m-%d`",$GIT_REV_CURRENT,"criterion/$GIT_REV_CURRENT/report/index.html","hashbench/$GIT_REV_CURRENT/index.html"
+    # Checkout gh-pages
     - git clone git@github.com:gz/node-replication.git gh-pages
     - cd gh-pages
     - git checkout gh-pages
     - cd ..
+    # Copy criterion results
     - echo $CSV_LINE >> gh-pages/_data/b1641.csv
     - rm -rf gh-pages/criterion/$GIT_REV_CURRENT
     - mkdir -p gh-pages/criterion/$GIT_REV_CURRENT
     - cp -r target/criterion/* gh-pages/criterion/$GIT_REV_CURRENT
+    # Copy hashbench results
     - mkdir -p gh-pages/hashbench/$GIT_REV_CURRENT
     - cp results.log write-throughput.png read-throughput.png gh-pages/hashbench/$GIT_REV_CURRENT
     - cd gh-pages
     - cp hashbench/index.markdown hashbench/$GIT_REV_CURRENT
+    # Make CI plots
     - pip3 install -r requirements.txt
     - python3 history_plots.py
+    # Push to gh-pages
     - git add .
     - git commit -a -m "Added benchmark results for $GIT_REV_CURRENT."
     - git push origin gh-pages

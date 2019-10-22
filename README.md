@@ -1,5 +1,7 @@
 # node-replication
 
+[![pipeline status](https://gitlab.com/gz1/node-replication/badges/master/pipeline.svg)](https://gitlab.com/gz1/node-replication/commits/master)
+
 Rust implementation of Node Replication. [Black-box Concurrent Data Structures
 for NUMA Architectures](https://dl.acm.org/citation.cfm?id=3037721) published
 at ASPLOS 2017
