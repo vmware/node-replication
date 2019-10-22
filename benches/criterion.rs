@@ -12,6 +12,7 @@ extern crate log;
 mod mkbench;
 mod utils;
 
+mod hashmap;
 mod nop;
 mod stack;
 mod synthetic;
@@ -123,6 +124,70 @@ fn synthetic_scale_out(c: &mut Criterion) {
         );
 }
 
+/// Compare a replicated hashmap against a single-threaded implementation.
+fn hashmap_single_threaded(c: &mut Criterion) {
+    env_logger::try_init();
+
+    // How many operations per iteration
+    const NOP: usize = 1_000;
+    // Size of the log.
+    const LOG_SIZE_BYTES: usize = 2 * 1024 * 1024;
+    // Biggest key in the hash-map
+    const KEY_SPACE: usize = 10_000;
+    // Key distribution
+    const UNIFORM: &'static str = "uniform";
+    //const SKEWED: &'static str = "skewed";
+    // Read/Write ratio
+    let write_ratio = 10; //% out of 100
+
+    let ops = hashmap::generate_operations(NOP, write_ratio, KEY_SPACE, UNIFORM);
+    mkbench::baseline_comparison::<hashmap::NrHashMap>(c, "hashmap", ops, LOG_SIZE_BYTES);
+}
+
+/// Compare scale-out behaviour of synthetic data-structure.
+fn hashmap_scale_out(c: &mut Criterion) {
+    env_logger::try_init();
+
+    // How many operations per iteration
+    const NOP: usize = 10_000;
+    // Biggest key in the hash-map
+    const KEY_SPACE: usize = 10_000;
+    // Key distribution
+    const UNIFORM: &'static str = "uniform";
+    //const SKEWED: &'static str = "skewed";
+    // Read/Write ratio
+    let write_ratio = 10; //% out of 100
+
+    // Operations to perform
+    let ops = hashmap::generate_operations(NOP, write_ratio, KEY_SPACE, UNIFORM);
+
+    mkbench::ScaleBenchBuilder::<hashmap::NrHashMap>::new(ops)
+        .machine_defaults()
+        .configure(
+            c,
+            "hashmap-scaleout",
+            |cid, rid, _log, replica, ops, _batch_size| {
+                let mut o = vec![];
+                for op in ops {
+                    let mut op = *op;
+                    replica.execute(op, rid);
+
+                    let mut i = 1;
+                    while replica.get_responses(rid, &mut o) == 0 {
+                        if i % mkbench::WARN_THRESHOLD == 0 {
+                            log::warn!(
+                                "{:?} Waiting too long for get_responses",
+                                std::thread::current().id()
+                            );
+                        }
+                        i += 1;
+                    }
+                    o.clear();
+                }
+            },
+        );
+}
+
 /// Compare scale-out behaviour of log.
 fn log_scale_bench(c: &mut Criterion) {
     env_logger::try_init();
@@ -156,7 +221,10 @@ fn log_scale_bench(c: &mut Criterion) {
 criterion_group!(
     name = benches;
     config = Criterion::default().sample_size(10);
-    targets = stack_single_threaded, stack_scale_out, synthetic_single_threaded, synthetic_scale_out, log_scale_bench
+    targets = hashmap_single_threaded, hashmap_scale_out,
+              stack_single_threaded, stack_scale_out,
+              synthetic_single_threaded, synthetic_scale_out,
+              log_scale_bench
 );
 
 criterion_main!(benches);

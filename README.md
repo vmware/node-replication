@@ -69,15 +69,25 @@ within a replica).
 To run these benchmarks execute:
 `RUST_TEST_THREADS=1 cargo bench --bench criterion -- log`
 
-### Stack cost [[data-structure](benches/stack.rs)] [[runner](benches/criterion.rs)]
+### Stack [[data-structure](benches/stack.rs)] [[runner](benches/criterion.rs)]
 
-One benchmark that evaluate the COST (overhead of added synchronization) by
+One benchmark that evaluates the COST (overhead of added synchronization) by
 comparing a node-replicated stack against a single-threaded stack (without a
 log/replica), and a benchmark that evaluates the scalability of the stack by
 running with increasing amounts of threads.
 
 To run these benchmarks execute:
 `RUST_TEST_THREADS=1 cargo bench --bench criterion -- stack`
+
+### Hash-map [[data-structure](benches/hashmap.rs)] [[runner](benches/criterion.rs)]
+
+A benchmark that evaluates the COST (overhead of added synchronization) by
+comparing a node-replicated hash-map against a single-threaded hash-map (without a
+log/replica), and a benchmark that evaluates the scalability of the hash-map by
+running with increasing amounts of threads.
+
+To run these benchmarks execute:
+`RUST_TEST_THREADS=1 cargo bench --bench criterion -- hashmap`
 
 ### Synthetic data-structure [[data-structure](benches/synthetic.rs)] [[runner](benches/criterion.rs)]
 

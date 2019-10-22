@@ -27,6 +27,7 @@ bench:
     - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench criterion -- log
     - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench criterion -- synthetic
     - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench criterion -- stack
+    - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench criterion -- hashmap
     - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench vspace
     - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench memfs
     # This would run the complete suite
