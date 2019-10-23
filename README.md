@@ -14,23 +14,62 @@ operation log.
 The code should be treated as experimental and work in progress, there may be
 correctness and performance bugs.
 
-## Compiling
+## Compile the library
 
 The library should compile with a stable rust compiler. The code supports
 `no_std` as well.
 
-The following system libraries are required if you want to run the
-examples/benchmarks:
-
 ```
-$ apt-get install libhwloc-dev libfreetype6 libfreetype6-dev gnuplot numactl libfuse-dev
+$ cargo build
 ```
 
-Running the tests require the use of a nightly rust compiler:
+As a dependency in your Cargo.toml:
+
+```
+node-replication = "0.0.1"
+```
+
+### Compile benchmark and tests
+
+Running the tests, examples and benchmarks requires the use of a nightly rust
+compiler:
+
 ```
 rustup toolchain install nightly
 rustup default nightly
 ```
+
+In addition the a few system libraries are required to be present on your
+system.
+
+#### Install Benchmark/Test dependencies Ubuntu
+
+```
+$ apt-get install libhwloc-dev gnuplot libfuse-dev liburcu-dev liburcu6
+```
+
+#### Install Benchmark/Test dependencies on MacOS
+
+```
+$ brew install gnuplot hwloc
+```
+
+hashbench compares against URCU (user-space RCU). For MacOS the easiest
+way is to install it from the sources:
+
+```
+$ git clone git://git.liburcu.org/userspace-rcu.git
+$ userspace-rcu
+$ git checkout v.0.11.0
+$ ./bootstrap
+$ ./configure --build=x86_64-apple-darwin11
+$ make
+$ make install
+```
+
+The memfs benchmarks depends on btfs which uses FUSE. The easiest way to
+install FUSE for MacOS is through downloading the packages on
+[osxfuse](https://osxfuse.github.io/).
 
 ## Testing
 
@@ -44,8 +83,8 @@ You can run the tests by executing: `cargo test`
 
 ### Stack [[src](examples/stack.rs)]
 
-A working example of a replicated stack.
-To run the example execute: `cargo run --example stack`
+A working example of a replicated stack. To run the example execute: `cargo run
+--example stack`
 
 ## Benchmarks
 
@@ -59,6 +98,8 @@ browser by opening `target/criterion/report/index.html`.
 Please ensure to always set `RUST_TEST_THREADS=1` in your environment for
 benchmarking since the scale-out benchmarks will spawn multiple threads
 internally that can utilize the entire machine for certain runs.
+
+Note: Running all benchmarks can take hours, depending on the system!
 
 ### Log append [[data-structure](benches/nop.rs)] [[runner](benches/criterion.rs)]
 
