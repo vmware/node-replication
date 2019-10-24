@@ -37,7 +37,7 @@ args:
                 long: logsz
                 help: The size of the shared log in bytes.
                 takes_value: true
-                default_value: "12582912"
+                default_value: "16777216"
         - nop:
                 short: n
                 long: nop

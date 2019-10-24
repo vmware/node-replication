@@ -7,6 +7,7 @@ use core::default::Default;
 use crossbeam_utils::CachePadded;
 
 /// The maximum number of operations that can be batched inside this context.
+/// NOTE: This constant must be a power of two for index() to work.
 const MAX_PENDING_OPS: usize = 32;
 
 /// Contains all state local to a particular thread.
@@ -36,16 +37,16 @@ where
     /// Logical array index at which new operations will be enqueued into the batch.
     /// This variable is updated by the thread that owns this context, and is read by the
     /// combiner. We can avoid making it an atomic by assuming we're on x86.
-    pub tail: Cell<usize>,
+    pub tail: CachePadded<Cell<usize>>,
 
     /// Logical array index from which any attempt to dequeue responses will be made.
     /// This variable is only accessed by the thread that owns this context.
-    pub head: Cell<usize>,
+    pub head: CachePadded<Cell<usize>>,
 
     /// Logical array index from which the operations will be dequeued for flat combining.
     /// This variable is updated by the combiner, and is read by the thread that owns this context.
     /// We can avoid making it an atomic by assuming we're on x86.
-    pub comb: Cell<usize>,
+    pub comb: CachePadded<Cell<usize>>,
 }
 
 impl<T, R> Context<T, R>
@@ -157,7 +158,7 @@ where
     /// Given a logical address, returns an index into the batch at which it falls.
     #[inline(always)]
     fn index(&self, logical: usize) -> usize {
-        logical % MAX_PENDING_OPS
+        logical & (MAX_PENDING_OPS - 1)
     }
 }
 

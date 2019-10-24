@@ -153,16 +153,35 @@ where
     }
 
     /// Appends any pending responses to operations issued by this thread into a passed in
-    /// buffer/vector. Returns the number of responses that were appended.
+    /// buffer/vector. Returns the number of responses that were appended. Blocks until
+    /// some responses can be returned.
     pub fn get_responses(&self, idx: usize, buf: &mut Vec<<D as Dispatch>::Response>) -> usize {
-        // Try to flat combine first. This helps avoid starvation.
-        self.try_combine(idx);
-
         let prev = buf.len();
-        self.contexts[idx - 1].res(buf);
-        let next = buf.len();
 
-        next - prev
+        let mut iter = 0;
+        let interval = 1 << 20;
+
+        // No waiting requests. Just return to the caller.
+        if self.contexts[idx - 1].tail.get() == self.contexts[idx - 1].head.get() {
+            return 0;
+        }
+
+        // Keep trying to retrieve responses from the thread context. After trying `interval`
+        // times with no luck, try to perform flat combining to make some progress.
+        loop {
+            self.contexts[idx - 1].res(buf);
+            let next = buf.len();
+            if next > prev {
+                return next - prev;
+            };
+
+            iter += 1;
+
+            if iter == interval {
+                self.try_combine(idx);
+                iter = 0;
+            }
+        }
     }
 
     /// Executes a passed in closure against the replica's underlying underlying data
@@ -235,7 +254,7 @@ where
         b.clear();
         r.clear();
 
-        let n = self.next.load(Ordering::SeqCst);
+        let n = self.next.load(Ordering::Relaxed);
 
         // Collect operations from each thread registered with this replica.
         for i in 1..n {
@@ -457,16 +476,13 @@ mod test {
         assert_eq!(r[0], 107);
     }
 
-    // Tests whether get_responses() does not retrieve anything when an operation has
-    // been issued but hasn't executed against the replica yet.
+    // Tests whether get_responses() does not retrieve anything when an operation hasn't
+    // been issued yet.
     #[test]
     fn test_replica_get_responses_none() {
         let slog = Arc::new(Log::<<Data as Dispatch>::Operation>::default());
         let repl = Replica::<Data>::new(&slog);
         let mut r = vec![];
-
-        repl.combiner.store(8, Ordering::SeqCst);
-        repl.execute(121, 1);
 
         assert_eq!(repl.get_responses(1, &mut r), 0);
         assert_eq!(r.len(), 0);

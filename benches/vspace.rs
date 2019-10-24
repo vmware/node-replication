@@ -201,7 +201,7 @@ fn parse_syscall_trace(file: &str) -> io::Result<Vec<Opcode>> {
 fn bespin_vspace_single_threaded(c: &mut Criterion) {
     env_logger::try_init();
 
-    const LOG_SIZE_BYTES: usize = 12 * 1024 * 1024;
+    const LOG_SIZE_BYTES: usize = 16 * 1024 * 1024;
 
     let ops = parse_syscall_trace("benches/os_workload/bsd_init.log").unwrap();
     mkbench::baseline_comparison::<BespinDispatcher>(c, "vspace", ops, LOG_SIZE_BYTES);
@@ -212,7 +212,7 @@ fn bespin_vspace_single_threaded(c: &mut Criterion) {
 fn posix_vspace_single_threaded(c: &mut Criterion) {
     env_logger::try_init();
 
-    const LOG_SIZE_BYTES: usize = 12 * 1024 * 1024;
+    const LOG_SIZE_BYTES: usize = 16 * 1024 * 1024;
 
     let ops = parse_syscall_trace("benches/os_workload/bsd_init.log").unwrap();
     mkbench::baseline_comparison::<PosixDispatcher>(c, "posix-vspace", ops, LOG_SIZE_BYTES);

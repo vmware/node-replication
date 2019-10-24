@@ -103,11 +103,6 @@ where
     /// this Log. Required to index into ltails above.
     next: CachePadded<AtomicUsize>,
 
-    /// Required for garbage collection. This mask indicates what `alivef` within a
-    /// log entry signifies. If `mask == false`, then `alivef == false` implies that
-    /// the entry is alive and holds a valid operation to be executed.
-    mask: Cell<bool>,
-
     /// Array consisting of local alive masks for each registered replica. Required
     /// because replicas make independent progress over the log, so we need to
     /// track wrap-arounds for each of their local tails.
@@ -155,6 +150,9 @@ where
         // Calculate the number of entries that will go into the log, and retrieve a
         // slice to it from the allocated region of memory.
         let num = bytes / Log::<T>::entry_size();
+        if !num.is_power_of_two() {
+            panic!("Log size should be a power of two.")
+        };
         let raw = unsafe { from_raw_parts_mut(mem as *mut Cell<Entry<T>>, num) };
 
         // Initialize all log entries by calling the default constructor.
@@ -176,7 +174,6 @@ where
             tail: CachePadded::new(AtomicUsize::new(0usize)),
             ltails: Default::default(),
             next: CachePadded::new(AtomicUsize::new(1usize)),
-            mask: Cell::new(true),
             lmasks: fls,
         }
     }
@@ -191,7 +188,7 @@ where
     pub fn register(&self) -> Option<usize> {
         // Loop until we either run out of identifiers or we manage to increment `next`.
         loop {
-            let n = self.next.load(Ordering::SeqCst);
+            let n = self.next.load(Ordering::Relaxed);
 
             // Check if we've exceeded the maximum number of replicas the log can support.
             if n >= MAX_REPLICAS {
@@ -213,6 +210,7 @@ where
     pub fn append(&self, ops: &[T], idx: usize) {
         let n = ops.len();
         let mut iteration = 1;
+
         // Keep trying to reserve entries and add operations to the log until
         // we succeed in doing so.
         loop {
@@ -227,8 +225,8 @@ where
             }
             iteration += 1;
 
-            let t = self.tail.load(Ordering::SeqCst);
-            let h = self.head.load(Ordering::SeqCst);
+            let t = self.tail.load(Ordering::Relaxed);
+            let h = self.head.load(Ordering::Relaxed);
 
             // If there are fewer than `GC_FROM_HEAD` entries on the log, then just
             // try again. The replica that reserved entry (h + self.size - GC_FROM_HEAD)
@@ -253,28 +251,28 @@ where
             // Successfully reserved entries on the shared log. Add the operations in.
             for i in 0..n {
                 let e = self.slog[self.index(t + i)].as_ptr();
+                let mut m = self.lmasks[idx - 1].get();
+
+                // This entry was just reserved so it should be dead (!= m). However, if
+                // the log has wrapped around, then the alive mask has flipped. In this
+                // case, we flip the mask we were originally going to write into the
+                // allocated entry. We cannot flip lmasks[idx - 1] because this replica
+                // might still need to execute a few entries before the wrap around.
+                if unsafe { (*e).alivef == m } {
+                    m = !m;
+                }
+
                 unsafe { (*e).operation = ops[i] };
                 unsafe { (*e).replica = idx };
                 compiler_fence(Ordering::AcqRel);
-                unsafe { (*e).alivef = self.mask.get() };
-
-                // We just filled up the last entry in the circular array. Time to flip
-                // what it means for an entry to be alive/dead on the log.
-                if self.index(t + i) == self.size - 1 {
-                    trace!(
-                        "GC flip global mask at {}: {} -> {}",
-                        t + i,
-                        self.mask.get(),
-                        !self.mask.get()
-                    );
-                    self.mask.set(!self.mask.get())
-                };
+                unsafe { (*e).alivef = m };
             }
 
             // If needed, advance the head of the log forward to make room on the log.
             if advance {
-                self.advance_head()
-            };
+                self.advance_head();
+            }
+
             return;
         }
     }
@@ -286,11 +284,11 @@ where
     /// The passed in closure is expected to take in two arguments: The operation
     /// from the shared log to be executed and the replica that issued it.
     pub fn exec<F: FnMut(T, usize)>(&self, idx: usize, mut d: F) {
-        let t = self.tail.load(Ordering::SeqCst);
-        let h = self.head.load(Ordering::SeqCst);
+        let t = self.tail.load(Ordering::Relaxed);
+        let h = self.head.load(Ordering::Relaxed);
 
         // Load the logical log offset from which we must execute operations.
-        let f = self.ltails[idx - 1].load(Ordering::SeqCst);
+        let f = self.ltails[idx - 1].load(Ordering::Relaxed);
 
         // Make sure we're within the shared log. If we aren't, then panic.
         if f > t || f < h {
@@ -302,6 +300,7 @@ where
         // filled them into the log yet.
         for i in f..t {
             let mut iteration = 1;
+
             loop {
                 let e = self.slog[self.index(i)].get();
                 if e.alivef != self.lmasks[idx - 1].get() {
@@ -324,28 +323,21 @@ where
                 break;
             }
 
-            // Looks like this replica's local tail is going to wrap around. Time to flip
-            // the replica's understanding of what it means for an entry to be alive/dead.
+            // Looks like we're going to wrap around now; flip this replica's local mask.
             if self.index(i) == self.size - 1 {
-                trace!(
-                    "GC flip lmasks[{}]: {} -> {}",
-                    idx - 1,
-                    self.lmasks[idx - 1].get(),
-                    !self.lmasks[idx - 1].get()
-                );
-
-                self.lmasks[idx - 1].set(!self.lmasks[idx - 1].get())
-            };
+                self.lmasks[idx - 1].set(!self.lmasks[idx - 1].get());
+                trace!("idx: {} lmask: {}", idx, self.lmasks[idx - 1].get());
+            }
         }
 
         // Update the replica's local tail.
-        self.ltails[idx - 1].store(t, Ordering::SeqCst);
+        self.ltails[idx - 1].store(t, Ordering::Relaxed);
     }
 
     /// Returns a physical index given a logical index into the shared log.
     #[inline(always)]
     fn index(&self, logical: usize) -> usize {
-        logical % self.size
+        logical & (self.size - 1)
     }
 
     /// Advances the head of the log forward. If a replica has stopped making progress,
@@ -356,14 +348,14 @@ where
         // this method might never return.
         let mut iteration = 1;
         loop {
-            let r = self.next.load(Ordering::SeqCst);
-            let h = self.head.load(Ordering::SeqCst);
+            let r = self.next.load(Ordering::Relaxed);
+            let h = self.head.load(Ordering::Relaxed);
 
-            let mut n = self.ltails[0].load(Ordering::SeqCst);
+            let mut n = self.ltails[0].load(Ordering::Relaxed);
 
             // Find the smallest local tail across all replicas.
             for idx in 1..r {
-                let t = self.ltails[idx - 1].load(Ordering::SeqCst);
+                let t = self.ltails[idx - 1].load(Ordering::Relaxed);
                 if n > t {
                     n = t
                 };
@@ -383,7 +375,7 @@ where
             };
 
             // There are entries that can be freed up; update the head offset.
-            self.head.store(n, Ordering::SeqCst);
+            self.head.store(n, Ordering::Relaxed);
             return;
         }
     }
@@ -401,11 +393,10 @@ where
         self.head.store(0, Ordering::SeqCst);
         self.tail.store(0, Ordering::SeqCst);
         self.next.store(1, Ordering::SeqCst);
-        self.mask.set(true);
 
         // Next, reset replica-local metadata.
         for r in 0..MAX_REPLICAS {
-            self.ltails[r].store(0, Ordering::SeqCst);
+            self.ltails[r].store(0, Ordering::Relaxed);
             self.lmasks[r].set(true);
         }
 
@@ -492,7 +483,6 @@ mod tests {
         assert_eq!(l.head.load(Ordering::Relaxed), 0);
         assert_eq!(l.tail.load(Ordering::Relaxed), 0);
         assert_eq!(l.next.load(Ordering::Relaxed), 1);
-        assert_eq!(l.mask.get(), true);
 
         for i in 0..MAX_REPLICAS {
             assert_eq!(l.ltails[i].load(Ordering::Relaxed), 0);
@@ -514,7 +504,6 @@ mod tests {
         assert_eq!(l.head.load(Ordering::Relaxed), 0);
         assert_eq!(l.tail.load(Ordering::Relaxed), 0);
         assert_eq!(l.next.load(Ordering::Relaxed), 1);
-        assert_eq!(l.mask.get(), true);
 
         for i in 0..MAX_REPLICAS {
             assert_eq!(l.ltails[i].load(Ordering::Relaxed), 0);
@@ -528,8 +517,8 @@ mod tests {
     // Tests if we can correctly index into the shared log.
     #[test]
     fn test_log_index() {
-        let l = Log::<Operation>::new(3200);
-        assert_eq!(l.index(104), 4);
+        let l = Log::<Operation>::new(4096);
+        assert_eq!(l.index(104), 40);
     }
 
     // Tests if we can correctly register with the shared log.
@@ -615,7 +604,6 @@ mod tests {
         l.tail.store(l.size - 10, Ordering::Relaxed);
         l.append(&o, 1);
 
-        assert_eq!(l.mask.get(), false);
         assert_eq!(l.lmasks[0].get(), true);
         assert_eq!(l.tail.load(Ordering::Relaxed), l.size + 1014);
     }
@@ -691,6 +679,7 @@ mod tests {
             assert_eq!(i, 1);
         };
 
+        l.append(&o, 1); // Required for GC to work correctly.
         l.next.store(2, Ordering::SeqCst);
         l.head.store(4096, Ordering::SeqCst);
         l.tail.store(l.size - 10, Ordering::SeqCst);
@@ -699,7 +688,6 @@ mod tests {
         l.ltails[0].store(l.size - 10, Ordering::SeqCst);
         l.exec(1, f);
 
-        assert_eq!(l.mask.get(), false);
         assert_eq!(l.lmasks[0].get(), false);
         assert_eq!(l.tail.load(Ordering::Relaxed), l.size + 1014);
     }
