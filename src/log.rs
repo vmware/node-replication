@@ -300,28 +300,23 @@ where
         // filled them into the log yet.
         for i in f..t {
             let mut iteration = 1;
+            let e = self.slog[self.index(i)].as_ptr();
 
-            loop {
-                let e = self.slog[self.index(i)].get();
-                if e.alivef != self.lmasks[idx - 1].get() {
-                    if iteration % WARN_THRESHOLD == 0 {
-                        warn!(
-                            "{:?} alivef not being set for self.index(i={}) = {} (self.lmasks[{}] is {})...",
-                            std::thread::current().id(),
-                            i,
-                            self.index(i),
-                            idx - 1,
-                            self.lmasks[idx - 1].get()
-                        );
-                    }
-                    iteration += 1;
-
-                    continue;
-                };
-
-                d(e.operation, e.replica);
-                break;
+            while unsafe { (*e).alivef != self.lmasks[idx - 1].get() } {
+                if iteration % WARN_THRESHOLD == 0 {
+                    warn!(
+                        "{:?} alivef not being set for self.index(i={}) = {} (self.lmasks[{}] is {})...",
+                        std::thread::current().id(),
+                        i,
+                        self.index(i),
+                        idx - 1,
+                        self.lmasks[idx - 1].get()
+                    );
+                }
+                iteration += 1;
             }
+
+            unsafe { d((*e).operation, (*e).replica) };
 
             // Looks like we're going to wrap around now; flip this replica's local mask.
             if self.index(i) == self.size - 1 {
