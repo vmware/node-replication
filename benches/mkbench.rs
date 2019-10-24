@@ -468,7 +468,7 @@ where
 
         self.thread_mapping(ThreadMapping::Sequential);
         // Currently can only use one replica as rest has a bug:
-        self.replica_strategy(ReplicaStrategy::One);
+        self.replica_strategy(ReplicaStrategy::Socket);
 
         // On larger machines thread increments are bigger than on
         // smaller machines:

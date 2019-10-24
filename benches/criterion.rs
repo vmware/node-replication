@@ -211,7 +211,7 @@ fn log_scale_bench(c: &mut Criterion) {
     /// Benchmark #operations per iteration
     const NOP: usize = 50_000;
     /// Log size (needs to be big as we don't have GC in this case but high tput)
-    const LOG_SIZE_BYTES: usize = 5 * 1024 * 1024 * 1024;
+    const LOG_SIZE_BYTES: usize = 4 * 1024 * 1024 * 1024;
 
     let mut operations = Vec::new();
     for e in 0..NOP {
