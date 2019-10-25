@@ -10,10 +10,11 @@
 //!    to evaluate the scalability of a data-structure with node-replication.
 #![allow(unused)]
 
+use std::cell::RefMut;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::{Arc, Barrier};
+use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc, Barrier};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -25,6 +26,8 @@ use crate::utils;
 use crate::utils::topology::*;
 
 pub use crate::utils::topology::ThreadMapping;
+
+use arr_macro::arr;
 
 /// Threshold after how many iterations we log a warning for busy spinning loops.
 ///
@@ -246,6 +249,8 @@ where
         // Need a barrier to synchronize starting of threads
         let barrier = Arc::new(Barrier::new(thread_num));
 
+        let complete = Arc::new(arr![AtomicUsize::default(); 128]);
+
         let mut replicas: Vec<Arc<Replica<T>>> = Vec::with_capacity(self.replicas());
         for i in 0..self.replicas() {
             replicas.push(Arc::new(Replica::<T>::new(&self.log)));
@@ -257,6 +262,7 @@ where
         );
         let mut tid = 0;
         for (rid, cores) in self.rm.clone().into_iter() {
+            let num = cores.len();
             for core_id in cores {
                 let b = barrier.clone();
 
@@ -269,11 +275,13 @@ where
                     .register()
                     .expect("Can't register replica, out of slots?");
 
-                let b = barrier.clone();
-
                 let (iter_tx, iter_rx) = channel();
                 self.cmd_channels.push(iter_tx);
                 let result_channel = self.result_channel.0.clone();
+
+                let com = complete.clone();
+                let nre = replicas.len();
+                let rmc = self.rm.clone();
 
                 self.handles.push(thread::spawn(move || {
                     utils::pin_thread(core_id);
@@ -320,7 +328,22 @@ where
                         );
 
                         result_channel.send(elapsed);
+                        if com[rid].fetch_add(1, Ordering::Relaxed) == num - 1 {
+                            loop {
+                                let mut done = 0;
+                                for (r, c) in rmc.clone().into_iter() {
+                                    if com[r].load(Ordering::Relaxed) == c.len() {
+                                        done += 1;
+                                    }
+                                }
+                                if done == nre {
+                                    break;
+                                }
+                                replica.verify(|_d: RefMut<T>| {});
+                            }
+                        }
                         b.wait();
+                        com[rid].store(0, Ordering::Relaxed);
                     }
                 }));
 
