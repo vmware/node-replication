@@ -244,7 +244,7 @@ where
         durations[0]
     }
 
-    fn startup(&mut self) {
+    fn startup(&mut self, name: &str) {
         let thread_num = self.threads();
         // Need a barrier to synchronize starting of threads
         let barrier = Arc::new(Barrier::new(thread_num));
@@ -254,6 +254,11 @@ where
         let mut replicas: Vec<Arc<Replica<T>>> = Vec::with_capacity(self.replicas());
         for i in 0..self.replicas() {
             replicas.push(Arc::new(Replica::<T>::new(&self.log)));
+        }
+
+        let mut sync = true;
+        if name == "log-append" {
+            sync = false;
         }
 
         debug!(
@@ -328,6 +333,11 @@ where
                         );
 
                         result_channel.send(elapsed);
+                        if !sync {
+                            b.wait();
+                            continue;
+                        }
+
                         if com[rid].fetch_add(1, Ordering::Relaxed) == num - 1 {
                             loop {
                                 let mut done = 0;
@@ -580,7 +590,7 @@ where
                             log.clone(),
                             f,
                         );
-                        runner.startup();
+                        runner.startup(name);
 
                         let name = format!("{:?} {:?} BS={}", *rs, *tm, *b);
                         group.throughput(Throughput::Elements((self.operations.len() * ts) as u64));
