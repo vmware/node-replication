@@ -197,11 +197,11 @@ where
         {}
 
         let mut data = self.data.borrow_mut();
-        let f = |o: <D as Dispatch>::Operation, _i: usize| {
+        let mut f = |o: <D as Dispatch>::Operation, _i: usize| {
             data.dispatch(o);
         };
 
-        self.slog.exec(self.idx, f);
+        self.slog.exec(self.idx, &mut f);
 
         v(data);
 
@@ -210,7 +210,7 @@ where
 
     /// Syncs up the replica against the underlying log and executes a passed in
     /// closure against all consumed operations.
-    pub fn sync<F: FnMut(<D as Dispatch>::Operation, usize)>(&self, d: F) {
+    pub fn sync<F: FnMut(<D as Dispatch>::Operation, usize)>(&self, mut d: F) {
         // Acquire the combiner lock before attempting anything on the data structure.
         // Use an idx greater than the maximum that can be allocated.
         while self
@@ -219,7 +219,7 @@ where
             != 0
         {}
 
-        self.slog.exec(self.idx, d);
+        self.slog.exec(self.idx, &mut d);
 
         self.combiner.store(0, Ordering::Release);
     }
@@ -274,21 +274,31 @@ where
 
         // Collect operations from each thread registered with this replica.
         for i in 1..n {
-            o[i - 1] = self.contexts[i - 1].ops(&mut b)
+            o[i - 1] = self.contexts[i - 1].ops(&mut b);
         }
 
-        // Append all collected operations into the shared log.
-        self.slog.append(&b, self.idx);
+        // Append all collected operations into the shared log. We pass a closure
+        // in here because operations on the log might need to be consumed for GC.
+        {
+            let mut d = self.data.borrow_mut();
+            let f = |o: <D as Dispatch>::Operation, i: usize| {
+                let resp = d.dispatch(o);
+                if i == self.idx {
+                    r.push(resp);
+                }
+            };
+            self.slog.append(&b, self.idx, f);
+        }
 
         // Execute any operations on the shared log against this replica.
         let mut data = self.data.borrow_mut();
-        let f = |o: <D as Dispatch>::Operation, i: usize| {
+        let mut f = |o: <D as Dispatch>::Operation, i: usize| {
             let resp = data.dispatch(o);
             if i == self.idx {
                 r.push(resp)
             };
         };
-        self.slog.exec(self.idx, f);
+        self.slog.exec(self.idx, &mut f);
 
         // Return/Enqueue responses back into the appropriate thread context(s).
         let (mut s, mut f) = (0, 0);

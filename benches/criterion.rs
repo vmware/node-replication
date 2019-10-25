@@ -10,6 +10,7 @@ extern crate criterion;
 extern crate log;
 extern crate zipf;
 
+use node_replication::Dispatch;
 use rand::distributions::Distribution;
 use rand::{Rng, RngCore};
 use zipf::ZipfDistribution;
@@ -228,7 +229,11 @@ fn log_scale_bench(c: &mut Criterion) {
             "log-append",
             |_cid, rid, log, _replica, ops, batch_size| {
                 for batch_op in ops.rchunks(batch_size) {
-                    let _r = log.append(batch_op, rid);
+                    let _r = log.append(
+                        batch_op,
+                        rid,
+                        |_o: <nop::Nop as Dispatch>::Operation, _i: usize| {},
+                    );
                 }
             },
         );

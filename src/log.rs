@@ -206,8 +206,10 @@ where
     /// Adds a batch of operations to the shared log. If there isn't enough space
     /// to perform the append, this method busy waits until the head is advanced.
     /// Accepts a replica `idx`; all appended operations/entries will be marked
-    /// with this replica-identifier.
-    pub fn append(&self, ops: &[T], idx: usize) {
+    /// with this replica-identifier. Also accepts a closure `s`; when waiting for
+    /// GC, this closure is passed into exec() to ensure that this replica does'nt
+    /// cause a deadlock.
+    pub fn append<F: FnMut(T, usize)>(&self, ops: &[T], idx: usize, mut s: F) {
         let n = ops.len();
         let mut iteration = 1;
 
@@ -230,10 +232,12 @@ where
 
             // If there are fewer than `GC_FROM_HEAD` entries on the log, then just
             // try again. The replica that reserved entry (h + self.size - GC_FROM_HEAD)
-            // is currently trying to advance the head of the log.
+            // is currently trying to advance the head of the log. Keep refreshing the
+            // replica against the log to make sure that it isn't deadlocking GC.
             if t > h + self.size - GC_FROM_HEAD {
+                self.exec(idx, &mut s);
                 continue;
-            };
+            }
 
             // If on adding in the above entries there would be fewer than `GC_FROM_HEAD`
             // entries left on the log, then we need to advance the head of the log.
@@ -270,7 +274,7 @@ where
 
             // If needed, advance the head of the log forward to make room on the log.
             if advance {
-                self.advance_head();
+                self.advance_head(idx, &mut s);
             }
 
             return;
@@ -283,7 +287,7 @@ where
     ///
     /// The passed in closure is expected to take in two arguments: The operation
     /// from the shared log to be executed and the replica that issued it.
-    pub fn exec<F: FnMut(T, usize)>(&self, idx: usize, mut d: F) {
+    pub fn exec<F: FnMut(T, usize)>(&self, idx: usize, d: &mut F) {
         let t = self.tail.load(Ordering::Relaxed);
         let h = self.head.load(Ordering::Relaxed);
 
@@ -336,8 +340,9 @@ where
     }
 
     /// Advances the head of the log forward. If a replica has stopped making progress,
-    /// then this method will never return.
-    fn advance_head(&self) {
+    /// then this method will never return. Accepts a closure that is passed into exec()
+    /// to ensure that this replica does not deadlock GC.
+    fn advance_head<F: FnMut(T, usize)>(&self, rid: usize, mut s: &mut F) {
         // Keep looping until we can advance the head and create some free space
         // on the log. If one of the replicas has stopped making progress, then
         // this method might never return.
@@ -357,7 +362,8 @@ where
             }
 
             // If we cannot advance the head further, then start
-            // from the beginning of this loop again.
+            // from the beginning of this loop again. Before doing so, try consuming
+            // any new entries on the log to prevent deadlock.
             if n == h {
                 if iteration % WARN_THRESHOLD == 0 {
                     warn!(
@@ -366,6 +372,7 @@ where
                     );
                 }
                 iteration += 1;
+                self.exec(rid, &mut s);
                 continue;
             };
 
@@ -538,7 +545,7 @@ mod tests {
     fn test_log_append() {
         let l = Log::<Operation>::default();
         let o = [Operation::Read];
-        l.append(&o, 1);
+        l.append(&o, 1, |_o: Operation, _i: usize| {});
 
         assert_eq!(l.head.load(Ordering::Relaxed), 0);
         assert_eq!(l.tail.load(Ordering::Relaxed), 1);
@@ -551,7 +558,7 @@ mod tests {
     fn test_log_append_multiple() {
         let l = Log::<Operation>::default();
         let o = [Operation::Read, Operation::Write(119)];
-        l.append(&o, 1);
+        l.append(&o, 1, |_o: Operation, _i: usize| {});
 
         assert_eq!(l.head.load(Ordering::Relaxed), 0);
         assert_eq!(l.tail.load(Ordering::Relaxed), 2);
@@ -568,7 +575,7 @@ mod tests {
         l.ltails[2].store(4096, Ordering::Relaxed);
         l.ltails[3].store(799, Ordering::Relaxed);
 
-        l.advance_head();
+        l.advance_head(0, &mut |_o: Operation, _i: usize| {});
         assert_eq!(l.head.load(Ordering::Relaxed), 224);
     }
 
@@ -581,7 +588,7 @@ mod tests {
         l.next.store(2, Ordering::Relaxed);
         l.tail.store(l.size - GC_FROM_HEAD - 1, Ordering::Relaxed);
         l.ltails[0].store(1024, Ordering::Relaxed);
-        l.append(&o, 1);
+        l.append(&o, 1, |_o: Operation, _i: usize| {});
 
         assert_eq!(l.head.load(Ordering::Relaxed), 1024);
         assert_eq!(l.tail.load(Ordering::Relaxed), l.size - GC_FROM_HEAD + 3);
@@ -597,7 +604,7 @@ mod tests {
         l.next.store(2, Ordering::Relaxed);
         l.head.store(4096, Ordering::Relaxed);
         l.tail.store(l.size - 10, Ordering::Relaxed);
-        l.append(&o, 1);
+        l.append(&o, 1, |_o: Operation, _i: usize| {});
 
         assert_eq!(l.lmasks[0].get(), true);
         assert_eq!(l.tail.load(Ordering::Relaxed), l.size + 1014);
@@ -608,24 +615,24 @@ mod tests {
     fn test_log_exec() {
         let l = Log::<Operation>::default();
         let o = [Operation::Read];
-        let f = |op: Operation, i: usize| {
+        let mut f = |op: Operation, i: usize| {
             assert_eq!(op, Operation::Read);
             assert_eq!(i, 1);
         };
 
-        l.append(&o, 1);
-        l.exec(1, f);
+        l.append(&o, 1, |_o: Operation, _i: usize| {});
+        l.exec(1, &mut f);
     }
 
     // Test that exec() doesn't do anything when the log is empty.
     #[test]
     fn test_log_exec_empty() {
         let l = Log::<Operation>::default();
-        let f = |_o: Operation, _i: usize| {
+        let mut f = |_o: Operation, _i: usize| {
             assert!(false);
         };
 
-        l.exec(1, f);
+        l.exec(1, &mut f);
     }
 
     // Test that exec() doesn't do anything if we're already up-to-date.
@@ -633,17 +640,17 @@ mod tests {
     fn test_log_exec_zero() {
         let l = Log::<Operation>::default();
         let o = [Operation::Read];
-        let f = |op: Operation, i: usize| {
+        let mut f = |op: Operation, i: usize| {
             assert_eq!(op, Operation::Read);
             assert_eq!(i, 1);
         };
-        let g = |_op: Operation, _i: usize| {
+        let mut g = |_op: Operation, _i: usize| {
             assert!(false);
         };
 
-        l.append(&o, 1);
-        l.exec(1, f);
-        l.exec(1, g);
+        l.append(&o, 1, |_o: Operation, _i: usize| {});
+        l.exec(1, &mut f);
+        l.exec(1, &mut g);
     }
 
     // Test that multiple entries on the log can be executed correctly.
@@ -652,14 +659,14 @@ mod tests {
         let l = Log::<Operation>::default();
         let o = [Operation::Read, Operation::Write(119)];
         let mut s = 0;
-        let f = |op: Operation, _i: usize| match op {
+        let mut f = |op: Operation, _i: usize| match op {
             Operation::Read => s += 121,
             Operation::Write(v) => s += v,
             Operation::Invalid => assert!(false),
         };
 
-        l.append(&o, 1);
-        l.exec(1, f);
+        l.append(&o, 1, |_o: Operation, _i: usize| {});
+        l.exec(1, &mut f);
         assert_eq!(s, 240);
     }
 
@@ -669,19 +676,19 @@ mod tests {
     fn test_log_exec_wrap() {
         let l = Log::<Operation>::default();
         let o = [Operation::Read; 1024];
-        let f = |op: Operation, i: usize| {
+        let mut f = |op: Operation, i: usize| {
             assert_eq!(op, Operation::Read);
             assert_eq!(i, 1);
         };
 
-        l.append(&o, 1); // Required for GC to work correctly.
+        l.append(&o, 1, |_o: Operation, _i: usize| {}); // Required for GC to work correctly.
         l.next.store(2, Ordering::SeqCst);
         l.head.store(4096, Ordering::SeqCst);
         l.tail.store(l.size - 10, Ordering::SeqCst);
-        l.append(&o, 1);
+        l.append(&o, 1, |_o: Operation, _i: usize| {});
 
         l.ltails[0].store(l.size - 10, Ordering::SeqCst);
-        l.exec(1, f);
+        l.exec(1, &mut f);
 
         assert_eq!(l.lmasks[0].get(), false);
         assert_eq!(l.tail.load(Ordering::Relaxed), l.size + 1014);
