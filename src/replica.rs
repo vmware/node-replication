@@ -184,7 +184,7 @@ where
         }
     }
 
-    /// Executes a passed in closure against the replica's underlying underlying data
+    /// Executes a passed in closure against the replica's underlying data
     /// structure. Useful for unit testing; can be used to verify certain properties
     /// of the data structure after issuing a bunch of operations against it.
     pub fn verify<F: FnMut(RefMut<D>)>(&self, mut v: F) {
@@ -204,6 +204,22 @@ where
         self.slog.exec(self.idx, f);
 
         v(data);
+
+        self.combiner.store(0, Ordering::Release);
+    }
+
+    /// Syncs up the replica against the underlying log and executes a passed in
+    /// closure against all consumed operations.
+    pub fn sync<F: FnMut(<D as Dispatch>::Operation, usize)>(&self, d: F) {
+        // Acquire the combiner lock before attempting anything on the data structure.
+        // Use an idx greater than the maximum that can be allocated.
+        while self
+            .combiner
+            .compare_and_swap(0, MAX_THREADS_PER_REPLICA + 2, Ordering::Acquire)
+            != 0
+        {}
+
+        self.slog.exec(self.idx, d);
 
         self.combiner.store(0, Ordering::Release);
     }

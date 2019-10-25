@@ -339,7 +339,7 @@ where
                                 if done == nre {
                                     break;
                                 }
-                                replica.verify(|_d: RefMut<T>| {});
+                                replica.sync(|_o: <T as Dispatch>::Operation, _r: usize| {});
                             }
                         }
                         b.wait();
