@@ -24,7 +24,7 @@ bench:
   stage: bench
   script:
     # Run criterion and hashbench
-    - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench criterion -- log
+    # - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench criterion -- log
     - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench criterion -- synthetic
     - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench criterion -- stack
     - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench criterion -- hashmap
