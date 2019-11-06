@@ -134,6 +134,10 @@ where
     results: Vec<(u64, u64, i64)>,
     /// Batch-size (passed as a parameter to benchmark funtion `f`)
     batch_size: usize,
+    /// If we should wait at the end and periodically process the log
+    /// (to avoid lifeness issues where all threads of a replica A have exited
+    /// and now replica B can no longer make progress due to GC)
+    sync: bool,
     /// Benchmark function to execute
     f: BenchFn<T>,
     /// A series of channels to communicate iteration count to every worker.
@@ -159,6 +163,7 @@ where
         ts: usize,
         operations: Vec<<T as Dispatch>::Operation>,
         batch_size: usize,
+        sync: bool,
         log: Arc<Log<'static, <T as Dispatch>::Operation>>,
         f: BenchFn<T>,
     ) -> ScaleBenchmark<T> {
@@ -168,6 +173,7 @@ where
             log,
             results: Default::default(),
             batch_size,
+            sync,
             f: f,
             cmd_channels: Default::default(),
             result_channel: channel(),
@@ -244,22 +250,28 @@ where
         durations[0]
     }
 
+    fn alloc_replicas(&self, replicas: &mut Vec<Arc<Replica<T>>>) {
+        for (rid, cores) in self.rm.clone().into_iter() {
+            let log = self.log.clone();
+            let alloc_thread = thread::spawn(move || {
+                // Using a thread from the replica' cores forces the memory
+                // allocation to be local to the where a replica will be used later
+                utils::pin_thread(cores[0]);
+                Arc::new(Replica::<T>::new(&log))
+            });
+            replicas.push(alloc_thread.join().unwrap());
+        }
+    }
+
     fn startup(&mut self, name: &str) {
         let thread_num = self.threads();
         // Need a barrier to synchronize starting of threads
         let barrier = Arc::new(Barrier::new(thread_num));
 
         let complete = Arc::new(arr![AtomicUsize::default(); 128]);
-
         let mut replicas: Vec<Arc<Replica<T>>> = Vec::with_capacity(self.replicas());
-        for i in 0..self.replicas() {
-            replicas.push(Arc::new(Replica::<T>::new(&self.log)));
-        }
-
-        let mut sync = true;
-        if name == "log-append" {
-            sync = false;
-        }
+        self.alloc_replicas(&mut replicas);
+        let do_sync = self.sync;
 
         debug!(
             "Execute benchmark with the following replica: [core_id] mapping: {:#?}",
@@ -290,7 +302,6 @@ where
 
                 self.handles.push(thread::spawn(move || {
                     utils::pin_thread(core_id);
-
                     loop {
                         let iters = iter_rx.recv().expect("Can't get iter from channel?");
                         if iters == 0 {
@@ -300,6 +311,7 @@ where
                             );
                             return;
                         }
+
                         debug!(
                             "Running {:?} on core {} replica#{} rtoken#{} iters={}",
                             thread::current().id(),
@@ -333,12 +345,10 @@ where
                         );
 
                         result_channel.send(elapsed);
-                        if !sync {
+                        if !do_sync {
                             b.wait();
                             continue;
-                        }
-
-                        if com[rid].fetch_add(1, Ordering::Relaxed) == num - 1 {
+                        } else if com[rid].fetch_add(1, Ordering::Relaxed) == num - 1 {
                             loop {
                                 let mut done = 0;
                                 for (r, c) in rmc.clone().into_iter() {
@@ -352,6 +362,7 @@ where
                                 replica.sync(|_o: <T as Dispatch>::Operation, _r: usize| {});
                             }
                         }
+
                         b.wait();
                         com[rid].store(0, Ordering::Relaxed);
                     }
@@ -461,6 +472,8 @@ where
     threads: Vec<usize>,
     /// Batch sizes to use (default 1)
     batches: Vec<usize>,
+    /// Sync replicas periodically (true)
+    sync: bool,
     /// Log size (bytes).
     log_size: usize,
     /// Operations executed on the log.
@@ -489,6 +502,7 @@ where
             thread_mappings: Vec::new(),
             threads: Vec::new(),
             batches: vec![1usize],
+            sync: true,
             log_size: 1024 * 1024 * 2,
             operations: ops,
             reset_log: false,
@@ -563,6 +577,12 @@ where
         self
     }
 
+    /// Disable syncing the log for a replica after all threads have completed.
+    pub fn disable_sync(&mut self) -> &mut Self {
+        self.sync = false;
+        self
+    }
+
     /// Creates a benchmark to evalute the scalability properties of the
     /// log for a given data-structure.
     ///
@@ -589,6 +609,7 @@ where
                             *ts,
                             self.operations.to_vec(),
                             *b,
+                            self.sync,
                             log.clone(),
                             f,
                         );

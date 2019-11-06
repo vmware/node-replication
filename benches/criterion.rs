@@ -224,6 +224,7 @@ fn log_scale_bench(c: &mut Criterion) {
         .log_size(LOG_SIZE_BYTES)
         .add_batch(8)
         .reset_log()
+        .disable_sync()
         .configure(
             c,
             "log-append",
