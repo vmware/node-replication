@@ -178,6 +178,7 @@ where
             iter += 1;
 
             if iter == interval {
+                warn!("Response unavailable, so attempting to combine.");
                 self.try_combine(idx);
                 iter = 0;
             }

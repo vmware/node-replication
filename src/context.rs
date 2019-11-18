@@ -110,6 +110,10 @@ where
             return 0;
         };
 
+        if h > t {
+            panic!("Head of thread-local batch has advanced beyond tail!");
+        }
+
         // Iterate from `comb` to `tail`, adding pending operations into the
         // passed in buffer. Return the number of operations that were added.
         let mut n = 0;
@@ -135,6 +139,10 @@ where
         if s == f {
             return;
         };
+
+        if s > f {
+            panic!("Head of thread-local batch has advanced beyond combiner offset!");
+        }
 
         // Iterate from `head` to `comb`, adding responses into the passed in buffer.
         // Once we're done, update `head` to the value of `comb` we read above.
