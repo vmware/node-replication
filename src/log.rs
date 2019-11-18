@@ -212,6 +212,7 @@ where
     pub fn append<F: FnMut(T, usize)>(&self, ops: &[T], idx: usize, mut s: F) {
         let n = ops.len();
         let mut iteration = 1;
+        let mut waitgc = 1;
 
         // Keep trying to reserve entries and add operations to the log until
         // we succeed in doing so.
@@ -235,6 +236,16 @@ where
             // is currently trying to advance the head of the log. Keep refreshing the
             // replica against the log to make sure that it isn't deadlocking GC.
             if t > h + self.size - GC_FROM_HEAD {
+                if waitgc % WARN_THRESHOLD == 0 {
+                    warn!(
+                        "{:?} append(ops.len()={}, {}) takes too many iterations ({}) waiting for gc...",
+                        std::thread::current().id(),
+                        ops.len(),
+                        idx,
+                        waitgc,
+                    );
+                }
+                waitgc += 1;
                 self.exec(idx, &mut s);
                 continue;
             }
