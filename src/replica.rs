@@ -159,7 +159,7 @@ where
         let prev = buf.len();
 
         let mut iter = 0;
-        let interval = 1 << 20;
+        let interval = 1 << 29;
 
         // No waiting requests. Just return to the caller.
         if self.contexts[idx - 1].tail.get() == self.contexts[idx - 1].head.get() {
