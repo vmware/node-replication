@@ -252,14 +252,12 @@ where
 
     fn alloc_replicas(&self, replicas: &mut Vec<Arc<Replica<T>>>) {
         for (rid, cores) in self.rm.clone().into_iter() {
+            // Pinning the thread to the replica' cores forces the memory
+            // allocation to be local to the where a replica will be used later
+            utils::pin_thread(cores[0]);
+
             let log = self.log.clone();
-            let alloc_thread = thread::spawn(move || {
-                // Using a thread from the replica' cores forces the memory
-                // allocation to be local to the where a replica will be used later
-                utils::pin_thread(cores[0]);
-                Arc::new(Replica::<T>::new(&log))
-            });
-            replicas.push(alloc_thread.join().unwrap());
+            replicas.push(Arc::new(Replica::<T>::new(&log)));
         }
     }
 
