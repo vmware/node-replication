@@ -555,9 +555,9 @@ mod tests {
     #[test]
     fn test_log_register_none() {
         let l = Log::<Operation>::new(1024);
-        l.next.store(32, Ordering::Relaxed);
+        l.next.store(64, Ordering::Relaxed);
         assert!(l.register().is_none());
-        assert_eq!(l.next.load(Ordering::Relaxed), 32);
+        assert_eq!(l.next.load(Ordering::Relaxed), 64);
     }
 
     // Test that we can correctly append an entry into the log.
@@ -622,7 +622,7 @@ mod tests {
         let o = [Operation::Read; 1024];
 
         l.next.store(2, Ordering::Relaxed);
-        l.head.store(4096, Ordering::Relaxed);
+        l.head.store(8192, Ordering::Relaxed);
         l.tail.store(l.size - 10, Ordering::Relaxed);
         l.append(&o, 1, |_o: Operation, _i: usize| {});
 
@@ -703,7 +703,7 @@ mod tests {
 
         l.append(&o, 1, |_o: Operation, _i: usize| {}); // Required for GC to work correctly.
         l.next.store(2, Ordering::SeqCst);
-        l.head.store(4096, Ordering::SeqCst);
+        l.head.store(8192, Ordering::SeqCst);
         l.tail.store(l.size - 10, Ordering::SeqCst);
         l.append(&o, 1, |_o: Operation, _i: usize| {});
 
