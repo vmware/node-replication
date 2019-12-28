@@ -25,11 +25,11 @@ bench:
   script:
     # Run criterion and hashbench
     # - RUST_LOG=warn RUST_TEST_THREADS=1 timeout 1h cargo bench --bench criterion -- log
-    - RUST_LOG=warn RUST_TEST_THREADS=1 timeout 1h cargo bench --bench criterion -- synthetic
-    - RUST_LOG=warn RUST_TEST_THREADS=1 timeout 1h cargo bench --bench criterion -- stack
-    - RUST_LOG=warn RUST_TEST_THREADS=1 timeout 1h cargo bench --bench criterion -- hashmap
-    - RUST_LOG=warn RUST_TEST_THREADS=1 timeout 1h cargo bench --bench vspace
-    - RUST_LOG=warn RUST_TEST_THREADS=1 timeout 1h cargo bench --bench memfs
+    - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench criterion -- synthetic
+    - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench criterion -- stack
+    - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench criterion -- hashmap
+    - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench vspace
+    - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench memfs
     - timeout 1.5h bash benches/hashbench_run.sh
     # This would run the complete suite
     # - RUST_TEST_THREADS=1 timeout 2h cargo bench

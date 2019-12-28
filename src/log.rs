@@ -19,7 +19,7 @@ use crossbeam_utils::CachePadded;
 const DEFAULT_LOG_BYTES: usize = 1024 * 1024 * 1024;
 
 /// The maximum number of replicas that can be used against the log.
-const MAX_REPLICAS: usize = 32;
+const MAX_REPLICAS: usize = 64;
 
 /// Constant required for garbage collection. When the tail and the head are
 /// these many entries apart on the circular buffer, garbage collection will
@@ -137,6 +137,8 @@ where
     /// memory for the log upfront. No further allocations will be performed once this
     /// method returns.
     pub fn new<'b>(bytes: usize) -> Log<'b, T> {
+        use arr_macro::arr;
+
         let mem = unsafe {
             alloc(
                 Layout::from_size_align(bytes, align_of::<Cell<Entry<T>>>())
@@ -160,7 +162,7 @@ where
             e.set(Entry::default());
         }
 
-        let fls: [CachePadded<Cell<bool>>; MAX_REPLICAS] = Default::default();
+        let fls: [CachePadded<Cell<bool>>; MAX_REPLICAS] = arr![Default::default(); 64];
         for idx in 0..MAX_REPLICAS {
             fls[idx].set(true)
         }
@@ -172,7 +174,7 @@ where
             slog: raw,
             head: CachePadded::new(AtomicUsize::new(0usize)),
             tail: CachePadded::new(AtomicUsize::new(0usize)),
-            ltails: Default::default(),
+            ltails: arr![Default::default(); 64],
             next: CachePadded::new(AtomicUsize::new(1usize)),
             lmasks: fls,
         }
@@ -361,6 +363,7 @@ where
         loop {
             let r = self.next.load(Ordering::Relaxed);
             let h = self.head.load(Ordering::Relaxed);
+            let f = self.tail.load(Ordering::Relaxed);
 
             let mut n = self.ltails[0].load(Ordering::Relaxed);
 
@@ -389,7 +392,13 @@ where
 
             // There are entries that can be freed up; update the head offset.
             self.head.store(n, Ordering::Relaxed);
-            return;
+
+            // Make sure that we freed up enough space so that threads waiting for
+            // GC in append can make progress. Otherwise, try to make progress again.
+            if f < n + self.size - GC_FROM_HEAD {
+                return;
+            }
+            self.exec(rid, &mut s);
         }
     }
 
