@@ -335,7 +335,7 @@ fn memfs_single_threaded(c: &mut Criterion) {
     let _r = env_logger::try_init();
 
     const LOG_SIZE_BYTES: usize = 16 * 1024 * 1024;
-    const NOP: usize = 1000;
+    const NOP: usize = 100;
     const WRITE_RATIO: usize = 10; //% out of 100
 
     let ops = generate_fs_operations(NOP, WRITE_RATIO);
@@ -346,7 +346,7 @@ fn memfs_single_threaded(c: &mut Criterion) {
 fn memfs_scale_out(c: &mut Criterion) {
     let _r = env_logger::try_init();
 
-    const NOP: usize = 1000;
+    const NOP: usize = 100;
     const WRITE_RATIO: usize = 10; //% out of 100
 
     let ops = generate_fs_operations(NOP, WRITE_RATIO);
