@@ -45,7 +45,7 @@ system.
 #### Install Benchmark/Test dependencies Ubuntu
 
 ```
-$ apt-get install libhwloc-dev gnuplot libfuse-dev liburcu-dev liburcu6
+$ apt-get install libhwloc-dev gnuplot libfuse-dev liburcu-dev liburcu6 clang
 ```
 
 #### Install Benchmark/Test dependencies on MacOS
