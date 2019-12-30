@@ -347,8 +347,10 @@ where
                             b.wait();
                             continue;
                         } else if com[rid].fetch_add(1, Ordering::Relaxed) == num - 1 {
+                            // Periodically sync/advance all, and return once all
+                            // replicas have completed.
                             loop {
-                                let mut done = 0;
+                                let mut done = 0; // How many replicas are done with the operations
                                 for (r, c) in rmc.clone().into_iter() {
                                     if com[r].load(Ordering::Relaxed) == c.len() {
                                         done += 1;
@@ -357,6 +359,8 @@ where
                                 if done == nre {
                                     break;
                                 }
+
+                                // Consume the log but we don't apply operations anymore
                                 replica.sync(|_o: <T as Dispatch>::Operation, _r: usize| {});
                             }
                         }
@@ -512,7 +516,6 @@ where
         let topology = MachineTopology::new();
 
         self.thread_mapping(ThreadMapping::Sequential);
-        // Currently can only use one replica as rest has a bug:
         self.replica_strategy(ReplicaStrategy::One);
         self.replica_strategy(ReplicaStrategy::Socket);
         self.replica_strategy(ReplicaStrategy::L1);
