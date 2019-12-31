@@ -10,6 +10,7 @@ extern crate criterion;
 extern crate log;
 extern crate zipf;
 
+use node_replication::Dispatch;
 use rand::distributions::Distribution;
 use rand::{Rng, RngCore};
 use zipf::ZipfDistribution;
@@ -211,7 +212,7 @@ fn log_scale_bench(c: &mut Criterion) {
     /// Benchmark #operations per iteration
     const NOP: usize = 50_000;
     /// Log size (needs to be big as we don't have GC in this case but high tput)
-    const LOG_SIZE_BYTES: usize = 5 * 1024 * 1024 * 1024;
+    const LOG_SIZE_BYTES: usize = 4 * 1024 * 1024 * 1024;
 
     let mut operations = Vec::new();
     for e in 0..NOP {
@@ -223,12 +224,17 @@ fn log_scale_bench(c: &mut Criterion) {
         .log_size(LOG_SIZE_BYTES)
         .add_batch(8)
         .reset_log()
+        .disable_sync()
         .configure(
             c,
             "log-append",
             |_cid, rid, log, _replica, ops, batch_size| {
                 for batch_op in ops.rchunks(batch_size) {
-                    let _r = log.append(batch_op, rid);
+                    let _r = log.append(
+                        batch_op,
+                        rid,
+                        |_o: <nop::Nop as Dispatch>::Operation, _i: usize| {},
+                    );
                 }
             },
         );

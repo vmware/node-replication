@@ -332,10 +332,10 @@ fn generate_fs_operations(nop: usize, write_ratio: usize) -> Vec<Operation> {
 }
 
 fn memfs_single_threaded(c: &mut Criterion) {
-    env_logger::try_init();
+    let _r = env_logger::try_init();
 
-    const LOG_SIZE_BYTES: usize = 12 * 1024 * 1024;
-    const NOP: usize = 1000;
+    const LOG_SIZE_BYTES: usize = 16 * 1024 * 1024;
+    const NOP: usize = 100;
     const WRITE_RATIO: usize = 10; //% out of 100
 
     let ops = generate_fs_operations(NOP, WRITE_RATIO);
@@ -344,9 +344,9 @@ fn memfs_single_threaded(c: &mut Criterion) {
 
 /// Compare scale-out behaviour of memfs.
 fn memfs_scale_out(c: &mut Criterion) {
-    env_logger::try_init();
+    let _r = env_logger::try_init();
 
-    const NOP: usize = 1000;
+    const NOP: usize = 100;
     const WRITE_RATIO: usize = 10; //% out of 100
 
     let ops = generate_fs_operations(NOP, WRITE_RATIO);
@@ -354,8 +354,8 @@ fn memfs_scale_out(c: &mut Criterion) {
     mkbench::ScaleBenchBuilder::<NrMemFilesystem>::new(ops)
         .machine_defaults()
         // The only benchmark that actually seems to slightly
-        // regress with 2 MiB logsize, set to 12 MiB
-        .log_size(12 * 1024 * 1024)
+        // regress with 2 MiB logsize, set to 16 MiB
+        .log_size(16 * 1024 * 1024)
         .configure(
             c,
             "memfs-scaleout",

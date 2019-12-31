@@ -10,10 +10,11 @@
 //!    to evaluate the scalability of a data-structure with node-replication.
 #![allow(unused)]
 
+use std::cell::RefMut;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::{Arc, Barrier};
+use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc, Barrier};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -25,6 +26,8 @@ use crate::utils;
 use crate::utils::topology::*;
 
 pub use crate::utils::topology::ThreadMapping;
+
+use arr_macro::arr;
 
 /// Threshold after how many iterations we log a warning for busy spinning loops.
 ///
@@ -131,6 +134,10 @@ where
     results: Vec<(u64, u64, i64)>,
     /// Batch-size (passed as a parameter to benchmark funtion `f`)
     batch_size: usize,
+    /// If we should wait at the end and periodically process the log
+    /// (to avoid lifeness issues where all threads of a replica A have exited
+    /// and now replica B can no longer make progress due to GC)
+    sync: bool,
     /// Benchmark function to execute
     f: BenchFn<T>,
     /// A series of channels to communicate iteration count to every worker.
@@ -156,6 +163,7 @@ where
         ts: usize,
         operations: Vec<<T as Dispatch>::Operation>,
         batch_size: usize,
+        sync: bool,
         log: Arc<Log<'static, <T as Dispatch>::Operation>>,
         f: BenchFn<T>,
     ) -> ScaleBenchmark<T> {
@@ -165,6 +173,7 @@ where
             log,
             results: Default::default(),
             batch_size,
+            sync,
             f: f,
             cmd_channels: Default::default(),
             result_channel: channel(),
@@ -241,15 +250,26 @@ where
         durations[0]
     }
 
-    fn startup(&mut self) {
+    fn alloc_replicas(&self, replicas: &mut Vec<Arc<Replica<T>>>) {
+        for (rid, cores) in self.rm.clone().into_iter() {
+            // Pinning the thread to the replica' cores forces the memory
+            // allocation to be local to the where a replica will be used later
+            utils::pin_thread(cores[0]);
+
+            let log = self.log.clone();
+            replicas.push(Arc::new(Replica::<T>::new(&log)));
+        }
+    }
+
+    fn startup(&mut self, name: &str) {
         let thread_num = self.threads();
         // Need a barrier to synchronize starting of threads
         let barrier = Arc::new(Barrier::new(thread_num));
 
+        let complete = Arc::new(arr![AtomicUsize::default(); 128]);
         let mut replicas: Vec<Arc<Replica<T>>> = Vec::with_capacity(self.replicas());
-        for i in 0..self.replicas() {
-            replicas.push(Arc::new(Replica::<T>::new(&self.log)));
-        }
+        self.alloc_replicas(&mut replicas);
+        let do_sync = self.sync;
 
         debug!(
             "Execute benchmark with the following replica: [core_id] mapping: {:#?}",
@@ -257,6 +277,7 @@ where
         );
         let mut tid = 0;
         for (rid, cores) in self.rm.clone().into_iter() {
+            let num = cores.len();
             for core_id in cores {
                 let b = barrier.clone();
 
@@ -269,15 +290,16 @@ where
                     .register()
                     .expect("Can't register replica, out of slots?");
 
-                let b = barrier.clone();
-
                 let (iter_tx, iter_rx) = channel();
                 self.cmd_channels.push(iter_tx);
                 let result_channel = self.result_channel.0.clone();
 
+                let com = complete.clone();
+                let nre = replicas.len();
+                let rmc = self.rm.clone();
+
                 self.handles.push(thread::spawn(move || {
                     utils::pin_thread(core_id);
-
                     loop {
                         let iters = iter_rx.recv().expect("Can't get iter from channel?");
                         if iters == 0 {
@@ -287,6 +309,7 @@ where
                             );
                             return;
                         }
+
                         debug!(
                             "Running {:?} on core {} replica#{} rtoken#{} iters={}",
                             thread::current().id(),
@@ -320,7 +343,30 @@ where
                         );
 
                         result_channel.send(elapsed);
+                        if !do_sync {
+                            b.wait();
+                            continue;
+                        } else if com[rid].fetch_add(1, Ordering::Relaxed) == num - 1 {
+                            // Periodically sync/advance all, and return once all
+                            // replicas have completed.
+                            loop {
+                                let mut done = 0; // How many replicas are done with the operations
+                                for (r, c) in rmc.clone().into_iter() {
+                                    if com[r].load(Ordering::Relaxed) == c.len() {
+                                        done += 1;
+                                    }
+                                }
+                                if done == nre {
+                                    break;
+                                }
+
+                                // Consume the log but we don't apply operations anymore
+                                replica.sync(|_o: <T as Dispatch>::Operation, _r: usize| {});
+                            }
+                        }
+
                         b.wait();
+                        com[rid].store(0, Ordering::Relaxed);
                     }
                 }));
 
@@ -428,6 +474,8 @@ where
     threads: Vec<usize>,
     /// Batch sizes to use (default 1)
     batches: Vec<usize>,
+    /// Sync replicas periodically (true)
+    sync: bool,
     /// Log size (bytes).
     log_size: usize,
     /// Operations executed on the log.
@@ -456,6 +504,7 @@ where
             thread_mappings: Vec::new(),
             threads: Vec::new(),
             batches: vec![1usize],
+            sync: true,
             log_size: 1024 * 1024 * 2,
             operations: ops,
             reset_log: false,
@@ -467,8 +516,9 @@ where
         let topology = MachineTopology::new();
 
         self.thread_mapping(ThreadMapping::Sequential);
-        // Currently can only use one replica as rest has a bug:
         self.replica_strategy(ReplicaStrategy::One);
+        self.replica_strategy(ReplicaStrategy::Socket);
+        self.replica_strategy(ReplicaStrategy::L1);
 
         // On larger machines thread increments are bigger than on
         // smaller machines:
@@ -528,6 +578,12 @@ where
         self
     }
 
+    /// Disable syncing the log for a replica after all threads have completed.
+    pub fn disable_sync(&mut self) -> &mut Self {
+        self.sync = false;
+        self
+    }
+
     /// Creates a benchmark to evalute the scalability properties of the
     /// log for a given data-structure.
     ///
@@ -554,10 +610,11 @@ where
                             *ts,
                             self.operations.to_vec(),
                             *b,
+                            self.sync,
                             log.clone(),
                             f,
                         );
-                        runner.startup();
+                        runner.startup(name);
 
                         let name = format!("{:?} {:?} BS={}", *rs, *tm, *b);
                         group.throughput(Throughput::Elements((self.operations.len() * ts) as u64));

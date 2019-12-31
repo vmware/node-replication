@@ -153,19 +153,38 @@ where
     }
 
     /// Appends any pending responses to operations issued by this thread into a passed in
-    /// buffer/vector. Returns the number of responses that were appended.
+    /// buffer/vector. Returns the number of responses that were appended. Blocks until
+    /// some responses can be returned.
     pub fn get_responses(&self, idx: usize, buf: &mut Vec<<D as Dispatch>::Response>) -> usize {
-        // Try to flat combine first. This helps avoid starvation.
-        self.try_combine(idx);
-
         let prev = buf.len();
-        self.contexts[idx - 1].res(buf);
-        let next = buf.len();
 
-        next - prev
+        let mut iter = 0;
+        let interval = 1 << 29;
+
+        // No waiting requests. Just return to the caller.
+        if self.contexts[idx - 1].tail.get() == self.contexts[idx - 1].head.get() {
+            return 0;
+        }
+
+        // Keep trying to retrieve responses from the thread context. After trying `interval`
+        // times with no luck, try to perform flat combining to make some progress.
+        loop {
+            self.contexts[idx - 1].res(buf);
+            let next = buf.len();
+            if next > prev {
+                return next - prev;
+            };
+
+            iter += 1;
+
+            if iter == interval {
+                self.try_combine(idx);
+                iter = 0;
+            }
+        }
     }
 
-    /// Executes a passed in closure against the replica's underlying underlying data
+    /// Executes a passed in closure against the replica's underlying data
     /// structure. Useful for unit testing; can be used to verify certain properties
     /// of the data structure after issuing a bunch of operations against it.
     pub fn verify<F: FnMut(RefMut<D>)>(&self, mut v: F) {
@@ -178,13 +197,29 @@ where
         {}
 
         let mut data = self.data.borrow_mut();
-        let f = |o: <D as Dispatch>::Operation, _i: usize| {
+        let mut f = |o: <D as Dispatch>::Operation, _i: usize| {
             data.dispatch(o);
         };
 
-        self.slog.exec(self.idx, f);
+        self.slog.exec(self.idx, &mut f);
 
         v(data);
+
+        self.combiner.store(0, Ordering::Release);
+    }
+
+    /// Syncs up the replica against the underlying log and executes a passed in
+    /// closure against all consumed operations.
+    pub fn sync<F: FnMut(<D as Dispatch>::Operation, usize)>(&self, mut d: F) {
+        // Acquire the combiner lock before attempting anything on the data structure.
+        // Use an idx greater than the maximum that can be allocated.
+        while self
+            .combiner
+            .compare_and_swap(0, MAX_THREADS_PER_REPLICA + 2, Ordering::Acquire)
+            != 0
+        {}
+
+        self.slog.exec(self.idx, &mut d);
 
         self.combiner.store(0, Ordering::Release);
     }
@@ -235,25 +270,35 @@ where
         b.clear();
         r.clear();
 
-        let n = self.next.load(Ordering::SeqCst);
+        let n = self.next.load(Ordering::Relaxed);
 
         // Collect operations from each thread registered with this replica.
         for i in 1..n {
-            o[i - 1] = self.contexts[i - 1].ops(&mut b)
+            o[i - 1] = self.contexts[i - 1].ops(&mut b);
         }
 
-        // Append all collected operations into the shared log.
-        self.slog.append(&b, self.idx);
+        // Append all collected operations into the shared log. We pass a closure
+        // in here because operations on the log might need to be consumed for GC.
+        {
+            let mut d = self.data.borrow_mut();
+            let f = |o: <D as Dispatch>::Operation, i: usize| {
+                let resp = d.dispatch(o);
+                if i == self.idx {
+                    r.push(resp);
+                }
+            };
+            self.slog.append(&b, self.idx, f);
+        }
 
         // Execute any operations on the shared log against this replica.
         let mut data = self.data.borrow_mut();
-        let f = |o: <D as Dispatch>::Operation, i: usize| {
+        let mut f = |o: <D as Dispatch>::Operation, i: usize| {
             let resp = data.dispatch(o);
             if i == self.idx {
                 r.push(resp)
             };
         };
-        self.slog.exec(self.idx, f);
+        self.slog.exec(self.idx, &mut f);
 
         // Return/Enqueue responses back into the appropriate thread context(s).
         let (mut s, mut f) = (0, 0);
@@ -457,16 +502,13 @@ mod test {
         assert_eq!(r[0], 107);
     }
 
-    // Tests whether get_responses() does not retrieve anything when an operation has
-    // been issued but hasn't executed against the replica yet.
+    // Tests whether get_responses() does not retrieve anything when an operation hasn't
+    // been issued yet.
     #[test]
     fn test_replica_get_responses_none() {
         let slog = Arc::new(Log::<<Data as Dispatch>::Operation>::default());
         let repl = Replica::<Data>::new(&slog);
         let mut r = vec![];
-
-        repl.combiner.store(8, Ordering::SeqCst);
-        repl.execute(121, 1);
 
         assert_eq!(repl.get_responses(1, &mut r), 0);
         assert_eq!(r.len(), 0);

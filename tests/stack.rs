@@ -78,7 +78,7 @@ impl Dispatch for Stack {
 /// against a known correct implementation.
 #[test]
 fn sequential_test() {
-    let log = Arc::new(Log::<<Stack as Dispatch>::Operation>::new(5 * 1024 * 1024));
+    let log = Arc::new(Log::<<Stack as Dispatch>::Operation>::new(4 * 1024 * 1024));
 
     let mut orng = thread_rng();
     let nop = 50;

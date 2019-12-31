@@ -7,6 +7,7 @@ use core::default::Default;
 use crossbeam_utils::CachePadded;
 
 /// The maximum number of operations that can be batched inside this context.
+/// NOTE: This constant must be a power of two for index() to work.
 const MAX_PENDING_OPS: usize = 32;
 
 /// Contains all state local to a particular thread.
@@ -36,16 +37,16 @@ where
     /// Logical array index at which new operations will be enqueued into the batch.
     /// This variable is updated by the thread that owns this context, and is read by the
     /// combiner. We can avoid making it an atomic by assuming we're on x86.
-    pub tail: Cell<usize>,
+    pub tail: CachePadded<Cell<usize>>,
 
     /// Logical array index from which any attempt to dequeue responses will be made.
     /// This variable is only accessed by the thread that owns this context.
-    pub head: Cell<usize>,
+    pub head: CachePadded<Cell<usize>>,
 
     /// Logical array index from which the operations will be dequeued for flat combining.
     /// This variable is updated by the combiner, and is read by the thread that owns this context.
     /// We can avoid making it an atomic by assuming we're on x86.
-    pub comb: Cell<usize>,
+    pub comb: CachePadded<Cell<usize>>,
 }
 
 impl<T, R> Context<T, R>
@@ -56,6 +57,7 @@ where
     /// Enqueues an operation onto this context's batch of pending operations.
     ///
     /// Returns true if the operation was successfully enqueued. False otherwise.
+    #[inline(always)]
     pub fn enqueue(&self, op: T) -> bool {
         let t = self.tail.get();
         let h = self.head.get();
@@ -79,6 +81,7 @@ where
     /// Enqueues a batch of responses onto this context. This is invoked by the combiner
     /// after it has executed operations (obtained through a call to ops()) against the
     /// replica this thread is registered against.
+    #[inline(always)]
     pub fn enqueue_resps(&self, responses: &[R]) {
         let h = self.comb.get();
         let n = responses.len();
@@ -100,6 +103,7 @@ where
 
     /// Adds any pending operations on this context to a passed in buffer. Returns the
     /// the number of such operations that were added in.
+    #[inline(always)]
     pub fn ops(&self, buffer: &mut Vec<T>) -> usize {
         let mut h = self.comb.get();
         let t = self.tail.get();
@@ -108,6 +112,10 @@ where
         if h == t {
             return 0;
         };
+
+        if h > t {
+            panic!("Head of thread-local batch has advanced beyond tail!");
+        }
 
         // Iterate from `comb` to `tail`, adding pending operations into the
         // passed in buffer. Return the number of operations that were added.
@@ -126,6 +134,7 @@ where
     }
 
     /// Appends any responses/results to enqueued operations into a passed in buffer.
+    #[inline(always)]
     pub fn res(&self, buffer: &mut Vec<R>) {
         let mut s = self.head.get();
         let f = self.comb.get();
@@ -134,6 +143,10 @@ where
         if s == f {
             return;
         };
+
+        if s > f {
+            panic!("Head of thread-local batch has advanced beyond combiner offset!");
+        }
 
         // Iterate from `head` to `comb`, adding responses into the passed in buffer.
         // Once we're done, update `head` to the value of `comb` we read above.
@@ -150,6 +163,7 @@ where
     }
 
     /// Returns the maximum number of operations that will go pending on this context.
+    #[inline(always)]
     pub fn batch_size() -> usize {
         MAX_PENDING_OPS
     }
@@ -157,7 +171,7 @@ where
     /// Given a logical address, returns an index into the batch at which it falls.
     #[inline(always)]
     fn index(&self, logical: usize) -> usize {
-        logical % MAX_PENDING_OPS
+        logical & (MAX_PENDING_OPS - 1)
     }
 }
 
