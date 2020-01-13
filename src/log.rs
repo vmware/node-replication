@@ -37,7 +37,7 @@ const WARN_THRESHOLD: usize = 1 << 28;
 /// this entry is valid.
 ///
 /// `T` is the type on the operation - typically an enum class containing opcodes as well as
-/// arguments. It is required that this type be sized, copyable, and default constructable.
+/// arguments. It is required that this type be sized, cloneable, and default constructable.
 ///
 /// `replica` identifies the replica that issued the above operation.
 ///
@@ -46,9 +46,9 @@ const WARN_THRESHOLD: usize = 1 << 28;
 #[repr(align(64))]
 struct Entry<T>
 where
-    T: Sized + Copy + Default,
+    T: Sized + Clone,
 {
-    operation: T,
+    operation: Option<T>,
 
     replica: usize,
 
@@ -72,7 +72,7 @@ where
 #[repr(align(64))]
 pub struct Log<'a, T>
 where
-    T: Sized + Copy + Default,
+    T: Sized + Clone,
 {
     /// Raw pointer to the actual underlying log. Required for dealloc.
     rawp: *mut u8,
@@ -111,7 +111,7 @@ where
 
 impl<'a, T> fmt::Debug for Log<'a, T>
 where
-    T: Sized + Copy + Default,
+    T: Sized + Clone,
 {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         fmt.debug_struct("Log")
@@ -123,15 +123,15 @@ where
 }
 
 /// The Log is Send. The *mut u8 (`rawp`) is never dereferenced.
-unsafe impl<'a, T> Send for Log<'a, T> where T: Sized + Copy + Default {}
+unsafe impl<'a, T> Send for Log<'a, T> where T: Sized + Clone {}
 
 /// The Log is Sync. We know this because: `head` and `tail` are atomic variables, `append()`
 /// reserves entries using a CAS, and exec() does not concurrently mutate entries on the log.
-unsafe impl<'a, T> Sync for Log<'a, T> where T: Sized + Copy + Default {}
+unsafe impl<'a, T> Sync for Log<'a, T> where T: Sized + Clone {}
 
 impl<'a, T> Log<'a, T>
 where
-    T: Sized + Copy + Default,
+    T: Sized + Clone,
 {
     /// Constructs and returns a log of size `bytes` bytes. This method also allocates
     /// memory for the log upfront. No further allocations will be performed once this
@@ -159,7 +159,16 @@ where
 
         // Initialize all log entries by calling the default constructor.
         for e in &mut raw[..] {
-            e.set(Entry::default());
+            unsafe {
+                ::core::ptr::write(
+                    e,
+                    Cell::new(Entry {
+                        operation: None,
+                        replica: 0usize,
+                        alivef: false,
+                    }),
+                );
+            }
         }
 
         let fls: [CachePadded<Cell<bool>>; MAX_REPLICAS] = arr![Default::default(); 64];
@@ -279,7 +288,7 @@ where
                     m = !m;
                 }
 
-                unsafe { (*e).operation = ops[i] };
+                unsafe { (*e).operation = Some(ops[i].clone()) };
                 unsafe { (*e).replica = idx };
                 compiler_fence(Ordering::AcqRel);
                 unsafe { (*e).alivef = m };
@@ -319,7 +328,7 @@ where
             let mut iteration = 1;
             let e = self.slog[self.index(i)].as_ptr();
 
-            while unsafe { (*e).alivef != self.lmasks[idx - 1].get() } {
+            while unsafe { ((*e).alivef != self.lmasks[idx - 1].get()) } {
                 if iteration % WARN_THRESHOLD == 0 {
                     warn!(
                         "{:?} alivef not being set for self.index(i={}) = {} (self.lmasks[{}] is {})...",
@@ -333,7 +342,7 @@ where
                 iteration += 1;
             }
 
-            unsafe { d((*e).operation, (*e).replica) };
+            unsafe { d((*e).operation.as_ref().unwrap().clone(), (*e).replica) };
 
             // Looks like we're going to wrap around now; flip this replica's local mask.
             if self.index(i) == self.size - 1 {
@@ -433,7 +442,7 @@ where
 
 impl<'a, T> Default for Log<'a, T>
 where
-    T: Sized + Copy + Default,
+    T: Sized + Clone,
 {
     /// Default constructor for the shared log.
     fn default() -> Self {
@@ -443,7 +452,7 @@ where
 
 impl<'a, T> Drop for Log<'a, T>
 where
-    T: Sized + Copy + Default,
+    T: Sized + Clone,
 {
     /// Destructor for the shared log.
     fn drop(&mut self) {
@@ -463,9 +472,10 @@ mod tests {
     extern crate std;
 
     use super::*;
+    use std::sync::Arc;
 
     // Define operations along with their arguments that go onto the log.
-    #[derive(Copy, Clone)] // Traits required by the log interface.
+    #[derive(Clone)] // Traits required by the log interface.
     #[derive(Debug, PartialEq)] // Traits required for testing.
     enum Operation {
         Read,
@@ -483,7 +493,7 @@ mod tests {
     #[test]
     fn test_entry_create_default() {
         let e = Entry::<Operation>::default();
-        assert_eq!(e.operation, Operation::default());
+        assert_eq!(e.operation, None);
         assert_eq!(e.replica, 0);
         assert_eq!(e.alivef, false);
     }
@@ -569,8 +579,9 @@ mod tests {
 
         assert_eq!(l.head.load(Ordering::Relaxed), 0);
         assert_eq!(l.tail.load(Ordering::Relaxed), 1);
-        assert_eq!(l.slog[0].get().operation, Operation::Read);
-        assert_eq!(l.slog[0].get().replica, 1);
+        let slog = l.slog[0].take();
+        assert_eq!(slog.operation, Some(Operation::Read));
+        assert_eq!(slog.replica, 1);
     }
 
     // Test that multiple entries can be appended to the log.
@@ -603,7 +614,13 @@ mod tests {
     #[test]
     fn test_log_append_gc() {
         let l = Log::<Operation>::default();
-        let o = [Operation::Read; 4];
+        let o: [Operation; 4] = unsafe {
+            let mut a: [Operation; 4] = ::std::mem::MaybeUninit::zeroed().assume_init();
+            for i in &mut a[..] {
+                ::std::ptr::write(i, Operation::Read);
+            }
+            a
+        };
 
         l.next.store(2, Ordering::Relaxed);
         l.tail.store(l.size - GC_FROM_HEAD - 1, Ordering::Relaxed);
@@ -619,7 +636,13 @@ mod tests {
     #[test]
     fn test_log_append_wrap() {
         let l = Log::<Operation>::default();
-        let o = [Operation::Read; 1024];
+        let o: [Operation; 1024] = unsafe {
+            let mut a: [Operation; 1024] = ::std::mem::MaybeUninit::zeroed().assume_init();
+            for i in &mut a[..] {
+                ::std::ptr::write(i, Operation::Read);
+            }
+            a
+        };
 
         l.next.store(2, Ordering::Relaxed);
         l.head.store(8192, Ordering::Relaxed);
@@ -695,7 +718,13 @@ mod tests {
     #[test]
     fn test_log_exec_wrap() {
         let l = Log::<Operation>::default();
-        let o = [Operation::Read; 1024];
+        let o: [Operation; 1024] = unsafe {
+            let mut a: [Operation; 1024] = ::std::mem::MaybeUninit::zeroed().assume_init();
+            for i in &mut a[..] {
+                ::std::ptr::write(i, Operation::Read);
+            }
+            a
+        };
         let mut f = |op: Operation, i: usize| {
             assert_eq!(op, Operation::Read);
             assert_eq!(i, 1);
@@ -712,5 +741,28 @@ mod tests {
 
         assert_eq!(l.lmasks[0].get(), false);
         assert_eq!(l.tail.load(Ordering::Relaxed), l.size + 1014);
+    }
+
+    #[test]
+    fn test_log_change_refcount() {
+        let l = Log::<Arc<Operation>>::default();
+        let o1 = [Arc::new(Operation::Read)];
+        let o2 = [Arc::new(Operation::Read)];
+        assert_eq!(Arc::strong_count(&o1[0]), 1);
+        assert_eq!(Arc::strong_count(&o2[0]), 1);
+
+        l.append(&o1[..], 1, |_o: Arc<Operation>, _i: usize| {});
+        assert_eq!(Arc::strong_count(&o1[0]), 2);
+        l.append(&o1[..], 1, |_o: Arc<Operation>, _i: usize| {});
+        assert_eq!(Arc::strong_count(&o1[0]), 3);
+
+        unsafe { l.reset() };
+
+        l.append(&o2[..], 1, |_o: Arc<Operation>, _i: usize| {});
+        assert_eq!(Arc::strong_count(&o1[0]), 2);
+        assert_eq!(Arc::strong_count(&o2[0]), 2);
+        l.append(&o2[..], 1, |_o: Arc<Operation>, _i: usize| {});
+        assert_eq!(Arc::strong_count(&o1[0]), 1);
+        assert_eq!(Arc::strong_count(&o2[0]), 3);
     }
 }

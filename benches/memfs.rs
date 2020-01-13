@@ -76,17 +76,9 @@ pub enum Operation {
         newparent: u64,
         newname: &'static OsStr,
     },
-    Invalid,
 }
 
-/// Default operations, don't do anything
-impl Default for Operation {
-    fn default() -> Operation {
-        Operation::Invalid
-    }
-}
-
-/// Potential returns from the file-system
+/// Potential responses from the file-system
 #[derive(Copy, Clone)]
 pub enum Response {
     Attr(FileAttr),
@@ -97,15 +89,23 @@ pub enum Response {
     Create,
     Written(u64),
     Data(&'static [u8]),
-    // XXX: this is a bit of a mess atm. once we return a Result<> as part of the log
-    // drop this and the associated glue-code
-    Err(Error),
-    Invalid,
 }
 
 impl Default for Response {
     fn default() -> Response {
-        Response::Invalid
+        Response::Empty
+    }
+}
+
+/// Potential errors from the file-system
+#[derive(Copy, Clone)]
+pub enum ResponseError {
+    Err(Error),
+}
+
+impl Default for ResponseError {
+    fn default() -> ResponseError {
+        ResponseError::Err(Error::NoEntry)
     }
 }
 
@@ -200,17 +200,18 @@ impl NrMemFilesystem {
 impl Dispatch for NrMemFilesystem {
     type Operation = Operation;
     type Response = Response;
+    type ResponseError = ResponseError;
 
     /// Implements how we execute operation from the log against our local stack
-    fn dispatch(&mut self, op: Self::Operation) -> Self::Response {
+    fn dispatch(&mut self, op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
         match op {
             Operation::GetAttr { ino } => match self.getattr(ino) {
-                Ok(attr) => Response::Attr(*attr),
-                Err(e) => Response::Err(e),
+                Ok(attr) => Ok(Response::Attr(*attr)),
+                Err(e) => Err(ResponseError::Err(e)),
             },
             Operation::SetAttr { ino, new_attrs } => match self.setattr(ino, new_attrs) {
-                Ok(fattr) => Response::Attr(*fattr),
-                Err(e) => Response::Err(e),
+                Ok(fattr) => Ok(Response::Attr(*fattr)),
+                Err(e) => Err(ResponseError::Err(e)),
             },
             Operation::ReadDir { ino, fh, offset } => {
                 match self.readdir(ino, fh) {
@@ -221,30 +222,30 @@ impl Dispatch for NrMemFilesystem {
                         let to_skip = if offset == 0 { 0 } else { offset + 1 } as usize;
                         let _entries: Vec<(InodeId, FileType, String)> =
                             entries.into_iter().skip(to_skip).collect();
-                        Response::Directory
+                        Ok(Response::Directory)
                     }
-                    Err(e) => Response::Err(e),
+                    Err(e) => Err(ResponseError::Err(e)),
                 }
             }
             Operation::Lookup { parent, name } => match self.lookup(parent, name) {
-                Ok(attr) => Response::Attr(*attr),
-                Err(e) => Response::Err(e),
+                Ok(attr) => Ok(Response::Attr(*attr)),
+                Err(e) => Err(ResponseError::Err(e)),
             },
             Operation::RmDir { parent, name } => match self.rmdir(parent, name) {
-                Ok(()) => Response::Empty,
-                Err(e) => Response::Err(e),
+                Ok(()) => Ok(Response::Empty),
+                Err(e) => Err(ResponseError::Err(e)),
             },
             Operation::MkDir { parent, name, mode } => match self.mkdir(parent, name, mode) {
-                Ok(attr) => Response::Attr(*attr),
-                Err(e) => Response::Err(e),
+                Ok(attr) => Ok(Response::Attr(*attr)),
+                Err(e) => Err(ResponseError::Err(e)),
             },
             Operation::Open { ino, flags } => {
                 warn!("Don't do `open` for now... {} {}", ino, flags);
-                Response::Empty
+                Ok(Response::Empty)
             }
             Operation::Unlink { parent, name } => match self.unlink(parent, name) {
-                Ok(_attr) => Response::Empty,
-                Err(e) => Response::Err(e),
+                Ok(_attr) => Ok(Response::Empty),
+                Err(e) => Err(ResponseError::Err(e)),
             },
             Operation::Create {
                 parent,
@@ -252,8 +253,8 @@ impl Dispatch for NrMemFilesystem {
                 mode,
                 flags,
             } => match self.create(parent, name, mode, flags) {
-                Ok(_attr) => Response::Empty,
-                Err(e) => Response::Err(e),
+                Ok(_attr) => Ok(Response::Empty),
+                Err(e) => Err(ResponseError::Err(e)),
             },
             Operation::Write {
                 ino,
@@ -262,8 +263,8 @@ impl Dispatch for NrMemFilesystem {
                 data,
                 flags,
             } => match self.write(ino, fh, offset, data, flags) {
-                Ok(written) => Response::Written(written),
-                Err(e) => Response::Err(e),
+                Ok(written) => Ok(Response::Written(written)),
+                Err(e) => Err(ResponseError::Err(e)),
             },
             Operation::Read {
                 ino,
@@ -283,9 +284,9 @@ impl Dispatch for NrMemFilesystem {
                     let response = Response::Data(slice);
 
                     std::mem::forget(bytes_as_vec); // XXX leaking here
-                    response
+                    Ok(response)
                 }
-                Err(e) => Response::Err(e),
+                Err(e) => Err(ResponseError::Err(e)),
             },
             Operation::Rename {
                 parent,
@@ -293,10 +294,9 @@ impl Dispatch for NrMemFilesystem {
                 newparent,
                 newname,
             } => match self.rename(parent, name, newparent, newname) {
-                Ok(()) => Response::Empty,
-                Err(e) => Response::Err(e),
+                Ok(()) => Ok(Response::Empty),
+                Err(e) => Err(ResponseError::Err(e)),
             },
-            Operation::Invalid => unreachable!("Got invalid OP"),
         }
     }
 }

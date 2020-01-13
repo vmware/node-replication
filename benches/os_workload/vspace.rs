@@ -11,7 +11,9 @@ use x86::bits64::paging::*;
 
 use super::memory::{kernel_vaddr_to_paddr, paddr_to_kernel_vaddr};
 
-custom_error! {pub VSpaceError
+custom_error! {
+    #[derive(Copy, Clone)]
+    pub VSpaceError
     AlreadyMapped{from: u64, to: u64} = "VSpace operation covers existing mapping ({from} -- {to})",
 }
 

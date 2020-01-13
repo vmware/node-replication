@@ -24,15 +24,15 @@ const MAX_PENDING_OPS: usize = 32;
 /// `R` is a type parameter required by the struct. It is the type on the result obtained
 /// when an operation is executed against the replica.
 #[repr(align(64))]
-#[derive(Default)]
-pub struct Context<T, R>
+pub struct Context<T, R, E>
 where
-    T: Sized + Copy + Default,
+    T: Sized + Clone,
     R: Sized + Copy + Default,
+    E: Sized + Copy + Default,
 {
     /// Array that will hold all pending operations to be appended to the shared log as
     /// well as the results obtained on executing them against a replica.
-    batch: [CachePadded<Cell<(T, R)>>; MAX_PENDING_OPS],
+    batch: [CachePadded<Cell<(Option<T>, Result<R, E>)>>; MAX_PENDING_OPS],
 
     /// Logical array index at which new operations will be enqueued into the batch.
     /// This variable is updated by the thread that owns this context, and is read by the
@@ -49,10 +49,34 @@ where
     pub comb: CachePadded<Cell<usize>>,
 }
 
-impl<T, R> Context<T, R>
+impl<T, R, E> Default for Context<T, R, E>
 where
-    T: Sized + Copy + Default,
+    T: Sized + Clone,
     R: Sized + Copy + Default,
+    E: Sized + Copy + Default,
+{
+    /// Default constructor for the context.
+    fn default() -> Context<T, R, E> {
+        let mut batch: [CachePadded<Cell<(Option<T>, Result<R, E>)>>; MAX_PENDING_OPS] =
+            unsafe { ::core::mem::MaybeUninit::zeroed().assume_init() };
+        for elem in &mut batch[..] {
+            *elem = CachePadded::new(Cell::new((None, Err(Default::default()))));
+        }
+
+        Context {
+            batch: batch,
+            tail: CachePadded::new(Cell::new(Default::default())),
+            head: CachePadded::new(Cell::new(Default::default())),
+            comb: CachePadded::new(Cell::new(Default::default())),
+        }
+    }
+}
+
+impl<T, R, E> Context<T, R, E>
+where
+    T: Sized + Clone,
+    R: Sized + Copy + Default,
+    E: Sized + Copy + Default,
 {
     /// Enqueues an operation onto this context's batch of pending operations.
     ///
@@ -72,7 +96,7 @@ where
         // combiner sees this operation. Relying on TSO here to make sure that the tail
         // is updated only after the operation has been written in.
         let e = self.batch[self.index(t)].as_ptr();
-        unsafe { (*e).0 = op };
+        unsafe { (*e).0 = Some(op) };
 
         self.tail.set(t + 1);
         true
@@ -82,7 +106,7 @@ where
     /// after it has executed operations (obtained through a call to ops()) against the
     /// replica this thread is registered against.
     #[inline(always)]
-    pub fn enqueue_resps(&self, responses: &[R]) {
+    pub fn enqueue_resps(&self, responses: &[Result<R, E>]) {
         let h = self.comb.get();
         let n = responses.len();
 
@@ -95,7 +119,9 @@ where
         // the slice above doesn't cause us to cross the tail of the batch.
         for i in 0..n {
             let e = self.batch[self.index(h + i)].as_ptr();
-            unsafe { (*e).1 = responses[i] };
+            unsafe {
+                (*e).1 = responses[i];
+            }
         }
 
         self.comb.set(h + n);
@@ -125,7 +151,16 @@ where
                 break;
             };
 
-            buffer.push(self.batch[self.index(h)].get().0);
+            unsafe {
+                // enqueue() will always execute before ops(), so its safe to unwarp the Op.
+                buffer.push(
+                    (*self.batch[self.index(h)].as_ptr())
+                        .0
+                        .as_ref()
+                        .unwrap()
+                        .clone(),
+                );
+            }
             h += 1;
             n += 1;
         }
@@ -135,7 +170,7 @@ where
 
     /// Appends any responses/results to enqueued operations into a passed in buffer.
     #[inline(always)]
-    pub fn res(&self, buffer: &mut Vec<R>) {
+    pub fn res(&self, buffer: &mut Vec<Result<R, E>>) {
         let mut s = self.head.get();
         let f = self.comb.get();
 
@@ -155,7 +190,9 @@ where
                 break;
             };
 
-            buffer.push(self.batch[self.index(s)].get().1);
+            unsafe {
+                buffer.push((*self.batch[self.index(s)].as_ptr()).1.clone());
+            }
             s += 1;
         }
 
@@ -182,7 +219,7 @@ mod test {
     // Tests whether we can successfully default construct a context.
     #[test]
     fn test_context_create_default() {
-        let c = Context::<u64, u64>::default();
+        let c = Context::<u64, u64, ()>::default();
         assert_eq!(c.batch.len(), MAX_PENDING_OPS);
         assert_eq!(c.tail.get(), 0);
         assert_eq!(c.head.get(), 0);
@@ -192,18 +229,18 @@ mod test {
     // Tests whether we can successfully enqueue an operation onto the context.
     #[test]
     fn test_context_enqueue() {
-        let c = Context::<u64, u64>::default();
+        let c = Context::<u64, u64, ()>::default();
         assert!(c.enqueue(121));
-        assert_eq!(c.batch[0].get().0, 121);
-        assert_eq!(c.tail.get(), 1);
-        assert_eq!(c.head.get(), 0);
-        assert_eq!(c.comb.get(), 0);
+        unsafe { assert_eq!((*c.batch[0].as_ptr()).0, Some(121)) };
+        assert_eq!(c.tail.take(), 1);
+        assert_eq!(c.head.take(), 0);
+        assert_eq!(c.comb.take(), 0);
     }
 
     // Tests that enqueues on the context fail when it's batch of operations is full.
     #[test]
     fn test_context_enqueue_full() {
-        let c = Context::<u64, u64>::default();
+        let c = Context::<u64, u64, ()>::default();
         c.tail.set(MAX_PENDING_OPS);
 
         assert!(!c.enqueue(100));
@@ -215,8 +252,8 @@ mod test {
     // Tests that we can successfully enqueue responses onto the context.
     #[test]
     fn test_context_enqueue_resps() {
-        let c = Context::<u64, u64>::default();
-        let r = [11, 12, 13, 14];
+        let c = Context::<u64, u64, ()>::default();
+        let r = [Ok(11), Ok(12), Ok(13), Ok(14)];
 
         c.tail.set(16);
         c.comb.set(12);
@@ -226,17 +263,17 @@ mod test {
         assert_eq!(c.head.get(), 0);
         assert_eq!(c.comb.get(), 16);
 
-        assert_eq!(c.batch[12].get().1, 11);
-        assert_eq!(c.batch[13].get().1, 12);
-        assert_eq!(c.batch[14].get().1, 13);
-        assert_eq!(c.batch[15].get().1, 14);
+        assert_eq!(c.batch[12].get().1, r[0]);
+        assert_eq!(c.batch[13].get().1, r[1]);
+        assert_eq!(c.batch[14].get().1, r[2]);
+        assert_eq!(c.batch[15].get().1, r[3]);
     }
 
     // Tests that attempting to enqueue an empty batch of responses on the context
     // does nothing.
     #[test]
     fn test_context_enqueue_resps_empty() {
-        let c = Context::<u64, u64>::default();
+        let c = Context::<u64, u64, ()>::default();
         let r = [];
 
         c.tail.set(16);
@@ -251,7 +288,7 @@ mod test {
     // Tests whether ops() can successfully retrieve operations enqueued on this context.
     #[test]
     fn test_context_ops() {
-        let c = Context::<usize, usize>::default();
+        let c = Context::<usize, usize, ()>::default();
         let mut o = vec![];
 
         for idx in 0..MAX_PENDING_OPS / 2 {
@@ -272,7 +309,7 @@ mod test {
     // Tests whether ops() returns nothing when we don't have any pending operations.
     #[test]
     fn test_context_ops_empty() {
-        let c = Context::<usize, usize>::default();
+        let c = Context::<usize, usize, ()>::default();
         let mut o = vec![];
 
         c.tail.set(8);
@@ -288,8 +325,8 @@ mod test {
     // Tests whether we can retrieve responses enqueued on this context.
     #[test]
     fn test_context_res() {
-        let c = Context::<u64, u64>::default();
-        let r = [11, 12, 13, 14];
+        let c = Context::<u64, u64, ()>::default();
+        let r = [Ok(11), Ok(12), Ok(13), Ok(14)];
         let mut o = vec![];
 
         c.tail.set(16);
@@ -301,13 +338,16 @@ mod test {
         assert_eq!(c.comb.get(), 4);
 
         assert_eq!(o.len(), 4);
-        assert_eq!(&o[..], r);
+        assert_eq!(o[0], r[0]);
+        assert_eq!(o[1], r[1]);
+        assert_eq!(o[2], r[2]);
+        assert_eq!(o[3], r[3]);
     }
 
     // Tests that we cannot retrieve responses when none were enqueued to begin with.
     #[test]
     fn test_context_res_empty() {
-        let c = Context::<usize, usize>::default();
+        let c = Context::<usize, usize, ()>::default();
         let mut o = vec![];
 
         c.tail.set(8);
@@ -323,13 +363,13 @@ mod test {
     // Tests that batch_size() works correctly.
     #[test]
     fn test_context_batch_size() {
-        assert_eq!(Context::<usize, usize>::batch_size(), MAX_PENDING_OPS);
+        assert_eq!(Context::<usize, usize, ()>::batch_size(), MAX_PENDING_OPS);
     }
 
     // Tests that index() works correctly.
     #[test]
     fn test_index() {
-        let c = Context::<u64, u64>::default();
+        let c = Context::<u64, u64, ()>::default();
         assert_eq!(c.index(100), 100 % MAX_PENDING_OPS);
     }
 }

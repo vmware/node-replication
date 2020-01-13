@@ -25,8 +25,6 @@ pub enum Op {
     WriteOnly(usize, usize, usize),
     /// Read some memory, then write some.
     ReadWrite(usize, usize, usize),
-    /// Invalid operation.
-    Invalid,
 }
 
 impl Op {
@@ -38,12 +36,6 @@ impl Op {
             Op::ReadWrite(ref mut a, _b, _c) => *a = tid,
             _ => (),
         };
-    }
-}
-
-impl Default for Op {
-    fn default() -> Op {
-        Op::Invalid
     }
 }
 
@@ -168,14 +160,14 @@ impl AbstractDataStructure {
 impl Dispatch for AbstractDataStructure {
     type Operation = Op;
     type Response = usize;
+    type ResponseError = ();
 
     /// Implements how we execute operation from the log against abstract DS
-    fn dispatch(&mut self, op: Self::Operation) -> Self::Response {
+    fn dispatch(&mut self, op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
         match op {
-            Op::ReadOnly(a, b, c) => return self.read(a, b, c),
-            Op::WriteOnly(a, b, c) => return self.write(a, b, c),
-            Op::ReadWrite(a, b, c) => return self.read_write(a, b, c),
-            Op::Invalid => unreachable!("Op::Invalid?"),
+            Op::ReadOnly(a, b, c) => return Ok(self.read(a, b, c)),
+            Op::WriteOnly(a, b, c) => return Ok(self.write(a, b, c)),
+            Op::ReadWrite(a, b, c) => return Ok(self.read_write(a, b, c)),
         }
     }
 }
@@ -203,22 +195,22 @@ pub fn generate_operations(
                 0 => ops.push(Op::ReadOnly(tid, arng.gen(), arng.gen())),
                 1 => ops.push(Op::WriteOnly(tid, arng.gen(), arng.gen())),
                 2 => ops.push(Op::ReadWrite(tid, arng.gen(), arng.gen())),
-                _ => ops.push(Op::Invalid),
+                _ => unreachable!(),
             },
             (false, true, true) => match op % 2 {
                 0 => ops.push(Op::WriteOnly(tid, arng.gen(), arng.gen())),
                 1 => ops.push(Op::ReadWrite(tid, arng.gen(), arng.gen())),
-                _ => ops.push(Op::Invalid),
+                _ => unreachable!(),
             },
             (true, true, false) => match op % 2 {
                 0 => ops.push(Op::ReadOnly(tid, arng.gen(), arng.gen())),
                 1 => ops.push(Op::WriteOnly(tid, arng.gen(), arng.gen())),
-                _ => ops.push(Op::Invalid),
+                _ => unreachable!(),
             },
             (true, false, true) => match op % 2 {
                 0 => ops.push(Op::ReadOnly(tid, arng.gen(), arng.gen())),
                 1 => ops.push(Op::ReadWrite(tid, arng.gen(), arng.gen())),
-                _ => ops.push(Op::Invalid),
+                _ => unreachable!(),
             },
             (true, false, false) => ops.push(Op::ReadOnly(tid, arng.gen(), arng.gen())),
             (false, true, false) => ops.push(Op::WriteOnly(tid, arng.gen(), arng.gen())),

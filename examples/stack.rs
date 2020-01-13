@@ -13,14 +13,6 @@ use node_replication::Dispatch;
 enum Op {
     Push(u32),
     Pop,
-    Invalid,
-}
-
-/// We need to define a default operation.
-impl Default for Op {
-    fn default() -> Op {
-        Op::Invalid
-    }
 }
 
 /// The actual stack, it's represented by a vector underneath.
@@ -60,17 +52,17 @@ impl Default for Stack {
 impl Dispatch for Stack {
     type Operation = Op;
     type Response = Option<u32>;
+    type ResponseError = Option<()>;
 
     /// The dispatch traint defines how operations coming from the log
     /// are execute against our local stack within a replica.
-    fn dispatch(&mut self, op: Self::Operation) -> Self::Response {
+    fn dispatch(&mut self, op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
         match op {
             Op::Push(v) => {
                 self.push(v);
-                return None;
+                return Ok(None);
             }
-            Op::Pop => return self.pop(),
-            Op::Invalid => unreachable!("Op::Invalid?"),
+            Op::Pop => return Ok(self.pop()),
         }
     }
 }

@@ -20,14 +20,6 @@ pub enum Op {
     Put(u64, u64),
     /// Get item from the hash-map.
     Get(u64),
-    /// Invalid operation
-    Invalid,
-}
-
-impl Default for Op {
-    fn default() -> Op {
-        Op::Invalid
-    }
 }
 
 /// Single-threaded implementation of the stack
@@ -60,16 +52,16 @@ impl Default for NrHashMap {
 impl Dispatch for NrHashMap {
     type Operation = Op;
     type Response = Option<u64>;
+    type ResponseError = ();
 
     /// Implements how we execute operation from the log against our local stack
-    fn dispatch(&mut self, op: Self::Operation) -> Self::Response {
+    fn dispatch(&mut self, op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
         match op {
             Op::Put(key, val) => {
                 self.put(key, val);
-                None
+                Ok(None)
             }
-            Op::Get(key) => return self.get(key),
-            Op::Invalid => unreachable!("Op::Invalid?"),
+            Op::Get(key) => return Ok(self.get(key)),
         }
     }
 }

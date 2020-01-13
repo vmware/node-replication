@@ -10,8 +10,9 @@ pub struct Nop(usize);
 impl Dispatch for Nop {
     type Operation = usize;
     type Response = ();
+    type ResponseError = ();
 
-    fn dispatch(&mut self, _op: Self::Operation) -> Self::Response {
-        unreachable!()
+    fn dispatch(&mut self, _op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
+        Ok(unreachable!())
     }
 }

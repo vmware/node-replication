@@ -33,29 +33,21 @@ impl PowersOf2 for usize {
     }
 }
 
-custom_error! {pub KError
+custom_error! {
+    #[derive(Copy, Clone)]
+    pub KError
     ProcessNotSet = "CURRENT_PROCESS is not set",
     NotSupported = "Request is not yet supported",
     InvalidSyscallArgument1{a: u64} = "Invalid 1st syscall argument supplied: {}",
     InvalidVSpaceOperation{a: u64} = "Invalid VSpace Operation (2nd syscall argument) supplied: {}",
     InvalidProcessOperation{a: u64} = "Invalid Process Operation (2nd syscall argument) supplied: {}",
-    ProcessCreate{desc: String}  = "Unable to create process: {desc}",
+    ProcessCreate{desc: u64}  = "Unable to create process: {desc}",
     VSpace{source: vspace::VSpaceError} = "VSpace operation covers existing mapping",
 }
 
-impl From<String> for KError {
-    /// TODO: Hard-coded ProcessCreate due to elfloader errors.
-    fn from(err: String) -> KError {
-        KError::ProcessCreate { desc: err }
-    }
-}
-
-impl From<&str> for KError {
-    /// TODO: Hard-coded ProcessCreate due to elfloader errors.
-    fn from(err: &str) -> KError {
-        KError::ProcessCreate {
-            desc: String::from(err),
-        }
+impl Default for KError {
+    fn default() -> KError {
+        KError::NotSupported
     }
 }
 

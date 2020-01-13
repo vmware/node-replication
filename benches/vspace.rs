@@ -50,8 +50,9 @@ struct BespinDispatcher;
 impl Dispatch for BespinDispatcher {
     type Operation = Opcode;
     type Response = (u64, u64);
+    type ResponseError = os_workload::KError;
 
-    fn dispatch(&mut self, op: Self::Operation) -> Self::Response {
+    fn dispatch(&mut self, op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
         match op {
             Opcode::Process(op, a1, a2, a3, a4) => {
                 return os_workload::syscall_handle(
@@ -62,7 +63,6 @@ impl Dispatch for BespinDispatcher {
                     a3,
                     a4,
                 )
-                .expect("Process syscall failed");
             }
             Opcode::VSpace(op, a1, a2, a3, a4) => {
                 return os_workload::syscall_handle(
@@ -73,7 +73,6 @@ impl Dispatch for BespinDispatcher {
                     a3,
                     a4,
                 )
-                .expect("VSpace syscall failed")
             }
             Opcode::Empty => unreachable!(),
         };
@@ -88,24 +87,25 @@ struct PosixDispatcher;
 impl Dispatch for PosixDispatcher {
     type Operation = Opcode;
     type Response = ();
+    type ResponseError = ();
 
-    fn dispatch(&mut self, op: Self::Operation) {
+    fn dispatch(&mut self, op: Self::Operation) -> Result<(), ()> {
         use nix::sys::mman::{MapFlags, ProtFlags};
 
         match op {
             Opcode::Process(pop, _a, _b, _c, _d) => match pop {
-                ProcessOperation::AllocateVector => {}
-                ProcessOperation::Exit => {}
-                ProcessOperation::InstallVCpuArea => {}
-                ProcessOperation::Log => {}
-                ProcessOperation::SubscribeEvent => {}
+                ProcessOperation::AllocateVector => Err(()),
+                ProcessOperation::Exit => Err(()),
+                ProcessOperation::InstallVCpuArea => Err(()),
+                ProcessOperation::Log => Err(()),
+                ProcessOperation::SubscribeEvent => Err(()),
                 ProcessOperation::Unknown => {
                     unreachable!("Got a ProcessOperation::Unknown in dispatch")
                 }
             },
             Opcode::VSpace(vop, a, b, _c, _d) => {
                 match vop {
-                    VSpaceOperation::Identify => {}
+                    VSpaceOperation::Identify => Err(()),
                     VSpaceOperation::Map => {
                         let base = a;
                         let size: nix::libc::size_t = b as nix::libc::size_t;
@@ -124,12 +124,16 @@ impl Dispatch for PosixDispatcher {
                         match res {
                             Ok(m) => {
                                 trace!("mmap worked {:p}", m);
-                                ()
+                                Ok(())
                             }
-                            Err(e) => error!("mmap failed to map: {}", e),
+                            Err(e) => {
+                                error!("mmap failed to map: {}", e);
+                                Err(())
+                            }
                         };
+                        Err(())
                     }
-                    VSpaceOperation::MapDevice => {}
+                    VSpaceOperation::MapDevice => Err(()),
                     VSpaceOperation::Unmap => {
                         let base = a;
                         let size: nix::libc::size_t = b as nix::libc::size_t;
@@ -140,10 +144,14 @@ impl Dispatch for PosixDispatcher {
                         match res {
                             Ok(()) => {
                                 trace!("munmap worked");
-                                ()
+                                Ok(())
                             }
-                            Err(e) => error!("mmap failed to unmap: {}", e),
+                            Err(e) => {
+                                error!("mmap failed to unmap: {}", e);
+                                Err(())
+                            }
                         };
+                        Err(())
                     }
                     VSpaceOperation::Unknown => {
                         unreachable!("Got a VSpaceOperation::Unknown in dispatch")

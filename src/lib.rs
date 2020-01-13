@@ -23,8 +23,9 @@ use core::fmt::Debug;
 /// library executes an operation against the data structure, it invokes the `dispatch()`
 /// method with the operation as an argument.
 pub trait Dispatch {
-    type Operation: Sized + Copy + Default + PartialEq + Debug;
+    type Operation: Sized + Clone + PartialEq + Debug;
     type Response: Sized + Copy + Default;
+    type ResponseError: Sized + Copy + Default;
 
-    fn dispatch(&mut self, op: Self::Operation) -> Self::Response;
+    fn dispatch(&mut self, op: Self::Operation) -> Result<Self::Response, Self::ResponseError>;
 }

@@ -341,14 +341,6 @@ pub enum Op {
     Put(u64, u64),
     /// Get item from the hash-map.
     Get(u64),
-    /// Invalid operation
-    Invalid,
-}
-
-impl Default for Op {
-    fn default() -> Op {
-        Op::Invalid
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -378,16 +370,16 @@ impl Default for NrHashMap {
 impl Dispatch for NrHashMap {
     type Operation = Op;
     type Response = u64;
+    type ResponseError = ();
 
     /// Implements how we execute operation from the log against our local stack
-    fn dispatch(&mut self, op: Self::Operation) -> Self::Response {
+    fn dispatch(&mut self, op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
         match op {
             Op::Put(key, val) => {
                 self.put(key, val);
-                0
+                Ok(0)
             }
-            Op::Get(key) => return self.get(key),
-            Op::Invalid => unreachable!("Op::Invalid?"),
+            Op::Get(key) => return Ok(self.get(key)),
         }
     }
 }
@@ -395,7 +387,7 @@ impl Dispatch for NrHashMap {
 struct ReplicaAndToken<'a> {
     replica: sync::Arc<Replica<'a, NrHashMap>>,
     token: usize,
-    responses: Vec<u64>,
+    responses: Vec<Result<u64, ()>>,
 }
 
 impl<'a> ReplicaAndToken<'a> {
@@ -424,7 +416,10 @@ impl<'a> Backend for ReplicaAndToken<'a> {
         }
         let r = self.responses[0];
         self.responses.clear();
-        r
+        match r {
+            Ok(res) => return res,
+            Err(_) => unreachable!(),
+        }
     }
 
     fn b_put(&mut self, key: u64, value: u64) {
