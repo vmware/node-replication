@@ -24,6 +24,7 @@ use node_replication::{log::Log, replica::Replica, Dispatch};
 
 use crate::utils;
 use crate::utils::topology::*;
+use crate::utils::Operation;
 
 pub use crate::utils::topology::ThreadMapping;
 
@@ -38,9 +39,9 @@ pub const WARN_THRESHOLD: usize = 1 << 28;
 type BenchFn<T> = fn(
     crate::utils::ThreadId,
     usize,
-    &Arc<Log<'static, <T as Dispatch>::Operation>>,
+    &Arc<Log<'static, <T as Dispatch>::WriteOperation>>,
     &Arc<Replica<T>>,
-    &Vec<<T as Dispatch>::Operation>,
+    &Vec<Operation<<T as Dispatch>::ReadOperation, <T as Dispatch>::WriteOperation>>,
     usize,
 );
 
@@ -52,10 +53,10 @@ type BenchFn<T> = fn(
 /// Then configures the supplied criterion runner to do two benchmarks:
 /// - Running the DS operations on a single-thread directly against the DS.
 /// - Running the DS operation on a single-thread but go through a replica/log.
-pub fn baseline_comparison<T: Dispatch + Default>(
+pub fn baseline_comparison<T: Dispatch + Default + Sync>(
     c: &mut Criterion,
     name: &str,
-    ops: Vec<<T as Dispatch>::Operation>,
+    ops: Vec<Operation<<T as Dispatch>::ReadOperation, <T as Dispatch>::WriteOperation>>,
     log_size_bytes: usize,
 ) {
     utils::disable_dvfs();
@@ -67,13 +68,20 @@ pub fn baseline_comparison<T: Dispatch + Default>(
     group.bench_function("baseline", |b| {
         b.iter(|| {
             for i in 0..ops.len() {
-                s.dispatch(ops[i].clone());
+                match &ops[i] {
+                    Operation::ReadOperation(o) => {
+                        s.dispatch(o.clone());
+                    }
+                    Operation::WriteOperation(o) => {
+                        s.dispatch_mut(o.clone());
+                    }
+                }
             }
         })
     });
 
     // 2nd benchmark we compare the stack but now we put a log in front:
-    let log = Arc::new(Log::<<T as Dispatch>::Operation>::new(log_size_bytes));
+    let log = Arc::new(Log::<<T as Dispatch>::WriteOperation>::new(log_size_bytes));
     let r = Replica::<T>::new(&log);
     let ridx = r.register().expect("Failed to register with Replica.");
 
@@ -81,7 +89,14 @@ pub fn baseline_comparison<T: Dispatch + Default>(
         b.iter(|| {
             let mut o = vec![];
             for i in 0..ops.len() {
-                r.execute(ops[i].clone(), ridx);
+                match &ops[i] {
+                    Operation::ReadOperation(op) => {
+                        r.execute_ro(op.clone(), ridx);
+                    }
+                    Operation::WriteOperation(op) => {
+                        r.execute(op.clone(), ridx);
+                    }
+                }
                 while r.get_responses(ridx, &mut o) == 0 {}
                 o.clear();
             }
@@ -120,16 +135,20 @@ impl fmt::Debug for ReplicaStrategy {
 
 pub struct ScaleBenchmark<T: Dispatch + Default + Send>
 where
-    <T as node_replication::Dispatch>::Operation: std::marker::Send,
+    <T as node_replication::Dispatch>::WriteOperation: std::marker::Send,
+    <T as node_replication::Dispatch>::WriteOperation: std::marker::Sync,
+    <T as node_replication::Dispatch>::ReadOperation: std::marker::Sync,
+    <T as node_replication::Dispatch>::ReadOperation: std::marker::Send,
     <T as node_replication::Dispatch>::Response: std::marker::Send,
-    <T as node_replication::Dispatch>::Operation: 'static,
+    <T as node_replication::Dispatch>::WriteOperation: 'static,
+    T: std::marker::Sync,
 {
     /// Replica <-> Thread/Cpu mapping as used by the benchmark.
     rm: HashMap<usize, Vec<Cpu>>,
     /// An Arc reference to operations executed on the log.
-    operations: Vec<<T as Dispatch>::Operation>,
+    operations: Vec<Operation<<T as Dispatch>::ReadOperation, <T as Dispatch>::WriteOperation>>,
     /// An Arc reference to the log.
-    log: Arc<Log<'static, <T as Dispatch>::Operation>>,
+    log: Arc<Log<'static, <T as Dispatch>::WriteOperation>>,
     /// Results of the benchmark, (replica idx, ops/s, runtime in microseconds) per thread.
     results: Vec<(u64, u64, i64)>,
     /// Batch-size (passed as a parameter to benchmark funtion `f`)
@@ -150,11 +169,13 @@ where
 
 impl<T: Dispatch + Default + Send> ScaleBenchmark<T>
 where
-    <T as node_replication::Dispatch>::Operation: std::marker::Send,
-    <T as node_replication::Dispatch>::Operation: std::marker::Sync,
+    <T as node_replication::Dispatch>::WriteOperation: std::marker::Send,
+    <T as node_replication::Dispatch>::WriteOperation: std::marker::Sync,
+    <T as node_replication::Dispatch>::ReadOperation: std::marker::Sync,
+    <T as node_replication::Dispatch>::ReadOperation: std::marker::Send,
     <T as node_replication::Dispatch>::Response: std::marker::Send,
     <T as node_replication::Dispatch>::ResponseError: std::marker::Send,
-    T: 'static,
+    T: 'static + std::marker::Sync,
 {
     /// Create a new ScaleBenchmark.
     fn new(
@@ -162,10 +183,10 @@ where
         rs: ReplicaStrategy,
         tm: ThreadMapping,
         ts: usize,
-        operations: Vec<<T as Dispatch>::Operation>,
+        operations: Vec<Operation<<T as Dispatch>::ReadOperation, <T as Dispatch>::WriteOperation>>,
         batch_size: usize,
         sync: bool,
-        log: Arc<Log<'static, <T as Dispatch>::Operation>>,
+        log: Arc<Log<'static, <T as Dispatch>::WriteOperation>>,
         f: BenchFn<T>,
     ) -> ScaleBenchmark<T> {
         ScaleBenchmark {
@@ -362,7 +383,7 @@ where
                                 }
 
                                 // Consume the log but we don't apply operations anymore
-                                replica.sync(|_o: <T as Dispatch>::Operation, _r: usize| {});
+                                replica.sync(|_o: <T as Dispatch>::WriteOperation, _r: usize| {});
                             }
                         }
 
@@ -463,9 +484,10 @@ where
 #[derive(Debug)]
 pub struct ScaleBenchBuilder<T: Dispatch + Default>
 where
-    <T as node_replication::Dispatch>::Operation: std::marker::Send,
+    <T as node_replication::Dispatch>::WriteOperation: std::marker::Send,
     <T as node_replication::Dispatch>::Response: std::marker::Send,
-    T: 'static,
+    <T as node_replication::Dispatch>::ReadOperation: std::marker::Send,
+    T: 'static + std::marker::Sync,
 {
     /// Replica granularity.
     replica_strategies: Vec<ReplicaStrategy>,
@@ -480,7 +502,7 @@ where
     /// Log size (bytes).
     log_size: usize,
     /// Operations executed on the log.
-    operations: Vec<<T as Dispatch>::Operation>,
+    operations: Vec<Operation<<T as Dispatch>::ReadOperation, <T as Dispatch>::WriteOperation>>,
     /// Reset the log between different `execute`
     /// If we have many ops and do tests where there is no GC, we may starve
     reset_log: bool,
@@ -488,19 +510,23 @@ where
 
 impl<T: Dispatch + Default> ScaleBenchBuilder<T>
 where
-    <T as node_replication::Dispatch>::Operation: std::marker::Send,
-    <T as node_replication::Dispatch>::Operation: std::marker::Sync,
+    <T as node_replication::Dispatch>::WriteOperation: std::marker::Send,
+    <T as node_replication::Dispatch>::WriteOperation: std::marker::Sync,
+    <T as node_replication::Dispatch>::ReadOperation: std::marker::Sync,
+    <T as node_replication::Dispatch>::ReadOperation: std::marker::Send,
     <T as node_replication::Dispatch>::Response: std::marker::Send,
     <T as node_replication::Dispatch>::ResponseError: std::marker::Send,
     T: 'static,
-    T: std::marker::Send,
+    T: std::marker::Send + std::marker::Sync,
 {
     /// Initialize an "empty" ScaleBenchBuilder with a  MiB log.
     ///
     /// By default this won't execute any runs,
     /// you have to at least call `threads`, `thread_mapping`
     /// `replica_strategy` once and set `operations`.
-    pub fn new(ops: Vec<<T as Dispatch>::Operation>) -> ScaleBenchBuilder<T> {
+    pub fn new(
+        ops: Vec<Operation<<T as Dispatch>::ReadOperation, <T as Dispatch>::WriteOperation>>,
+    ) -> ScaleBenchBuilder<T> {
         ScaleBenchBuilder {
             replica_strategies: Vec::new(),
             thread_mappings: Vec::new(),
@@ -604,7 +630,8 @@ where
             for tm in self.thread_mappings.iter() {
                 for ts in self.threads.iter() {
                     for b in self.batches.iter() {
-                        let log = Arc::new(Log::<<T as Dispatch>::Operation>::new(self.log_size));
+                        let log =
+                            Arc::new(Log::<<T as Dispatch>::WriteOperation>::new(self.log_size));
                         let mut runner = ScaleBenchmark::<T>::new(
                             &topology,
                             *rs,

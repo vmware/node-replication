@@ -8,11 +8,19 @@ use node_replication::Dispatch;
 pub struct Nop(usize);
 
 impl Dispatch for Nop {
-    type Operation = usize;
+    type ReadOperation = ();
+    type WriteOperation = usize;
     type Response = ();
     type ResponseError = ();
 
-    fn dispatch(&mut self, _op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch(&self, _op: Self::ReadOperation) -> Result<Self::Response, Self::ResponseError> {
+        unreachable!()
+    }
+
+    fn dispatch_mut(
+        &mut self,
+        _op: Self::WriteOperation,
+    ) -> Result<Self::Response, Self::ResponseError> {
         Ok(unreachable!())
     }
 }

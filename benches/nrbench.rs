@@ -16,6 +16,7 @@ mod utils;
 
 use clap::{load_yaml, App};
 use mkbench::{ReplicaStrategy, ThreadMapping};
+use utils::Operation;
 
 enum Builder {
     Stack(mkbench::ScaleBenchBuilder<stack::Stack>),
@@ -146,7 +147,14 @@ fn main() {
             |_cid, rid, _log, replica, ops, _batch_size| {
                 let mut o = vec![];
                 for op in ops {
-                    replica.execute(*op, rid);
+                    match op {
+                        Operation::ReadOperation(o) => {
+                            replica.execute_ro(*o, rid);
+                        }
+                        Operation::WriteOperation(o) => {
+                            replica.execute(*o, rid);
+                        }
+                    }
                     while replica.get_responses(rid, &mut o) == 0 {}
                     o.clear();
                 }
@@ -159,7 +167,14 @@ fn main() {
             |_cid, rid, _log, replica, ops, _batch_size| {
                 let mut o = vec![];
                 for op in ops {
-                    replica.execute(*op, rid);
+                    match op {
+                        Operation::ReadOperation(o) => {
+                            replica.execute_ro(*o, rid);
+                        }
+                        Operation::WriteOperation(o) => {
+                            replica.execute(*o, rid);
+                        }
+                    }
                     while replica.get_responses(rid, &mut o) == 0 {}
                     o.clear();
                 }
@@ -172,7 +187,14 @@ fn main() {
             |_cid, rid, _log, replica, ops, _batch_size| {
                 let mut o = vec![];
                 for op in ops {
-                    replica.execute(*op, rid);
+                    match op {
+                        Operation::ReadOperation(o) => {
+                            replica.execute_ro(*o, rid);
+                        }
+                        Operation::WriteOperation(o) => {
+                            replica.execute(*o, rid);
+                        }
+                    }
                     while replica.get_responses(rid, &mut o) == 0 {}
                     o.clear();
                 }

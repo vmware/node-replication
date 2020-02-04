@@ -23,6 +23,8 @@ mod nop;
 mod stack;
 mod synthetic;
 
+use utils::Operation;
+
 use criterion::{criterion_group, criterion_main, Criterion};
 
 /// Compare against a stack with and without a log in-front.
@@ -59,7 +61,14 @@ fn stack_scale_out(c: &mut Criterion) {
             |_cid, rid, _log, replica, ops, _batch_size| {
                 let mut o = vec![];
                 for op in ops {
-                    replica.execute(*op, rid);
+                    match op {
+                        Operation::ReadOperation(o) => {
+                            replica.execute_ro(*o, rid);
+                        }
+                        Operation::WriteOperation(o) => {
+                            replica.execute(*o, rid);
+                        }
+                    }
                     let mut i = 1;
                     while replica.get_responses(rid, &mut o) == 0 {
                         if i % mkbench::WARN_THRESHOLD == 0 {
@@ -111,9 +120,17 @@ fn synthetic_scale_out(c: &mut Criterion) {
             |cid, rid, _log, replica, ops, _batch_size| {
                 let mut o = vec![];
                 for op in ops {
-                    let mut op = *op;
-                    op.set_tid(cid as usize);
-                    replica.execute(op, rid);
+                    match op {
+                        Operation::ReadOperation(mut o) => {
+                            o.set_tid(cid as usize);
+                            replica.execute_ro(o, rid);
+                        }
+                        Operation::WriteOperation(mut o) => {
+                            o.set_tid(cid as usize);
+                            replica.execute(o, rid);
+                        }
+                    }
+
                     let mut i = 1;
                     while replica.get_responses(rid, &mut o) == 0 {
                         if i % mkbench::WARN_THRESHOLD == 0 {
@@ -163,46 +180,49 @@ fn hashmap_scale_out(c: &mut Criterion) {
     //const SKEWED: &'static str = "skewed";
     // Read/Write ratio
 
-    mkbench::ScaleBenchBuilder::<hashmap::NrHashMap>::new(vec![hashmap::Op::Get(1)])
-        .machine_defaults()
-        .configure(
-            c,
-            "hashmap-scaleout",
-            |cid, rid, _log, replica, ops, _batch_size| {
-                let mut o = vec![];
-                let mut t_rng = rand::thread_rng();
-                let mut zipf = ZipfDistribution::new(KEY_SPACE, 1.03).unwrap();
-                let distribution = UNIFORM;
-                let writers = 0;
+    mkbench::ScaleBenchBuilder::<hashmap::NrHashMap>::new(vec![Operation::ReadOperation(
+        hashmap::OpRd::Get(1),
+    )])
+    .machine_defaults()
+    .configure(
+        c,
+        "hashmap-scaleout",
+        |cid, rid, _log, replica, ops, _batch_size| {
+            let mut o = vec![];
+            let mut t_rng = rand::thread_rng();
+            let mut zipf = ZipfDistribution::new(KEY_SPACE, 1.03).unwrap();
+            let distribution = UNIFORM;
+            let writers = 0;
 
-                let skewed = distribution == "skewed";
-                let id = if skewed {
-                    zipf.sample(&mut t_rng) as u64
-                } else {
-                    // uniform
-                    t_rng.gen_range(0, KEY_SPACE as u64)
-                };
+            let skewed = distribution == "skewed";
+            let id = if skewed {
+                zipf.sample(&mut t_rng) as u64
+            } else {
+                // uniform
+                t_rng.gen_range(0, KEY_SPACE as u64)
+            };
 
-                let op = if cid < writers {
-                    hashmap::Op::Put(id, t_rng.next_u64())
-                } else {
-                    hashmap::Op::Get(id)
-                };
-
+            if cid < writers {
+                let op = hashmap::OpWr::Put(id, t_rng.next_u64());
                 replica.execute(op, rid);
-                let mut i = 1;
-                while replica.get_responses(rid, &mut o) == 0 {
-                    if i % mkbench::WARN_THRESHOLD == 0 {
-                        log::warn!(
-                            "{:?} Waiting too long for get_responses",
-                            std::thread::current().id()
-                        );
-                    }
-                    i += 1;
+            } else {
+                let op = hashmap::OpRd::Get(id);
+                replica.execute_ro(op, rid);
+            };
+
+            let mut i = 1;
+            while replica.get_responses(rid, &mut o) == 0 {
+                if i % mkbench::WARN_THRESHOLD == 0 {
+                    log::warn!(
+                        "{:?} Waiting too long for get_responses",
+                        std::thread::current().id()
+                    );
                 }
-                o.clear();
-            },
-        );
+                i += 1;
+            }
+            o.clear();
+        },
+    );
 }
 
 /// Compare scale-out behaviour of log.
@@ -216,7 +236,7 @@ fn log_scale_bench(c: &mut Criterion) {
 
     let mut operations = Vec::new();
     for e in 0..NOP {
-        operations.push(e);
+        operations.push(Operation::WriteOperation(e));
     }
 
     mkbench::ScaleBenchBuilder::<nop::Nop>::new(operations)
@@ -229,11 +249,19 @@ fn log_scale_bench(c: &mut Criterion) {
             c,
             "log-append",
             |_cid, rid, log, _replica, ops, batch_size| {
+                let mut op_batch: Vec<usize> = Vec::with_capacity(8);
                 for batch_op in ops.rchunks(batch_size) {
+                    op_batch.clear();
+                    for op in batch_op {
+                        match op {
+                            Operation::WriteOperation(o) => op_batch.push(*o),
+                            _ => unreachable!(),
+                        }
+                    }
                     let _r = log.append(
-                        batch_op,
+                        &op_batch[..],
                         rid,
-                        |_o: <nop::Nop as Dispatch>::Operation, _i: usize| {},
+                        |_o: <nop::Nop as Dispatch>::WriteOperation, _i: usize| {},
                     );
                 }
             },

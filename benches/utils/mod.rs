@@ -2,7 +2,18 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Utility functions to do multi-threaded benchmarking of the log infrastructure.
+
+use std::fmt::Debug;
+
 pub mod topology;
+
+/// A wrapper type to distinguish between arbitrary generated read or write operations
+/// in the test harness.
+#[derive(Debug, Clone)]
+pub enum Operation<R: Sized + Clone + PartialEq + Debug, W: Sized + Clone + PartialEq + Debug> {
+    ReadOperation(R),
+    WriteOperation(W),
+}
 
 /// Type to identify an OS thread.
 /// Ideally in our benchmark we should have one OS thread per core.

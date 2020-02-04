@@ -93,6 +93,10 @@ where
     /// New appends go here.
     tail: CachePadded<AtomicUsize>,
 
+    /// Completed tail maintains an index <= tail that points to a
+    /// log entry after which there are no completed operations.
+    ctail: CachePadded<AtomicUsize>,
+
     /// Array consisting of the local tail of each replica registered with the log.
     /// Required for garbage collection; since replicas make progress over the log
     /// independently, we want to make sure that we don't garbage collect operations
@@ -183,6 +187,7 @@ where
             slog: raw,
             head: CachePadded::new(AtomicUsize::new(0usize)),
             tail: CachePadded::new(AtomicUsize::new(0usize)),
+            ctail: CachePadded::new(AtomicUsize::new(0usize)),
             ltails: arr![Default::default(); 64],
             next: CachePadded::new(AtomicUsize::new(1usize)),
             lmasks: fls,
@@ -221,7 +226,7 @@ where
     /// GC, this closure is passed into exec() to ensure that this replica does'nt
     /// cause a deadlock.
     pub fn append<F: FnMut(T, usize)>(&self, ops: &[T], idx: usize, mut s: F) {
-        let n = ops.len();
+        let nops = ops.len();
         let mut iteration = 1;
         let mut waitgc = 1;
 
@@ -239,14 +244,14 @@ where
             }
             iteration += 1;
 
-            let t = self.tail.load(Ordering::Relaxed);
-            let h = self.head.load(Ordering::Relaxed);
+            let tail = self.tail.load(Ordering::Relaxed);
+            let head = self.head.load(Ordering::Relaxed);
 
             // If there are fewer than `GC_FROM_HEAD` entries on the log, then just
             // try again. The replica that reserved entry (h + self.size - GC_FROM_HEAD)
             // is currently trying to advance the head of the log. Keep refreshing the
             // replica against the log to make sure that it isn't deadlocking GC.
-            if t > h + self.size - GC_FROM_HEAD {
+            if tail > head + self.size - GC_FROM_HEAD {
                 if waitgc % WARN_THRESHOLD == 0 {
                     warn!(
                         "{:?} append(ops.len()={}, {}) takes too many iterations ({}) waiting for gc...",
@@ -264,19 +269,23 @@ where
             // If on adding in the above entries there would be fewer than `GC_FROM_HEAD`
             // entries left on the log, then we need to advance the head of the log.
             let mut advance = false;
-            if t + n > h + self.size - GC_FROM_HEAD {
+            if tail + nops > head + self.size - GC_FROM_HEAD {
                 advance = true
             };
 
             // Try reserving slots for the operations. If that fails, then restart
             // from the beginning of this loop.
-            if self.tail.compare_and_swap(t, t + n, Ordering::SeqCst) != t {
+            if self
+                .tail
+                .compare_and_swap(tail, tail + nops, Ordering::SeqCst)
+                != tail
+            {
                 continue;
             };
 
             // Successfully reserved entries on the shared log. Add the operations in.
-            for i in 0..n {
-                let e = self.slog[self.index(t + i)].as_ptr();
+            for i in 0..nops {
+                let e = self.slog[self.index(tail + i)].as_ptr();
                 let mut m = self.lmasks[idx - 1].get();
 
                 // This entry was just reserved so it should be dead (!= m). However, if
@@ -310,25 +319,25 @@ where
     /// The passed in closure is expected to take in two arguments: The operation
     /// from the shared log to be executed and the replica that issued it.
     pub fn exec<F: FnMut(T, usize)>(&self, idx: usize, d: &mut F) {
-        let t = self.tail.load(Ordering::Relaxed);
-        let h = self.head.load(Ordering::Relaxed);
+        let tail = self.tail.load(Ordering::Relaxed);
+        let head = self.head.load(Ordering::Relaxed);
 
         // Load the logical log offset from which we must execute operations.
-        let f = self.ltails[idx - 1].load(Ordering::Relaxed);
+        let local_tail = self.ltails[idx - 1].load(Ordering::Relaxed);
 
         // Make sure we're within the shared log. If we aren't, then panic.
-        if f > t || f < h {
+        if local_tail > tail || local_tail < head {
             panic!("Local tail not within the shared log!")
         };
 
         // Execute all operations from the passed in offset to the shared log's tail. Check if
         // the entry is live first; we could have a replica that has reserved entries, but not
         // filled them into the log yet.
-        for i in f..t {
+        for i in local_tail..tail {
             let mut iteration = 1;
             let e = self.slog[self.index(i)].as_ptr();
 
-            while unsafe { ((*e).alivef != self.lmasks[idx - 1].get()) } {
+            while unsafe { (*e).alivef != self.lmasks[idx - 1].get() } {
                 if iteration % WARN_THRESHOLD == 0 {
                     warn!(
                         "{:?} alivef not being set for self.index(i={}) = {} (self.lmasks[{}] is {})...",
@@ -351,8 +360,10 @@ where
             }
         }
 
+        self.ctail.fetch_max(tail, Ordering::Relaxed);
+
         // Update the replica's local tail.
-        self.ltails[idx - 1].store(t, Ordering::Relaxed);
+        self.ltails[idx - 1].store(tail, Ordering::Relaxed);
     }
 
     /// Returns a physical index given a logical index into the shared log.
@@ -371,23 +382,23 @@ where
         let mut iteration = 1;
         loop {
             let r = self.next.load(Ordering::Relaxed);
-            let h = self.head.load(Ordering::Relaxed);
+            let global_head = self.head.load(Ordering::Relaxed);
             let f = self.tail.load(Ordering::Relaxed);
 
-            let mut n = self.ltails[0].load(Ordering::Relaxed);
+            let mut min_local_tail = self.ltails[0].load(Ordering::Relaxed);
 
             // Find the smallest local tail across all replicas.
             for idx in 1..r {
-                let t = self.ltails[idx - 1].load(Ordering::Relaxed);
-                if n > t {
-                    n = t
+                let cur_local_tail = self.ltails[idx - 1].load(Ordering::Relaxed);
+                if min_local_tail > cur_local_tail {
+                    min_local_tail = cur_local_tail
                 };
             }
 
             // If we cannot advance the head further, then start
             // from the beginning of this loop again. Before doing so, try consuming
             // any new entries on the log to prevent deadlock.
-            if n == h {
+            if min_local_tail == global_head {
                 if iteration % WARN_THRESHOLD == 0 {
                     warn!(
                         "{:?} Spending a long time in `advance_head`, are we starving?",
@@ -397,23 +408,26 @@ where
                 iteration += 1;
                 self.exec(rid, &mut s);
                 continue;
-            };
+            }
 
             // There are entries that can be freed up; update the head offset.
-            self.head.store(n, Ordering::Relaxed);
+            self.head.store(min_local_tail, Ordering::Relaxed);
 
             // Make sure that we freed up enough space so that threads waiting for
             // GC in append can make progress. Otherwise, try to make progress again.
-            if f < n + self.size - GC_FROM_HEAD {
+            if f < min_local_tail + self.size - GC_FROM_HEAD {
                 return;
+            } else {
+                self.exec(rid, &mut s);
             }
-            self.exec(rid, &mut s);
         }
     }
 
     /// Resets the log. Required for microbenchmarking the log; with this method, we
     /// can re-use the log across experimental runs without having to re-allocate the
     /// log over and over again.
+    ///
+    /// # Safety
     ///
     /// *To be used for testing/benchmarking only, hence marked unsafe*. Before calling
     /// this method, please make sure that there aren't any replicas/threads actively
@@ -437,6 +451,15 @@ where
             let e = self.slog[self.index(i)].as_ptr();
             (*e).alivef = false;
         }
+    }
+
+    /// This method checks if the replica is in sync to execute a read-only operation
+    /// right away. And to check the same, it compares the localTail with completedTail.
+    #[inline(always)]
+    pub fn is_replica_synced_for_reads(&self, idx: usize) -> bool {
+        let read_tail = self.ctail.load(Ordering::Relaxed);
+        let local_tail = self.ltails[idx - 1].load(Ordering::Relaxed);
+        local_tail >= read_tail
     }
 }
 
@@ -764,5 +787,29 @@ mod tests {
         l.append(&o2[..], 1, |_o: Arc<Operation>, _i: usize| {});
         assert_eq!(Arc::strong_count(&o1[0]), 1);
         assert_eq!(Arc::strong_count(&o2[0]), 3);
+    }
+
+    #[test]
+    fn test_replica_synced_for_read() {
+        let l = Log::<Operation>::default();
+        let one = l.register().unwrap();
+        let two = l.register().unwrap();
+
+        assert_eq!(one, 1);
+        assert_eq!(two, 2);
+
+        let o = [Operation::Read];
+        let mut f = |op: Operation, i: usize| {
+            assert_eq!(op, Operation::Read);
+            assert_eq!(i, 1);
+        };
+
+        l.append(&o, one, |_o: Operation, _i: usize| {});
+        l.exec(one, &mut f);
+        assert_eq!(l.is_replica_synced_for_reads(one), true);
+        assert_eq!(l.is_replica_synced_for_reads(two), false);
+
+        l.exec(two, &mut f);
+        assert_eq!(l.is_replica_synced_for_reads(two), true);
     }
 }

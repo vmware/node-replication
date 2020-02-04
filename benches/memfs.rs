@@ -14,10 +14,11 @@ use log::warn;
 use node_replication::Dispatch;
 
 use btfs::{Error, FileAttr, FileType, InodeId, MemFilesystem, SetAttrRequest};
+use utils::Operation;
 
 /// All FS operations we can perform through the log.
 #[derive(Debug, PartialEq, Clone, Copy)]
-pub enum Operation {
+pub enum OperationWr {
     GetAttr {
         ino: u64,
     },
@@ -77,6 +78,9 @@ pub enum Operation {
         newname: &'static OsStr,
     },
 }
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum OperationRd {}
 
 /// Potential responses from the file-system
 #[derive(Copy, Clone)]
@@ -198,22 +202,30 @@ impl NrMemFilesystem {
 }
 
 impl Dispatch for NrMemFilesystem {
-    type Operation = Operation;
+    type ReadOperation = OperationRd;
+    type WriteOperation = OperationWr;
     type Response = Response;
     type ResponseError = ResponseError;
 
+    fn dispatch(&self, _op: Self::ReadOperation) -> Result<Self::Response, Self::ResponseError> {
+        unreachable!()
+    }
+
     /// Implements how we execute operation from the log against our local stack
-    fn dispatch(&mut self, op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch_mut(
+        &mut self,
+        op: Self::WriteOperation,
+    ) -> Result<Self::Response, Self::ResponseError> {
         match op {
-            Operation::GetAttr { ino } => match self.getattr(ino) {
+            OperationWr::GetAttr { ino } => match self.getattr(ino) {
                 Ok(attr) => Ok(Response::Attr(*attr)),
                 Err(e) => Err(ResponseError::Err(e)),
             },
-            Operation::SetAttr { ino, new_attrs } => match self.setattr(ino, new_attrs) {
+            OperationWr::SetAttr { ino, new_attrs } => match self.setattr(ino, new_attrs) {
                 Ok(fattr) => Ok(Response::Attr(*fattr)),
                 Err(e) => Err(ResponseError::Err(e)),
             },
-            Operation::ReadDir { ino, fh, offset } => {
+            OperationWr::ReadDir { ino, fh, offset } => {
                 match self.readdir(ino, fh) {
                     Ok(entries) => {
                         // Offset of 0 means no offset.
@@ -227,27 +239,27 @@ impl Dispatch for NrMemFilesystem {
                     Err(e) => Err(ResponseError::Err(e)),
                 }
             }
-            Operation::Lookup { parent, name } => match self.lookup(parent, name) {
+            OperationWr::Lookup { parent, name } => match self.lookup(parent, name) {
                 Ok(attr) => Ok(Response::Attr(*attr)),
                 Err(e) => Err(ResponseError::Err(e)),
             },
-            Operation::RmDir { parent, name } => match self.rmdir(parent, name) {
+            OperationWr::RmDir { parent, name } => match self.rmdir(parent, name) {
                 Ok(()) => Ok(Response::Empty),
                 Err(e) => Err(ResponseError::Err(e)),
             },
-            Operation::MkDir { parent, name, mode } => match self.mkdir(parent, name, mode) {
+            OperationWr::MkDir { parent, name, mode } => match self.mkdir(parent, name, mode) {
                 Ok(attr) => Ok(Response::Attr(*attr)),
                 Err(e) => Err(ResponseError::Err(e)),
             },
-            Operation::Open { ino, flags } => {
+            OperationWr::Open { ino, flags } => {
                 warn!("Don't do `open` for now... {} {}", ino, flags);
                 Ok(Response::Empty)
             }
-            Operation::Unlink { parent, name } => match self.unlink(parent, name) {
+            OperationWr::Unlink { parent, name } => match self.unlink(parent, name) {
                 Ok(_attr) => Ok(Response::Empty),
                 Err(e) => Err(ResponseError::Err(e)),
             },
-            Operation::Create {
+            OperationWr::Create {
                 parent,
                 name,
                 mode,
@@ -256,7 +268,7 @@ impl Dispatch for NrMemFilesystem {
                 Ok(_attr) => Ok(Response::Empty),
                 Err(e) => Err(ResponseError::Err(e)),
             },
-            Operation::Write {
+            OperationWr::Write {
                 ino,
                 fh,
                 offset,
@@ -266,7 +278,7 @@ impl Dispatch for NrMemFilesystem {
                 Ok(written) => Ok(Response::Written(written)),
                 Err(e) => Err(ResponseError::Err(e)),
             },
-            Operation::Read {
+            OperationWr::Read {
                 ino,
                 fh,
                 offset,
@@ -288,7 +300,7 @@ impl Dispatch for NrMemFilesystem {
                 }
                 Err(e) => Err(ResponseError::Err(e)),
             },
-            Operation::Rename {
+            OperationWr::Rename {
                 parent,
                 name,
                 newparent,
@@ -301,29 +313,32 @@ impl Dispatch for NrMemFilesystem {
     }
 }
 
-fn generate_fs_operations(nop: usize, write_ratio: usize) -> Vec<Operation> {
+fn generate_fs_operations(
+    nop: usize,
+    write_ratio: usize,
+) -> Vec<Operation<OperationRd, OperationWr>> {
     let mut ops = Vec::with_capacity(nop);
     let mut rng = rand::thread_rng();
 
     for idx in 0..nop {
         if idx % 100 < write_ratio {
-            ops.push(Operation::Write {
+            ops.push(Operation::WriteOperation(OperationWr::Write {
                 ino: 5, // XXX: hard-coded ino of file `00000001`
                 fh: 0,
                 offset: rng.gen_range(0, 4096 - 256),
                 data: &[3; 128],
                 flags: 0,
-            })
+            }))
         } else {
             let offset = rng.gen_range(0, 4096 - 256);
             let size = rng.gen_range(0, 128);
 
-            ops.push(Operation::Read {
+            ops.push(Operation::WriteOperation(OperationWr::Read {
                 ino: 5, // XXX: hard-coded ino of file `00000001`
                 fh: 0,
                 offset: offset,
                 size: size,
-            })
+            }))
         }
     }
 
@@ -362,7 +377,14 @@ fn memfs_scale_out(c: &mut Criterion) {
             |_cid, rid, _log, replica, ops, _batch_size| {
                 let mut o = vec![];
                 for op in ops {
-                    replica.execute(*op, rid);
+                    match op {
+                        Operation::ReadOperation(o) => {
+                            replica.execute_ro(*o, rid);
+                        }
+                        Operation::WriteOperation(o) => {
+                            replica.execute(*o, rid);
+                        }
+                    }
                     let mut i = 1;
                     while replica.get_responses(rid, &mut o) == 0 {
                         if i % mkbench::WARN_THRESHOLD == 0 {

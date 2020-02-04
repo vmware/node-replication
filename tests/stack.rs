@@ -4,9 +4,8 @@
 extern crate rand;
 extern crate std;
 
-use std::cell::{RefCell, RefMut};
 use std::collections::HashMap;
-use std::sync::{Arc, Barrier};
+use std::sync::{Arc, Barrier, RwLock};
 use std::thread;
 use std::usize;
 
@@ -17,15 +16,25 @@ use node_replication::Dispatch;
 use rand::{thread_rng, Rng};
 
 #[derive(Eq, PartialEq, Clone, Copy, Debug)]
-enum Op {
+enum OpWr {
     Push(u32),
     Pop,
 }
 
-#[derive(Eq, PartialEq)]
+#[derive(Eq, PartialEq, Clone, Copy, Debug)]
+enum OpRd {
+    Peek,
+}
+
 struct Stack {
     storage: Vec<u32>,
     popped: Vec<Option<u32>>,
+    peeked: RwLock<Vec<Option<u32>>>,
+}
+
+fn compare_vectors<T: PartialEq>(a: &Vec<T>, b: &Vec<T>) -> bool {
+    let matching = a.iter().zip(b.iter()).filter(|&(a, b)| a == b).count();
+    matching == a.len() && matching == b.len()
 }
 
 impl Stack {
@@ -33,9 +42,20 @@ impl Stack {
         self.storage.push(data);
     }
 
-    pub fn pop(&mut self) {
+    pub fn pop(&mut self) -> Option<u32> {
         let r = self.storage.pop();
         self.popped.push(r);
+        return r;
+    }
+
+    pub fn peek(&self) -> Option<u32> {
+        let mut r = None;
+        let len = self.storage.len();
+        if len > 0 {
+            r = Some(self.storage[len - 1]);
+        }
+        self.peeked.write().unwrap().push(r);
+        return r;
     }
 }
 
@@ -44,6 +64,7 @@ impl Default for Stack {
         let s = Stack {
             storage: Default::default(),
             popped: Default::default(),
+            peeked: Default::default(),
         };
 
         s
@@ -51,17 +72,28 @@ impl Default for Stack {
 }
 
 impl Dispatch for Stack {
-    type Operation = Op;
+    type ReadOperation = OpRd;
+    type WriteOperation = OpWr;
     type Response = Option<u32>;
     type ResponseError = ();
 
-    fn dispatch(&mut self, op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch(&self, op: Self::ReadOperation) -> Result<Self::Response, Self::ResponseError> {
         match op {
-            Op::Push(v) => self.push(v),
-            Op::Pop => self.pop(),
-        }
+            OpRd::Peek => return Ok(self.peek()),
+        };
+    }
 
-        Ok(None)
+    fn dispatch_mut(
+        &mut self,
+        op: Self::WriteOperation,
+    ) -> Result<Self::Response, Self::ResponseError> {
+        match op {
+            OpWr::Push(v) => {
+                self.push(v);
+                return Ok(Some(v));
+            }
+            OpWr::Pop => return Ok(self.pop()),
+        }
     }
 }
 
@@ -71,7 +103,9 @@ impl Dispatch for Stack {
 /// against a known correct implementation.
 #[test]
 fn sequential_test() {
-    let log = Arc::new(Log::<<Stack as Dispatch>::Operation>::new(4 * 1024 * 1024));
+    let log = Arc::new(Log::<<Stack as Dispatch>::WriteOperation>::new(
+        4 * 1024 * 1024,
+    ));
 
     let mut orng = thread_rng();
     let nop = 50;
@@ -81,11 +115,12 @@ fn sequential_test() {
     let mut o = vec![];
     let mut correct_stack: Vec<u32> = Vec::new();
     let mut correct_popped: Vec<Option<u32>> = Vec::new();
+    let mut correct_peeked: Vec<Option<u32>> = Vec::new();
 
     // Populate with some initial data
     for _i in 0..50 {
         let element = orng.gen();
-        r.execute(Op::Push(element), idx);
+        r.execute(OpWr::Push(element), idx);
         r.get_responses(idx, &mut o);
         o.clear();
         correct_stack.push(element);
@@ -93,25 +128,63 @@ fn sequential_test() {
 
     for _i in 0..nop {
         let op: usize = orng.gen();
-        match op % 2usize {
+        match op % 3usize {
             0usize => {
-                r.execute(Op::Pop, idx);
-                correct_popped.push(correct_stack.pop());
+                r.execute(OpWr::Pop, idx);
+                while r.get_responses(idx, &mut o) == 0 {}
+                let popped = correct_stack.pop();
+
+                assert_eq!(o.len(), 1);
+                match o[0] {
+                    Ok(element) => assert_eq!(popped, element),
+                    Err(_) => {}
+                }
+                correct_popped.push(popped);
             }
             1usize => {
                 let element = orng.gen();
-                r.execute(Op::Push(element), idx);
+                r.execute(OpWr::Push(element), idx);
+                while r.get_responses(idx, &mut o) == 0 {}
+                assert_eq!(o.len(), 1);
+                match o[0] {
+                    Ok(ele) => assert_eq!(Some(element), ele),
+                    Err(_) => {}
+                }
                 correct_stack.push(element);
+            }
+            2usize => {
+                r.execute_ro(OpRd::Peek, idx);
+                let mut ele = None;
+                let len = correct_stack.len();
+                if len > 0 {
+                    ele = Some(correct_stack[len - 1]);
+                }
+                while r.get_responses(idx, &mut o) == 0 {}
+                assert_eq!(o.len(), 1);
+                match o[0] {
+                    Ok(element) => assert_eq!(ele, element),
+                    Err(_) => {}
+                }
+                correct_peeked.push(ele);
             }
             _ => unreachable!(),
         }
-        r.get_responses(idx, &mut o);
         o.clear();
     }
 
-    let v = |data: RefMut<Stack>| {
-        assert_eq!(correct_popped, data.popped, "Pop operation error detected");
-        assert_eq!(correct_stack, data.storage, "Push operation error detected");
+    let v = |data: &Stack| {
+        assert!(
+            compare_vectors(&correct_popped, &data.popped),
+            "Pop operation error detected"
+        );
+        assert!(
+            compare_vectors(&correct_stack, &data.storage),
+            "Push operation error detected"
+        );
+        assert!(
+            compare_vectors(&correct_peeked, &data.peeked.read().unwrap()),
+            "Peek operation error detected"
+        );
     };
     r.verify(v);
 }
@@ -119,17 +192,21 @@ fn sequential_test() {
 /// A stack to verify that the log works correctly with multiple threads.
 #[derive(Eq, PartialEq)]
 struct VerifyStack {
-    storage: RefCell<Vec<u32>>,
-    per_replica_counter: RefCell<HashMap<u16, u16>>,
+    storage: Vec<u32>,
+    per_replica_counter: HashMap<u16, u16>,
 }
 
 impl VerifyStack {
-    pub fn push(&self, data: u32) {
-        self.storage.borrow_mut().push(data);
+    pub fn push(&mut self, data: u32) {
+        self.storage.push(data);
     }
 
-    pub fn pop(&self) -> u32 {
-        self.storage.borrow_mut().pop().unwrap()
+    pub fn pop(&mut self) -> u32 {
+        self.storage.pop().unwrap()
+    }
+
+    pub fn peek(&self) -> u32 {
+        self.storage.last().unwrap().clone()
     }
 }
 
@@ -145,49 +222,84 @@ impl Default for VerifyStack {
 }
 
 impl Dispatch for VerifyStack {
-    type Operation = Op;
+    type ReadOperation = OpRd;
+    type WriteOperation = OpWr;
     type Response = Option<u32>;
     type ResponseError = Option<()>;
 
-    fn dispatch(&mut self, op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch(&self, op: Self::ReadOperation) -> Result<Self::Response, Self::ResponseError> {
         match op {
-            Op::Push(v) => {
+            OpRd::Peek => {
+                let ele: u32 = self.peek();
+                let tid = (ele & 0xffff) as u16;
+                let val = ((ele >> 16) & 0xffff) as u16;
+                //println!("Peek tid {} val {}", tid, val);
+
+                let last_popped = self
+                    .per_replica_counter
+                    .get(&tid)
+                    .unwrap_or(&u16::max_value());
+
+                // Reading already popped element.
+                if *last_popped <= val {
+                    println!(
+                        "assert violation last_popped={} val={} tid={} {:?}",
+                        *last_popped, val, tid, self.per_replica_counter
+                    );
+                }
+                assert!(
+                    *last_popped > val,
+                    "Elements that came from a given thread are monotonically decreasing"
+                );
+                return Ok(Some(ele));
+            }
+        }
+    }
+
+    fn dispatch_mut(
+        &mut self,
+        op: Self::WriteOperation,
+    ) -> Result<Self::Response, Self::ResponseError> {
+        match op {
+            OpWr::Push(v) => {
                 let _tid = (v & 0xffff) as u16;
                 let _val = ((v >> 16) & 0xffff) as u16;
                 //println!("Push tid {} val {}", tid, val);
                 self.push(v);
+                return Ok(Some(v));
             }
-            Op::Pop => {
+            OpWr::Pop => {
                 let ele: u32 = self.pop();
                 let tid = (ele & 0xffff) as u16;
                 let val = ((ele >> 16) & 0xffff) as u16;
                 //println!("POP tid {} val {}", tid, val);
-                let mut per_replica_counter = self.per_replica_counter.borrow_mut();
 
-                let cnt = per_replica_counter.get(&tid).unwrap_or(&u16::max_value());
+                let cnt = self
+                    .per_replica_counter
+                    .get(&tid)
+                    .unwrap_or(&u16::max_value());
                 if *cnt <= val {
                     println!(
                         "assert violation cnt={} val={} tid={} {:?}",
-                        *cnt, val, tid, per_replica_counter
+                        *cnt, val, tid, self.per_replica_counter
                     );
                 }
                 assert!(
                     *cnt > val,
                     "Elements that came from a given thread are monotonically decreasing"
                 );
-                per_replica_counter.insert(tid, val);
+                self.per_replica_counter.insert(tid, val);
 
                 if val == 0 {
                     // This is one of our last elements, so we sanity check that we've
                     // seen values from all threads by now (if not we may have been really unlucky
                     // with thread scheduling or something is wrong with fairness in our implementation)
                     // println!("per_replica_counter ={:?}", per_replica_counter);
-                    assert_eq!(per_replica_counter.len(), 8, "Popped a final element from a thread before seeing elements from every thread.");
+                    assert_eq!(self.per_replica_counter.len(), 8, "Popped a final element from a thread before seeing elements from every thread.");
                 }
+                return Ok(Some(ele));
             }
         }
-
-        return Ok(None);
     }
 }
 
@@ -200,7 +312,7 @@ fn parallel_push_sequential_pop_test() {
     let l = 1usize;
     let nop: u16 = 50000;
 
-    let log = Arc::new(Log::<<Stack as Dispatch>::Operation>::new(
+    let log = Arc::new(Log::<<Stack as Dispatch>::WriteOperation>::new(
         l * 1024 * 1024 * 1024,
     ));
 
@@ -227,7 +339,7 @@ fn parallel_push_sequential_pop_test() {
                 // 1. Insert phase
                 b.wait();
                 for i in 0..nop {
-                    replica.execute(Op::Push((i as u32) << 16 | tid), idx);
+                    replica.execute(OpWr::Push((i as u32) << 16 | tid), idx);
                     while replica.get_responses(idx, &mut o) == 0 {}
                     o.clear();
                 }
@@ -250,8 +362,12 @@ fn parallel_push_sequential_pop_test() {
         let mut o = vec![];
         for _j in 0..t {
             for _z in 0..nop {
-                replica.execute(Op::Pop, 1);
-                replica.get_responses(1, &mut o);
+                replica.execute_ro(OpRd::Peek, i + 1);
+                replica.get_responses(i + 1, &mut o);
+                o.clear();
+
+                replica.execute(OpWr::Pop, i + 1);
+                replica.get_responses(i + 1, &mut o);
                 o.clear();
             }
         }
@@ -268,7 +384,7 @@ fn parallel_push_and_pop_test() {
     let l = 1usize;
     let nop: u16 = 50000;
 
-    let log = Arc::new(Log::<<Stack as Dispatch>::Operation>::new(
+    let log = Arc::new(Log::<<Stack as Dispatch>::WriteOperation>::new(
         l * 1024 * 1024 * 1024,
     ));
 
@@ -295,7 +411,7 @@ fn parallel_push_and_pop_test() {
                 // 1. Insert phase
                 b.wait();
                 for i in 0..nop {
-                    replica.execute(Op::Push((i as u32) << 16 | tid), idx);
+                    replica.execute(OpWr::Push((i as u32) << 16 | tid), idx);
                     while replica.get_responses(idx, &mut o) == 0 {}
                     o.clear();
                 }
@@ -303,7 +419,11 @@ fn parallel_push_and_pop_test() {
                 // 2. Dequeue phase, verification
                 b.wait();
                 for _i in 0..nop {
-                    replica.execute(Op::Pop, idx);
+                    replica.execute_ro(OpRd::Peek, idx);
+                    while replica.get_responses(idx, &mut o) == 0 {}
+                    o.clear();
+
+                    replica.execute(OpWr::Pop, idx);
                     while replica.get_responses(idx, &mut o) == 0 {}
                     o.clear();
                 }
@@ -332,8 +452,8 @@ fn bench(r: Arc<Replica<Stack>>, nop: usize, barrier: Arc<Barrier>) -> (u64, u64
     for _i in 0..nop {
         let op: usize = orng.gen();
         match op % 2usize {
-            0usize => ops.push(Op::Pop),
-            1usize => ops.push(Op::Push(arng.gen())),
+            0usize => ops.push(OpWr::Pop),
+            1usize => ops.push(OpWr::Push(arng.gen())),
             _ => unreachable!(),
         }
     }
@@ -359,7 +479,7 @@ fn replicas_are_equal() {
     let l = 1usize;
     let n = 50usize;
 
-    let log = Arc::new(Log::<<Stack as Dispatch>::Operation>::new(
+    let log = Arc::new(Log::<<Stack as Dispatch>::WriteOperation>::new(
         l * 1024 * 1024 * 1024,
     ));
 
@@ -391,7 +511,7 @@ fn replicas_are_equal() {
 
     let mut d0 = vec![];
     let mut p0 = vec![];
-    let v = |data: RefMut<Stack>| {
+    let v = |data: &Stack| {
         d0.extend_from_slice(&data.storage);
         p0.extend_from_slice(&data.popped);
     };
@@ -399,7 +519,7 @@ fn replicas_are_equal() {
 
     let mut d1 = vec![];
     let mut p1 = vec![];
-    let v = |data: RefMut<Stack>| {
+    let v = |data: &Stack| {
         d1.extend_from_slice(&data.storage);
         p1.extend_from_slice(&data.popped);
     };

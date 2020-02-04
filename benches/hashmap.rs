@@ -13,11 +13,17 @@ use zipf::ZipfDistribution;
 
 use node_replication::Dispatch;
 
+use crate::utils::Operation;
+
 /// Operations we can perform on the stack.
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
-pub enum Op {
+pub enum OpWr {
     /// Add an item to the hash-map.
     Put(u64, u64),
+}
+
+#[derive(Debug, Eq, PartialEq, Clone, Copy)]
+pub enum OpRd {
     /// Get item from the hash-map.
     Get(u64),
 }
@@ -35,7 +41,7 @@ impl NrHashMap {
         self.storage.insert(key, val);
     }
 
-    pub fn get(&mut self, key: u64) -> Option<u64> {
+    pub fn get(&self, key: u64) -> Option<u64> {
         self.storage.get(&key).map(|v| *v)
     }
 }
@@ -50,18 +56,27 @@ impl Default for NrHashMap {
 }
 
 impl Dispatch for NrHashMap {
-    type Operation = Op;
+    type ReadOperation = OpRd;
+    type WriteOperation = OpWr;
     type Response = Option<u64>;
     type ResponseError = ();
 
-    /// Implements how we execute operation from the log against our local stack
-    fn dispatch(&mut self, op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch(&self, op: Self::ReadOperation) -> Result<Self::Response, Self::ResponseError> {
         match op {
-            Op::Put(key, val) => {
+            OpRd::Get(key) => return Ok(self.get(key)),
+        }
+    }
+
+    /// Implements how we execute operation from the log against our local stack
+    fn dispatch_mut(
+        &mut self,
+        op: Self::WriteOperation,
+    ) -> Result<Self::Response, Self::ResponseError> {
+        match op {
+            OpWr::Put(key, val) => {
                 self.put(key, val);
                 Ok(None)
             }
-            Op::Get(key) => return Ok(self.get(key)),
         }
     }
 }
@@ -78,7 +93,7 @@ pub fn generate_operations(
     write_ratio: usize,
     span: usize,
     distribution: &'static str,
-) -> Vec<Op> {
+) -> Vec<Operation<OpRd, OpWr>> {
     assert!(distribution == "skewed" || distribution == "uniform");
 
     use rand::Rng;
@@ -97,9 +112,9 @@ pub fn generate_operations(
         };
 
         if idx % 100 < write_ratio {
-            ops.push(Op::Put(id, t_rng.next_u64()));
+            ops.push(Operation::WriteOperation(OpWr::Put(id, t_rng.next_u64())));
         } else {
-            ops.push(Op::Get(id));
+            ops.push(Operation::ReadOperation(OpRd::Get(id)));
         }
     }
 

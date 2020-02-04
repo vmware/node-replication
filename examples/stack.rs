@@ -10,7 +10,7 @@ use node_replication::Dispatch;
 
 /// We support push and pop operations on the stack.
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
-enum Op {
+enum OpWr {
     Push(u32),
     Pop,
 }
@@ -50,19 +50,26 @@ impl Default for Stack {
 }
 
 impl Dispatch for Stack {
-    type Operation = Op;
+    type ReadOperation = ();
+    type WriteOperation = OpWr;
     type Response = Option<u32>;
     type ResponseError = Option<()>;
 
+    fn dispatch(&self, _op: Self::ReadOperation) -> Result<Self::Response, Self::ResponseError> {
+        Err(None)
+    }
     /// The dispatch traint defines how operations coming from the log
     /// are execute against our local stack within a replica.
-    fn dispatch(&mut self, op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch_mut(
+        &mut self,
+        op: Self::WriteOperation,
+    ) -> Result<Self::Response, Self::ResponseError> {
         match op {
-            Op::Push(v) => {
+            OpWr::Push(v) => {
                 self.push(v);
                 return Ok(None);
             }
-            Op::Pop => return Ok(self.pop()),
+            OpWr::Pop => return Ok(self.pop()),
         }
     }
 }
@@ -71,15 +78,15 @@ impl Dispatch for Stack {
 /// then execute operations on the replica.
 fn main() {
     const ONE_MIB: usize = 1 * 1024 * 1024;
-    let log = Arc::new(Log::<<Stack as Dispatch>::Operation>::new(ONE_MIB));
+    let log = Arc::new(Log::<<Stack as Dispatch>::WriteOperation>::new(ONE_MIB));
     let replica = Replica::<Stack>::new(&log);
     let ridx = replica.register().expect("Couldn't register with replica");
 
     for i in 0..1024 {
         let mut o = vec![];
         match i % 2 {
-            0 => replica.execute(Op::Push(i as u32), ridx),
-            1 => replica.execute(Op::Pop, ridx),
+            0 => replica.execute(OpWr::Push(i as u32), ridx),
+            1 => replica.execute(OpWr::Pop, ridx),
             _ => unreachable!(),
         };
         while replica.get_responses(ridx, &mut o) == 0 {}

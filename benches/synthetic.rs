@@ -16,25 +16,38 @@ use rand::{thread_rng, Rng};
 
 use node_replication::Dispatch;
 
+use crate::utils::Operation;
+
 /// Operations we can perform on the AbstractDataStructure.
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
-pub enum Op {
+pub enum OpRd {
     /// Read a bunch of local memory.
     ReadOnly(usize, usize, usize),
+}
+
+#[derive(Debug, Eq, PartialEq, Clone, Copy)]
+pub enum OpWr {
     /// Write a bunch of local memory.
     WriteOnly(usize, usize, usize),
     /// Read some memory, then write some.
     ReadWrite(usize, usize, usize),
 }
 
-impl Op {
+impl OpRd {
     #[inline(always)]
     pub fn set_tid(&mut self, tid: usize) {
         match self {
-            Op::ReadOnly(ref mut a, _b, _c) => *a = tid,
-            Op::WriteOnly(ref mut a, _b, _c) => *a = tid,
-            Op::ReadWrite(ref mut a, _b, _c) => *a = tid,
-            _ => (),
+            OpRd::ReadOnly(ref mut a, _b, _c) => *a = tid,
+        };
+    }
+}
+
+impl OpWr {
+    #[inline(always)]
+    pub fn set_tid(&mut self, tid: usize) {
+        match self {
+            OpWr::WriteOnly(ref mut a, _b, _c) => *a = tid,
+            OpWr::ReadWrite(ref mut a, _b, _c) => *a = tid,
         };
     }
 }
@@ -158,16 +171,25 @@ impl AbstractDataStructure {
 }
 
 impl Dispatch for AbstractDataStructure {
-    type Operation = Op;
+    type ReadOperation = OpRd;
+    type WriteOperation = OpWr;
     type Response = usize;
     type ResponseError = ();
 
-    /// Implements how we execute operation from the log against abstract DS
-    fn dispatch(&mut self, op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch(&self, op: Self::ReadOperation) -> Result<Self::Response, Self::ResponseError> {
         match op {
-            Op::ReadOnly(a, b, c) => return Ok(self.read(a, b, c)),
-            Op::WriteOnly(a, b, c) => return Ok(self.write(a, b, c)),
-            Op::ReadWrite(a, b, c) => return Ok(self.read_write(a, b, c)),
+            OpRd::ReadOnly(a, b, c) => return Ok(self.read(a, b, c)),
+        }
+    }
+
+    /// Implements how we execute operation from the log against abstract DS
+    fn dispatch_mut(
+        &mut self,
+        op: Self::WriteOperation,
+    ) -> Result<Self::Response, Self::ResponseError> {
+        match op {
+            OpWr::WriteOnly(a, b, c) => return Ok(self.write(a, b, c)),
+            OpWr::ReadWrite(a, b, c) => return Ok(self.read_write(a, b, c)),
         }
     }
 }
@@ -182,7 +204,7 @@ pub fn generate_operations(
     readonly: bool,
     writeonly: bool,
     readwrite: bool,
-) -> Vec<Op> {
+) -> Vec<Operation<OpRd, OpWr>> {
     let mut orng = thread_rng();
     let mut arng = thread_rng();
 
@@ -192,29 +214,77 @@ pub fn generate_operations(
 
         match (readonly, writeonly, readwrite) {
             (true, true, true) => match op % 3 {
-                0 => ops.push(Op::ReadOnly(tid, arng.gen(), arng.gen())),
-                1 => ops.push(Op::WriteOnly(tid, arng.gen(), arng.gen())),
-                2 => ops.push(Op::ReadWrite(tid, arng.gen(), arng.gen())),
+                0 => ops.push(Operation::ReadOperation(OpRd::ReadOnly(
+                    tid,
+                    arng.gen(),
+                    arng.gen(),
+                ))),
+                1 => ops.push(Operation::WriteOperation(OpWr::WriteOnly(
+                    tid,
+                    arng.gen(),
+                    arng.gen(),
+                ))),
+                2 => ops.push(Operation::WriteOperation(OpWr::ReadWrite(
+                    tid,
+                    arng.gen(),
+                    arng.gen(),
+                ))),
                 _ => unreachable!(),
             },
             (false, true, true) => match op % 2 {
-                0 => ops.push(Op::WriteOnly(tid, arng.gen(), arng.gen())),
-                1 => ops.push(Op::ReadWrite(tid, arng.gen(), arng.gen())),
+                0 => ops.push(Operation::WriteOperation(OpWr::WriteOnly(
+                    tid,
+                    arng.gen(),
+                    arng.gen(),
+                ))),
+                1 => ops.push(Operation::WriteOperation(OpWr::ReadWrite(
+                    tid,
+                    arng.gen(),
+                    arng.gen(),
+                ))),
                 _ => unreachable!(),
             },
             (true, true, false) => match op % 2 {
-                0 => ops.push(Op::ReadOnly(tid, arng.gen(), arng.gen())),
-                1 => ops.push(Op::WriteOnly(tid, arng.gen(), arng.gen())),
+                0 => ops.push(Operation::ReadOperation(OpRd::ReadOnly(
+                    tid,
+                    arng.gen(),
+                    arng.gen(),
+                ))),
+                1 => ops.push(Operation::WriteOperation(OpWr::WriteOnly(
+                    tid,
+                    arng.gen(),
+                    arng.gen(),
+                ))),
                 _ => unreachable!(),
             },
             (true, false, true) => match op % 2 {
-                0 => ops.push(Op::ReadOnly(tid, arng.gen(), arng.gen())),
-                1 => ops.push(Op::ReadWrite(tid, arng.gen(), arng.gen())),
+                0 => ops.push(Operation::ReadOperation(OpRd::ReadOnly(
+                    tid,
+                    arng.gen(),
+                    arng.gen(),
+                ))),
+                1 => ops.push(Operation::WriteOperation(OpWr::ReadWrite(
+                    tid,
+                    arng.gen(),
+                    arng.gen(),
+                ))),
                 _ => unreachable!(),
             },
-            (true, false, false) => ops.push(Op::ReadOnly(tid, arng.gen(), arng.gen())),
-            (false, true, false) => ops.push(Op::WriteOnly(tid, arng.gen(), arng.gen())),
-            (false, false, true) => ops.push(Op::ReadWrite(tid, arng.gen(), arng.gen())),
+            (true, false, false) => ops.push(Operation::ReadOperation(OpRd::ReadOnly(
+                tid,
+                arng.gen(),
+                arng.gen(),
+            ))),
+            (false, true, false) => ops.push(Operation::WriteOperation(OpWr::WriteOnly(
+                tid,
+                arng.gen(),
+                arng.gen(),
+            ))),
+            (false, false, true) => ops.push(Operation::WriteOperation(OpWr::ReadWrite(
+                tid,
+                arng.gen(),
+                arng.gen(),
+            ))),
             (false, false, false) => panic!("no operations selected"),
         };
     }

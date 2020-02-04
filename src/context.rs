@@ -10,6 +10,10 @@ use crossbeam_utils::CachePadded;
 /// NOTE: This constant must be a power of two for index() to work.
 const MAX_PENDING_OPS: usize = 32;
 
+/// A pending operation is a combination of the its op-code (T),
+/// and the corresponding result (R, E).
+type PendingOperation<T, R, E> = Cell<(Option<T>, Result<R, E>)>;
+
 /// Contains all state local to a particular thread.
 ///
 /// The primary purpose of this type is to batch operations issued on a thread before
@@ -27,12 +31,12 @@ const MAX_PENDING_OPS: usize = 32;
 pub struct Context<T, R, E>
 where
     T: Sized + Clone,
-    R: Sized + Copy + Default,
-    E: Sized + Copy + Default,
+    R: Sized + Clone + Default,
+    E: Sized + Clone + Default,
 {
     /// Array that will hold all pending operations to be appended to the shared log as
     /// well as the results obtained on executing them against a replica.
-    batch: [CachePadded<Cell<(Option<T>, Result<R, E>)>>; MAX_PENDING_OPS],
+    batch: [CachePadded<PendingOperation<T, R, E>>; MAX_PENDING_OPS],
 
     /// Logical array index at which new operations will be enqueued into the batch.
     /// This variable is updated by the thread that owns this context, and is read by the
@@ -52,19 +56,19 @@ where
 impl<T, R, E> Default for Context<T, R, E>
 where
     T: Sized + Clone,
-    R: Sized + Copy + Default,
-    E: Sized + Copy + Default,
+    R: Sized + Clone + Default,
+    E: Sized + Clone + Default,
 {
     /// Default constructor for the context.
     fn default() -> Context<T, R, E> {
-        let mut batch: [CachePadded<Cell<(Option<T>, Result<R, E>)>>; MAX_PENDING_OPS] =
+        let mut batch: [CachePadded<PendingOperation<T, R, E>>; MAX_PENDING_OPS] =
             unsafe { ::core::mem::MaybeUninit::zeroed().assume_init() };
         for elem in &mut batch[..] {
             *elem = CachePadded::new(Cell::new((None, Err(Default::default()))));
         }
 
         Context {
-            batch: batch,
+            batch,
             tail: CachePadded::new(Cell::new(Default::default())),
             head: CachePadded::new(Cell::new(Default::default())),
             comb: CachePadded::new(Cell::new(Default::default())),
@@ -75,8 +79,8 @@ where
 impl<T, R, E> Context<T, R, E>
 where
     T: Sized + Clone,
-    R: Sized + Copy + Default,
-    E: Sized + Copy + Default,
+    R: Sized + Clone + Default,
+    E: Sized + Clone + Default,
 {
     /// Enqueues an operation onto this context's batch of pending operations.
     ///
@@ -120,7 +124,7 @@ where
         for i in 0..n {
             let e = self.batch[self.index(h + i)].as_ptr();
             unsafe {
-                (*e).1 = responses[i];
+                (*e).1 = responses[i].clone();
             }
         }
 

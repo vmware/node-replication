@@ -20,6 +20,8 @@ mod mkbench;
 mod os_workload;
 mod utils;
 
+use utils::Operation;
+
 use criterion::{criterion_group, criterion_main, Criterion};
 use mkbench::{ReplicaStrategy, ThreadMapping};
 use os_workload::kpi::{ProcessOperation, SystemCall, VSpaceOperation};
@@ -28,7 +30,7 @@ use os_workload::kpi::{ProcessOperation, SystemCall, VSpaceOperation};
 ///
 /// We conveniently use the same format for the parsing of our trace files.
 #[derive(Copy, Clone, Debug, PartialEq)]
-enum Opcode {
+enum OpcodeWr {
     /// An operation on the process.
     Process(ProcessOperation, u64, u64, u64, u64),
     /// An operation on the vspace (of the process).
@@ -37,9 +39,12 @@ enum Opcode {
     Empty,
 }
 
-impl Default for Opcode {
-    fn default() -> Opcode {
-        Opcode::Empty
+#[derive(Copy, Clone, Debug, PartialEq)]
+enum OpcodeRd {}
+
+impl Default for OpcodeWr {
+    fn default() -> OpcodeWr {
+        OpcodeWr::Empty
     }
 }
 
@@ -48,13 +53,21 @@ impl Default for Opcode {
 struct BespinDispatcher;
 
 impl Dispatch for BespinDispatcher {
-    type Operation = Opcode;
+    type ReadOperation = OpcodeRd;
+    type WriteOperation = OpcodeWr;
     type Response = (u64, u64);
     type ResponseError = os_workload::KError;
 
-    fn dispatch(&mut self, op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch(&self, _op: Self::ReadOperation) -> Result<Self::Response, Self::ResponseError> {
+        unreachable!()
+    }
+
+    fn dispatch_mut(
+        &mut self,
+        op: Self::WriteOperation,
+    ) -> Result<Self::Response, Self::ResponseError> {
         match op {
-            Opcode::Process(op, a1, a2, a3, a4) => {
+            OpcodeWr::Process(op, a1, a2, a3, a4) => {
                 return os_workload::syscall_handle(
                     SystemCall::Process as u64,
                     op as u64,
@@ -64,7 +77,7 @@ impl Dispatch for BespinDispatcher {
                     a4,
                 )
             }
-            Opcode::VSpace(op, a1, a2, a3, a4) => {
+            OpcodeWr::VSpace(op, a1, a2, a3, a4) => {
                 return os_workload::syscall_handle(
                     SystemCall::VSpace as u64,
                     op as u64,
@@ -74,7 +87,7 @@ impl Dispatch for BespinDispatcher {
                     a4,
                 )
             }
-            Opcode::Empty => unreachable!(),
+            OpcodeWr::Empty => unreachable!(),
         };
     }
 }
@@ -85,15 +98,20 @@ struct PosixDispatcher;
 
 /// The implementation of the PosixDispatcher.
 impl Dispatch for PosixDispatcher {
-    type Operation = Opcode;
+    type ReadOperation = OpcodeRd;
+    type WriteOperation = OpcodeWr;
     type Response = ();
     type ResponseError = ();
 
-    fn dispatch(&mut self, op: Self::Operation) -> Result<(), ()> {
+    fn dispatch(&self, _op: Self::ReadOperation) -> Result<Self::Response, Self::ResponseError> {
+        unreachable!()
+    }
+
+    fn dispatch_mut(&mut self, op: Self::WriteOperation) -> Result<(), ()> {
         use nix::sys::mman::{MapFlags, ProtFlags};
 
         match op {
-            Opcode::Process(pop, _a, _b, _c, _d) => match pop {
+            OpcodeWr::Process(pop, _a, _b, _c, _d) => match pop {
                 ProcessOperation::AllocateVector => Err(()),
                 ProcessOperation::Exit => Err(()),
                 ProcessOperation::InstallVCpuArea => Err(()),
@@ -103,7 +121,7 @@ impl Dispatch for PosixDispatcher {
                     unreachable!("Got a ProcessOperation::Unknown in dispatch")
                 }
             },
-            Opcode::VSpace(vop, a, b, _c, _d) => {
+            OpcodeWr::VSpace(vop, a, b, _c, _d) => {
                 match vop {
                     VSpaceOperation::Identify => Err(()),
                     VSpaceOperation::Map => {
@@ -158,7 +176,7 @@ impl Dispatch for PosixDispatcher {
                     }
                 }
             }
-            Opcode::Empty => unreachable!("Got an Opcode::Empty in dispatch"),
+            OpcodeWr::Empty => unreachable!("Got an Opcode::Empty in dispatch"),
         }
     }
 }
@@ -168,10 +186,10 @@ impl Dispatch for PosixDispatcher {
 ///
 /// `file` is a path to the trace, relative to the base-dir
 /// of the repository.
-fn parse_syscall_trace(file: &str) -> io::Result<Vec<Opcode>> {
+fn parse_syscall_trace(file: &str) -> io::Result<Vec<Operation<OpcodeRd, OpcodeWr>>> {
     let file = File::open(file)?;
     let reader = io::BufReader::new(file);
-    let mut ops: Vec<Opcode> = Vec::with_capacity(3000);
+    let mut ops: Vec<Operation<OpcodeRd, OpcodeWr>> = Vec::with_capacity(3000);
 
     // Parses lines that look like this:
     // ```no-run
@@ -192,8 +210,20 @@ fn parse_syscall_trace(file: &str) -> io::Result<Vec<Opcode>> {
         let a4 = words[6].parse::<u64>().unwrap_or(0);
 
         let opcode = match SystemCall::from(sc) {
-            SystemCall::Process => Opcode::Process(ProcessOperation::from(op), a1, a2, a3, a4),
-            SystemCall::VSpace => Opcode::VSpace(VSpaceOperation::from(op), a1, a2, a3, a4),
+            SystemCall::Process => Operation::WriteOperation(OpcodeWr::Process(
+                ProcessOperation::from(op),
+                a1,
+                a2,
+                a3,
+                a4,
+            )),
+            SystemCall::VSpace => Operation::WriteOperation(OpcodeWr::VSpace(
+                VSpaceOperation::from(op),
+                a1,
+                a2,
+                a3,
+                a4,
+            )),
             _ => unreachable!(),
         };
 
@@ -239,7 +269,15 @@ fn vspace_scale_out(c: &mut Criterion) {
             |_cid, rid, _log, replica, ops, _batch_size| {
                 let mut o = vec![];
                 for op in ops {
-                    replica.execute(*op, rid);
+                    match op {
+                        Operation::ReadOperation(o) => {
+                            replica.execute_ro(*o, rid);
+                        }
+                        Operation::WriteOperation(o) => {
+                            replica.execute(*o, rid);
+                        }
+                    }
+
                     let mut i = 1;
                     while replica.get_responses(rid, &mut o) == 0 {
                         if i % mkbench::WARN_THRESHOLD == 0 {

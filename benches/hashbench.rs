@@ -192,7 +192,7 @@ fn main() {
     // then, benchmark sync::Arc<ReplicaAndToken>
     if versions.contains(&"nr") {
         const LOG_SIZE_BYTES: usize = 1024 * 1024 * 2;
-        let log = sync::Arc::new(Log::<<NrHashMap as Dispatch>::Operation>::new(
+        let log = sync::Arc::new(Log::<<NrHashMap as Dispatch>::WriteOperation>::new(
             LOG_SIZE_BYTES,
         ));
         let replica = sync::Arc::new(Replica::<NrHashMap>::new(&log));
@@ -336,9 +336,13 @@ impl Backend for EvHandle {
 
 /// Operations we can perform on the stack.
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
-pub enum Op {
+pub enum OpWr {
     /// Add an item to the hash-map.
     Put(u64, u64),
+}
+
+#[derive(Debug, Eq, PartialEq, Clone, Copy)]
+pub enum OpRd {
     /// Get item from the hash-map.
     Get(u64),
 }
@@ -353,7 +357,7 @@ impl NrHashMap {
         self.storage.insert(key, val);
     }
 
-    pub fn get(&mut self, key: u64) -> u64 {
+    pub fn get(&self, key: u64) -> u64 {
         *self.storage.get(&key).unwrap_or(&0)
     }
 }
@@ -368,18 +372,27 @@ impl Default for NrHashMap {
 }
 
 impl Dispatch for NrHashMap {
-    type Operation = Op;
+    type ReadOperation = OpRd;
+    type WriteOperation = OpWr;
     type Response = u64;
     type ResponseError = ();
 
-    /// Implements how we execute operation from the log against our local stack
-    fn dispatch(&mut self, op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch(&self, op: Self::ReadOperation) -> Result<Self::Response, Self::ResponseError> {
         match op {
-            Op::Put(key, val) => {
+            OpRd::Get(key) => return Ok(self.get(key)),
+        }
+    }
+
+    /// Implements how we execute operation from the log against our local stack
+    fn dispatch_mut(
+        &mut self,
+        op: Self::WriteOperation,
+    ) -> Result<Self::Response, Self::ResponseError> {
+        match op {
+            OpWr::Put(key, val) => {
                 self.put(key, val);
                 Ok(0)
             }
-            Op::Get(key) => return Ok(self.get(key)),
         }
     }
 }
@@ -403,7 +416,7 @@ impl<'a> ReplicaAndToken<'a> {
 
 impl<'a> Backend for ReplicaAndToken<'a> {
     fn b_get(&mut self, key: u64) -> u64 {
-        self.replica.execute(Op::Get(key), self.token);
+        self.replica.execute_ro(OpRd::Get(key), self.token);
         let mut i = 1;
         while self.replica.get_responses(self.token, &mut self.responses) == 0 {
             if i % (1024 * 1024 * 2) == 0 {
@@ -423,7 +436,7 @@ impl<'a> Backend for ReplicaAndToken<'a> {
     }
 
     fn b_put(&mut self, key: u64, value: u64) {
-        self.replica.execute(Op::Put(key, value), self.token);
+        self.replica.execute(OpWr::Put(key, value), self.token);
         let mut i = 1;
         while self.replica.get_responses(self.token, &mut self.responses) == 0 {
             if i % (1024 * 1024 * 2) == 0 {
