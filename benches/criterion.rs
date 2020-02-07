@@ -174,7 +174,7 @@ fn hashmap_scale_out(c: &mut Criterion) {
     // How many operations per iteration
     const NOP: usize = 515_000;
     // Biggest key in the hash-map
-    const KEY_SPACE: usize = 10_000;
+    const KEY_SPACE: usize = 50_000_000;
     // Key distribution
     const UNIFORM: &'static str = "uniform";
     //const SKEWED: &'static str = "skewed";
