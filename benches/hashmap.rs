@@ -52,7 +52,7 @@ impl Default for NrHashMap {
         let capacity = 50_000_000;
         let mut storage = HashMap::with_capacity(capacity);
         for i in 0..capacity {
-            storage.insert(i, i + 1);
+            storage.insert(i as u64, (i + 1) as u64);
         }
         NrHashMap { storage }
     }
