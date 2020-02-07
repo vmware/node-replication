@@ -183,36 +183,36 @@ fn hashmap_scale_out(c: &mut Criterion) {
 
     let ops = crate::hashmap::generate_operations(NOP, WRITE_RATIO, KEY_SPACE, UNIFORM);
     mkbench::ScaleBenchBuilder::<hashmap::NrHashMap>::new(ops)
-    .machine_defaults()
-    .configure(
-        c,
-        "hashmap-scaleout",
-        |cid, rid, _log, replica, ops, _batch_size| {
-            let mut o = vec![];
-            for op in ops {
-                match op {
-                    Operation::ReadOperation(op) => {
-                        replica.execute_ro(*op, rid);
+        .machine_defaults()
+        .configure(
+            c,
+            "hashmap-scaleout",
+            |cid, rid, _log, replica, ops, _batch_size| {
+                let mut o = vec![];
+                for op in ops {
+                    match op {
+                        Operation::ReadOperation(op) => {
+                            replica.execute_ro(*op, rid);
+                        }
+                        Operation::WriteOperation(op) => {
+                            replica.execute(*op, rid);
+                        }
                     }
-                    Operation::WriteOperation(op) => {
-                        replica.execute(*op, rid);
-                    }
-                }
 
-                let mut i = 1;
-                while replica.get_responses(rid, &mut o) == 0 {
-                    if i % mkbench::WARN_THRESHOLD == 0 {
-                        log::warn!(
-                            "{:?} Waiting too long for get_responses",
-                            std::thread::current().id()
-                        );
+                    let mut i = 1;
+                    while replica.get_responses(rid, &mut o) == 0 {
+                        if i % mkbench::WARN_THRESHOLD == 0 {
+                            log::warn!(
+                                "{:?} Waiting too long for get_responses",
+                                std::thread::current().id()
+                            );
+                        }
+                        i += 1;
                     }
-                    i += 1;
                 }
-            }
-            o.clear();
-        },
-    );
+                o.clear();
+            },
+        );
 }
 
 /// Compare scale-out behaviour of log.
