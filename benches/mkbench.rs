@@ -265,10 +265,10 @@ where
         );
         debug_assert!(min_thread_duration > 0.0, "Threads must have some runtime");
 
-        let fairness = (max_thread_duration - min_thread_duration) / min_thread_duration;
-        if fairness > 0.9 {
-            panic!("Fairness threshold above 0.9: {}, some threads were starved badly (max = {}, min = {})?", fairness, max_thread_duration, min_thread_duration);
-        }
+        //let fairness = (max_thread_duration - min_thread_duration) / min_thread_duration;
+        //if fairness > 0.9 {
+        //    panic!("Fairness threshold above 0.9: {}, some threads were starved badly (max = {}, min = {})?", fairness, max_thread_duration, min_thread_duration);
+        //}
 
         //let mid = durations.len() / 2;
         //let median = durations[mid];
