@@ -264,12 +264,18 @@ where
             "Calculating fairness only works if min < max."
         );
         debug_assert!(min_thread_duration > 0.0, "Threads must have some runtime");
-        let fairness = max_thread_duration / min_thread_duration;
-        if fairness < 0.9 {
-            panic!("Fairness threshold below 0.9: {}, figure out why some threads were starved (max = {}, min = {})?", fairness, max_thread_duration, min_thread_duration);
+
+        let fairness = (max_thread_duration - min_thread_duration) / min_thread_duration;
+        if fairness > 0.9 {
+            panic!("Fairness threshold above 0.9: {}, some threads were starved badly (max = {}, min = {})?", fairness, max_thread_duration, min_thread_duration);
         }
 
-        durations[0]
+        //let mid = durations.len() / 2;
+        //let median = durations[mid];
+        //median
+
+        let average = durations.iter().sum::<Duration>() / durations.len() as u32;
+        average
     }
 
     fn alloc_replicas(&self, replicas: &mut Vec<Arc<Replica<T>>>) {
@@ -294,8 +300,8 @@ where
         let do_sync = self.sync;
 
         debug!(
-            "Execute benchmark with the following replica: [core_id] mapping: {:#?}",
-            self.rm
+            "Execute benchmark {} with the following replica: [core_id] mapping: {:#?}",
+            name, self.rm
         );
         let mut tid = 0;
         for (rid, cores) in self.rm.clone().into_iter() {
