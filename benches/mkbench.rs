@@ -13,14 +13,19 @@
 use std::cell::RefMut;
 use std::collections::HashMap;
 use std::fmt;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::Path;
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc, Barrier};
+use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc, Barrier, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use criterion::{black_box, BenchmarkId, Criterion, Throughput};
+use csv::WriterBuilder;
 use log::*;
 use node_replication::{log::Log, replica::Replica, Dispatch};
+use serde::Serialize;
 
 use crate::utils;
 use crate::utils::topology::*;
@@ -107,7 +112,7 @@ pub fn baseline_comparison<T: Dispatch + Default + Sync>(
 }
 
 /// How replicas are mapped to cores/threads.
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Serialize, Copy, Clone, Eq, PartialEq)]
 pub enum ReplicaStrategy {
     /// One replica per system.
     One,
@@ -119,6 +124,18 @@ pub enum ReplicaStrategy {
     L3,
     /// One replica per socket.
     Socket,
+}
+
+impl fmt::Display for ReplicaStrategy {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            ReplicaStrategy::One => write!(f, "System"),
+            ReplicaStrategy::L1 => write!(f, "L1"),
+            ReplicaStrategy::L2 => write!(f, "L2"),
+            ReplicaStrategy::L3 => write!(f, "L3"),
+            ReplicaStrategy::Socket => write!(f, "Socket"),
+        }
+    }
 }
 
 impl fmt::Debug for ReplicaStrategy {
@@ -143,14 +160,25 @@ where
     <T as node_replication::Dispatch>::WriteOperation: 'static,
     T: std::marker::Sync,
 {
+    /// Name of the benchmark
+    name: String,
+    /// ReplicaStrategy used by the benchmark
+    rs: ReplicaStrategy,
+    /// ThreadMapping used by the benchmark
+    tm: ThreadMapping,
+    /// Total amount of threads used by the benchmark
+    ts: usize,
     /// Replica <-> Thread/Cpu mapping as used by the benchmark.
     rm: HashMap<usize, Vec<Cpu>>,
     /// An Arc reference to operations executed on the log.
     operations: Vec<Operation<<T as Dispatch>::ReadOperation, <T as Dispatch>::WriteOperation>>,
     /// An Arc reference to the log.
     log: Arc<Log<'static, <T as Dispatch>::WriteOperation>>,
-    /// Results of the benchmark, (replica idx, ops/s, runtime in microseconds) per thread.
-    results: Vec<(u64, u64, i64)>,
+    /// Results of the benchmark we map the #iteration to a list of per-thread runtimes.
+    /// It's a hash-map to ensure it acts like a cache i.e., we ensure to only save the latest
+    /// iteration numbers (so we avoid storing the warm-up results).
+    /// It has to be a Mutex because we can only access a RO version of ScaleBenchmark at execution time.
+    results: Mutex<HashMap<u64, Vec<(Core, Duration)>>>,
     /// Batch-size (passed as a parameter to benchmark funtion `f`)
     batch_size: usize,
     /// If we should wait at the end and periodically process the log
@@ -162,7 +190,7 @@ where
     /// A series of channels to communicate iteration count to every worker.
     cmd_channels: Vec<Sender<u64>>,
     /// A result channel
-    result_channel: (Sender<Duration>, Receiver<Duration>),
+    result_channel: (Sender<(Core, Duration)>, Receiver<(Core, Duration)>),
     /// Thread handles
     handles: Vec<JoinHandle<()>>,
 }
@@ -179,6 +207,7 @@ where
 {
     /// Create a new ScaleBenchmark.
     fn new(
+        name: String,
         topology: &MachineTopology,
         rs: ReplicaStrategy,
         tm: ThreadMapping,
@@ -190,13 +219,17 @@ where
         f: BenchFn<T>,
     ) -> ScaleBenchmark<T> {
         ScaleBenchmark {
+            name,
+            rs,
+            tm,
+            ts,
             rm: ScaleBenchmark::<T>::replica_core_allocation(topology, rs, tm, ts),
-            operations: operations,
+            operations,
             log,
             results: Default::default(),
             batch_size,
             sync,
-            f: f,
+            f,
             cmd_channels: Default::default(),
             result_channel: channel(),
             handles: Default::default(),
@@ -215,10 +248,61 @@ where
     }
 
     /// Terminate the worker threads by sending 0 to the iter channel:
-    fn terminate(&self) {
+    fn terminate(&self) -> std::io::Result<()> {
         for tx in self.cmd_channels.iter() {
             tx.send(0).expect("Can't send termination.");
         }
+
+        // Log the per-thread runtimes to the CSV file
+        let file_name = "criterion_per_thread_durations.csv";
+        let mut csv_file = OpenOptions::new().append(true).open(file_name)?;
+        let write_headers = !Path::new(file_name).exists(); // write headers only to new file
+        let results = self.results.lock().expect("Can't lock results");
+
+        // The csv library doesn't write a new-line if we
+        // append to an existing file, also we only write new line if there
+        // are actual results (otherwise we end up with lot's of newline
+        // at the end of the file if criterion skips benchmarks)
+        if !write_headers && !results.is_empty() {
+            csv_file.write_all(b"\n")?;
+        }
+
+        let mut wtr = WriterBuilder::new()
+            .has_headers(write_headers)
+            .from_writer(csv_file);
+
+        for (iter, core_durations) in results.iter() {
+            for (tid, (cid, duration)) in core_durations.iter().enumerate() {
+                #[derive(Serialize)]
+                struct Record {
+                    name: String,
+                    rs: ReplicaStrategy,
+                    tm: ThreadMapping,
+                    batch_size: usize,
+                    threads: usize,
+                    iter: u64,
+                    thread_id: usize,
+                    core_id: u64,
+                    duration: f64,
+                };
+
+                let record = Record {
+                    name: self.name.clone(),
+                    rs: self.rs,
+                    tm: self.tm,
+                    batch_size: self.batch_size,
+                    threads: self.ts,
+                    iter: *iter,
+                    thread_id: tid,
+                    core_id: *cid,
+                    duration: duration.as_secs_f64(),
+                };
+                wtr.serialize(record);
+            }
+        }
+        wtr.flush()?;
+
+        Ok(())
     }
 
     /// Execute sends the iteration count to all worker threads
@@ -237,44 +321,32 @@ where
         }
 
         // Wait for all threads to finish and gather runtimes
-        let mut durations: Vec<Duration> = Vec::with_capacity(self.threads());
+        let mut durations: Vec<(Core, Duration)> = Vec::with_capacity(self.threads());
         for i in 0..self.threads() {
-            let duration: Duration = self
+            let core_duration: (Core, Duration) = self
                 .result_channel
                 .1
                 .recv()
                 .expect("Can't receive a Duration?");
-            durations.push(duration);
+            durations.push(core_duration);
         }
 
         // Sort floats to get min/max, can't just do sort() because floats are weird:
-        durations.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        durations.sort_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let min_thread_duration: f64 = durations
             .first()
             .unwrap_or(&Default::default())
+            .1
             .as_secs_f64();
         let max_thread_duration: f64 = durations
             .last()
             .unwrap_or(&Default::default())
+            .1
             .as_secs_f64();
 
-        // Panic in case we are starving threads:
-        debug_assert!(
-            min_thread_duration < max_thread_duration,
-            "Calculating fairness only works if min < max."
-        );
-        debug_assert!(min_thread_duration > 0.0, "Threads must have some runtime");
-
-        //let fairness = (max_thread_duration - min_thread_duration) / min_thread_duration;
-        //if fairness > 0.9 {
-        //    panic!("Fairness threshold above 0.9: {}, some threads were starved badly (max = {}, min = {})?", fairness, max_thread_duration, min_thread_duration);
-        //}
-
-        //let mid = durations.len() / 2;
-        //let median = durations[mid];
-        //median
-
-        let average = durations.iter().sum::<Duration>() / durations.len() as u32;
+        let mut results = self.results.lock().unwrap();
+        results.insert(iters, durations.clone());
+        let average = durations.iter().map(|(_, d)| d).sum::<Duration>() / durations.len() as u32;
         average
     }
 
@@ -289,7 +361,7 @@ where
         }
     }
 
-    fn startup(&mut self, name: &str) {
+    fn startup(&mut self) {
         let thread_num = self.threads();
         // Need a barrier to synchronize starting of threads
         let barrier = Arc::new(Barrier::new(thread_num));
@@ -301,7 +373,7 @@ where
 
         debug!(
             "Execute benchmark {} with the following replica: [core_id] mapping: {:#?}",
-            name, self.rm
+            self.name, self.rm
         );
         let mut tid = 0;
         for (rid, cores) in self.rm.clone().into_iter() {
@@ -370,7 +442,7 @@ where
                             elapsed
                         );
 
-                        result_channel.send(elapsed);
+                        result_channel.send((core_id, elapsed));
                         if !do_sync {
                             b.wait();
                             continue;
@@ -639,6 +711,7 @@ where
                         let log =
                             Arc::new(Log::<<T as Dispatch>::WriteOperation>::new(self.log_size));
                         let mut runner = ScaleBenchmark::<T>::new(
+                            String::from(name),
                             &topology,
                             *rs,
                             *tm,
@@ -649,7 +722,7 @@ where
                             log.clone(),
                             f,
                         );
-                        runner.startup(name);
+                        runner.startup();
 
                         let name = format!("{:?} {:?} BS={}", *rs, *tm, *b);
                         group.throughput(Throughput::Elements((self.operations.len() * ts) as u64));
