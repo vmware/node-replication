@@ -255,7 +255,10 @@ where
 
         // Log the per-thread runtimes to the CSV file
         let file_name = "criterion_per_thread_durations.csv";
-        let mut csv_file = OpenOptions::new().append(true).open(file_name)?;
+        let mut csv_file = OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(file_name)?;
         let write_headers = !Path::new(file_name).exists(); // write headers only to new file
         let results = self.results.lock().expect("Can't lock results");
 
@@ -734,7 +737,9 @@ where
                             },
                         );
 
-                        runner.terminate();
+                        runner
+                            .terminate()
+                            .expect("Couldn't terminate the experiment");
                     }
                 }
             }
