@@ -72,8 +72,8 @@ deploy:
     - pip3 install -r requirements.txt
     - python3 history_plots.py
     # Plot per-thread runtimes
-    - python3 thread_times_plot.py gh-pages/criterion/$GIT_REV_CURRENT/criterion_per_thread_durations.csv
-    - mv citerion_thread_times.png gh-pages/criterion/$GIT_REV_CURRENT
+    - python3 thread_times_plot.py criterion/$GIT_REV_CURRENT/criterion_per_thread_durations.csv
+    - mv criterion_thread_times.png criterion/$GIT_REV_CURRENT
     # Push to gh-pages
     - git add .
     - git commit -a -m "Added benchmark results for $GIT_REV_CURRENT."
