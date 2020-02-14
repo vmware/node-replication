@@ -160,6 +160,17 @@ impl MachineTopology {
         self.data.len()
     }
 
+    pub fn sockets(&self) -> Vec<Socket> {
+        let mut sockets: Vec<Cpu> = self.data.iter().map(|t| t.socket).collect();
+        sockets.sort();
+        sockets.dedup();
+        sockets
+    }
+
+    pub fn cpus_on_socket(&self, socket: Socket) -> Vec<&CpuInfo> {
+        self.data.iter().filter(|t| t.socket == socket).collect()
+    }
+
     pub fn allocate(&self, strategy: ThreadMapping, how_many: usize, use_ht: bool) -> Vec<CpuInfo> {
         let v = Vec::with_capacity(how_many);
         let mut cpus = self.data.clone();

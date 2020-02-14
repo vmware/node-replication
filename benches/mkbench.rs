@@ -648,6 +648,41 @@ where
             }
         }
 
+        // Go in increments of one around "interesting" socket boundaries
+        let sockets = topology.sockets();
+        let cores_on_s0 = topology.cpus_on_socket(sockets[0]);
+        let cores_per_socket = cores_on_s0.len();
+        for i in 0..sockets.len() {
+            let multiplier = i + 1;
+            fn try_add(to_add: usize, max_threads: usize, cur_threads: &mut Vec<usize>) {
+                if !cur_threads.contains(&to_add) && to_add <= max_threads {
+                    cur_threads.push(to_add);
+                } else {
+                    info!("didn't add {}", to_add);
+                }
+            }
+
+            info!("checking for {}", (multiplier * cores_per_socket) - 1);
+            try_add(
+                (multiplier * cores_per_socket) - 1,
+                topology.cores(),
+                &mut self.threads,
+            );
+
+            try_add(
+                multiplier * cores_per_socket,
+                topology.cores(),
+                &mut self.threads,
+            );
+
+            try_add(
+                (multiplier * cores_per_socket) + 1,
+                topology.cores(),
+                &mut self.threads,
+            );
+        }
+        self.threads.sort();
+
         self
     }
 
