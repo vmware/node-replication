@@ -103,7 +103,7 @@ where
                 // writer-lock again after acquiring read-lock, we can read `wlock` without forcing
                 // the atomic load.
                 let write_lock_ptr = &*(&self.wlock
-                    as *const crossbeam_utils::CachePadded<std::sync::atomic::AtomicBool>
+                    as *const crossbeam_utils::CachePadded<core::sync::atomic::AtomicBool>
                     as *const bool);
                 if *write_lock_ptr {
                     // Spin when there is an active writer.

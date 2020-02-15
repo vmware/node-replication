@@ -1,6 +1,7 @@
 // Copyright © 2019 VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+use alloc::vec::Vec;
 use core::cell::Cell;
 use core::default::Default;
 

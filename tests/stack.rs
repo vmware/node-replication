@@ -186,7 +186,7 @@ fn sequential_test() {
             "Peek operation error detected"
         );
     };
-    r.verify(v);
+    r.verify(1, v);
 }
 
 /// A stack to verify that the log works correctly with multiple threads.
@@ -515,7 +515,7 @@ fn replicas_are_equal() {
         d0.extend_from_slice(&data.storage);
         p0.extend_from_slice(&data.popped);
     };
-    replicas[0].verify(v);
+    replicas[0].verify(1, v);
 
     let mut d1 = vec![];
     let mut p1 = vec![];
@@ -523,7 +523,7 @@ fn replicas_are_equal() {
         d1.extend_from_slice(&data.storage);
         p1.extend_from_slice(&data.popped);
     };
-    replicas[1].verify(v);
+    replicas[1].verify(1, v);
 
     assert_eq!(d0, d1, "Data-structures don't match.");
     assert_eq!(p0, p1, "Removed elements in each replica dont match.");
