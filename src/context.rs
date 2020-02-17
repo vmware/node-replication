@@ -220,6 +220,7 @@ where
 #[cfg(test)]
 mod test {
     use super::*;
+    use std::vec;
 
     // Tests whether we can successfully default construct a context.
     #[test]

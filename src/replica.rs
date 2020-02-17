@@ -376,6 +376,7 @@ mod test {
     extern crate std;
 
     use super::*;
+    use std::vec;
 
     // Really dumb data structure to test against the Replica and shared log.
     #[derive(Default)]

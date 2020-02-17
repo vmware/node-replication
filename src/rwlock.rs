@@ -205,6 +205,7 @@ mod tests {
     use super::RwLock;
     use std::sync::Arc;
     use std::thread;
+    use std::vec::Vec;
 
     /// This test checks if write-lock can return an mutable reference for a data-structure.
     #[test]
