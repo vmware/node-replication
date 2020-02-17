@@ -382,8 +382,11 @@ where
         for (rid, cores) in self.rm.clone().into_iter() {
             let num = cores.len();
             for core_id in cores {
-                let b = barrier.clone();
+                // Pin thread to force the allocations below (`operations` etc.)
+                // with the correct NUMA affinity
+                utils::pin_thread(core_id);
 
+                let b = barrier.clone();
                 let log: Arc<_> = self.log.clone();
                 let replica = replicas[rid].clone();
                 let operations = self.operations.clone();
@@ -623,6 +626,7 @@ where
     /// Configures the builder automatically based on the underlying machine properties.
     pub fn machine_defaults(&mut self) -> &mut Self {
         let topology = MachineTopology::new();
+        let max_cores = topology.cores();
 
         self.thread_mapping(ThreadMapping::Sequential);
         self.replica_strategy(ReplicaStrategy::One);
@@ -631,15 +635,15 @@ where
 
         // On larger machines thread increments are bigger than on
         // smaller machines:
-        let thread_incremements = if topology.cores() > 24 {
+        let thread_incremements = if max_cores > 24 {
             8
-        } else if topology.cores() > 16 {
+        } else if max_cores > 16 {
             4
         } else {
             2
         };
 
-        for t in (0..(topology.cores() + 1)).step_by(thread_incremements) {
+        for t in (0..(max_cores + 1)).step_by(thread_incremements) {
             if t == 0 {
                 // Can't run on 0 threads
                 self.threads(t + 1);
@@ -654,35 +658,21 @@ where
         let cores_per_socket = cores_on_s0.len();
         for i in 0..sockets.len() {
             let multiplier = i + 1;
-            fn try_add(to_add: usize, max_threads: usize, cur_threads: &mut Vec<usize>) {
-                if !cur_threads.contains(&to_add) && to_add <= max_threads {
+            fn try_add(to_add: usize, max_cores: usize, cur_threads: &mut Vec<usize>) {
+                if !cur_threads.contains(&to_add) && to_add <= max_cores {
                     cur_threads.push(to_add);
                 } else {
-                    info!("didn't add {}", to_add);
+                    trace!("Didn't add {} threads", to_add);
                 }
             }
 
-            info!("checking for {}", (multiplier * cores_per_socket) - 1);
-            try_add(
-                (multiplier * cores_per_socket) - 1,
-                topology.cores(),
-                &mut self.threads,
-            );
-
-            try_add(
-                multiplier * cores_per_socket,
-                topology.cores(),
-                &mut self.threads,
-            );
-
-            try_add(
-                (multiplier * cores_per_socket) + 1,
-                topology.cores(),
-                &mut self.threads,
-            );
+            let core_socket_boundary = multiplier * cores_per_socket;
+            try_add(core_socket_boundary - 1, max_cores, &mut self.threads);
+            try_add(core_socket_boundary, max_cores, &mut self.threads);
+            try_add(core_socket_boundary + 1, max_cores, &mut self.threads);
         }
-        self.threads.sort();
 
+        self.threads.sort();
         self
     }
 
