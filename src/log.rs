@@ -38,20 +38,17 @@ const WARN_THRESHOLD: usize = 1 << 28;
 ///
 /// `T` is the type on the operation - typically an enum class containing opcodes as well as
 /// arguments. It is required that this type be sized, cloneable, and default constructable.
-///
-/// `replica` identifies the replica that issued the above operation.
-///
-/// `alivef` indicates whether this entry represents a valid operation when on the log.
 #[derive(Clone, Copy, Default)]
 #[repr(align(64))]
 struct Entry<T>
 where
     T: Sized + Clone,
 {
+    /// The operation that this entry represents.
     operation: Option<T>,
-
+    /// Identifies the replica that issued the above operation.
     replica: usize,
-
+    /// Indicates whether this entry represents a valid operation when on the log.
     alivef: bool,
 }
 

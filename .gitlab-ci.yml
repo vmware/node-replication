@@ -62,6 +62,8 @@ deploy:
     # Copy rwlockbench results
     - mkdir -p gh-pages/rwlockbench/$GIT_REV_CURRENT
     - cp rwlockbench_results.log rwlock-write-throughput.png rwlock-read-throughput.png gh-pages/rwlockbench/$GIT_REV_CURRENT
+    # Move per-thread runtimes
+    - mv criterion_per_thread_durations.csv gh-pages/criterion/$GIT_REV_CURRENT
     # Setup gh-pages layout
     - cd gh-pages
     - cp hashbench/index.markdown hashbench/$GIT_REV_CURRENT
@@ -69,6 +71,9 @@ deploy:
     # Make CI plots
     - pip3 install -r requirements.txt
     - python3 history_plots.py
+    # Plot per-thread runtimes
+    - python3 thread_times_plot.py criterion/$GIT_REV_CURRENT/criterion_per_thread_durations.csv
+    - mv criterion_thread_times.png criterion/$GIT_REV_CURRENT
     # Push to gh-pages
     - git add .
     - git commit -a -m "Added benchmark results for $GIT_REV_CURRENT."

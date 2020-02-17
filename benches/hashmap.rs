@@ -47,11 +47,14 @@ impl NrHashMap {
 }
 
 impl Default for NrHashMap {
-    /// Return a dummy hash-map with initial capacity of 50k elements.
+    /// Return a dummy hash-map with initial capacity of 50M elements.
     fn default() -> NrHashMap {
-        NrHashMap {
-            storage: HashMap::with_capacity(5_000_000),
+        let capacity = 5_000_000;
+        let mut storage = HashMap::with_capacity(capacity);
+        for i in 0..capacity {
+            storage.insert(i as u64, (i + 1) as u64);
         }
+        NrHashMap { storage }
     }
 }
 

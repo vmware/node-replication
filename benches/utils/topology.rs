@@ -3,8 +3,10 @@
 
 //! Allows to query information about the CPU topology.
 
-use hwloc::*;
 use std::fmt;
+
+use hwloc::*;
+use serde::Serialize;
 
 pub type Node = u64;
 pub type Socket = u64;
@@ -15,7 +17,7 @@ pub type L2 = u64;
 pub type L3 = u64;
 
 /// The strategy how threads are allocated in the system.
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Serialize, Copy, Clone, Eq, PartialEq)]
 pub enum ThreadMapping {
     /// Don't do any pinning.
     #[allow(unused)]
@@ -25,6 +27,16 @@ pub enum ThreadMapping {
     /// Spread thread allocation out across sockets (as much as possible).
     #[allow(unused)]
     Interleave,
+}
+
+impl fmt::Display for ThreadMapping {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            ThreadMapping::None => write!(f, "None"),
+            ThreadMapping::Sequential => write!(f, "Sequential"),
+            ThreadMapping::Interleave => write!(f, "Interleave"),
+        }
+    }
 }
 
 impl fmt::Debug for ThreadMapping {
@@ -146,6 +158,17 @@ impl MachineTopology {
     /// Return how many processing units that the system has
     pub fn cores(&self) -> usize {
         self.data.len()
+    }
+
+    pub fn sockets(&self) -> Vec<Socket> {
+        let mut sockets: Vec<Cpu> = self.data.iter().map(|t| t.socket).collect();
+        sockets.sort();
+        sockets.dedup();
+        sockets
+    }
+
+    pub fn cpus_on_socket(&self, socket: Socket) -> Vec<&CpuInfo> {
+        self.data.iter().filter(|t| t.socket == socket).collect()
     }
 
     pub fn allocate(&self, strategy: ThreadMapping, how_many: usize, use_ht: bool) -> Vec<CpuInfo> {
