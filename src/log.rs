@@ -222,7 +222,7 @@ where
     /// with this replica-identifier. Also accepts a closure `s`; when waiting for
     /// GC, this closure is passed into exec() to ensure that this replica does'nt
     /// cause a deadlock.
-    pub fn append<F: FnMut(T, usize)>(&self, ops: &[T], idx: usize, tid: usize, mut s: F) {
+    pub fn append<F: FnMut(T, usize)>(&self, ops: &[T], idx: usize, mut s: F) {
         let nops = ops.len();
         let mut iteration = 1;
         let mut waitgc = 1;
@@ -232,8 +232,7 @@ where
         loop {
             if iteration % WARN_THRESHOLD == 0 {
                 warn!(
-                    "{:?} append(ops.len()={}, {}) takes too many iterations ({}) to complete...",
-                    tid,
+                    "append(ops.len()={}, {}) takes too many iterations ({}) to complete...",
                     ops.len(),
                     idx,
                     iteration,
@@ -251,15 +250,14 @@ where
             if tail > head + self.size - GC_FROM_HEAD {
                 if waitgc % WARN_THRESHOLD == 0 {
                     warn!(
-                        "{:?} append(ops.len()={}, {}) takes too many iterations ({}) waiting for gc...",
-                        tid,
+                        "append(ops.len()={}, {}) takes too many iterations ({}) waiting for gc...",
                         ops.len(),
                         idx,
                         waitgc,
                     );
                 }
                 waitgc += 1;
-                self.exec(idx, tid, &mut s);
+                self.exec(idx, &mut s);
                 continue;
             }
 
@@ -302,7 +300,7 @@ where
 
             // If needed, advance the head of the log forward to make room on the log.
             if advance {
-                self.advance_head(idx, tid, &mut s);
+                self.advance_head(idx, &mut s);
             }
 
             return;
@@ -315,7 +313,7 @@ where
     ///
     /// The passed in closure is expected to take in two arguments: The operation
     /// from the shared log to be executed and the replica that issued it.
-    pub fn exec<F: FnMut(T, usize)>(&self, idx: usize, tid: usize, d: &mut F) {
+    pub fn exec<F: FnMut(T, usize)>(&self, idx: usize, d: &mut F) {
         let tail = self.tail.load(Ordering::Relaxed);
         let head = self.head.load(Ordering::Relaxed);
 
@@ -337,8 +335,7 @@ where
             while unsafe { (*e).alivef != self.lmasks[idx - 1].get() } {
                 if iteration % WARN_THRESHOLD == 0 {
                     warn!(
-                        "{:?} alivef not being set for self.index(i={}) = {} (self.lmasks[{}] is {})...",
-                        tid,
+                        "alivef not being set for self.index(i={}) = {} (self.lmasks[{}] is {})...",
                         i,
                         self.index(i),
                         idx - 1,
@@ -372,7 +369,7 @@ where
     /// Advances the head of the log forward. If a replica has stopped making progress,
     /// then this method will never return. Accepts a closure that is passed into exec()
     /// to ensure that this replica does not deadlock GC.
-    fn advance_head<F: FnMut(T, usize)>(&self, rid: usize, tid: usize, mut s: &mut F) {
+    fn advance_head<F: FnMut(T, usize)>(&self, rid: usize, mut s: &mut F) {
         // Keep looping until we can advance the head and create some free space
         // on the log. If one of the replicas has stopped making progress, then
         // this method might never return.
@@ -397,13 +394,10 @@ where
             // any new entries on the log to prevent deadlock.
             if min_local_tail == global_head {
                 if iteration % WARN_THRESHOLD == 0 {
-                    warn!(
-                        "{:?} Spending a long time in `advance_head`, are we starving?",
-                        tid
-                    );
+                    warn!("Spending a long time in `advance_head`, are we starving?");
                 }
                 iteration += 1;
-                self.exec(rid, tid, &mut s);
+                self.exec(rid, &mut s);
                 continue;
             }
 
@@ -415,7 +409,7 @@ where
             if f < min_local_tail + self.size - GC_FROM_HEAD {
                 return;
             } else {
-                self.exec(rid, tid, &mut s);
+                self.exec(rid, &mut s);
             }
         }
     }
@@ -595,7 +589,7 @@ mod tests {
     fn test_log_append() {
         let l = Log::<Operation>::default();
         let o = [Operation::Read];
-        l.append(&o, 1, 1, |_o: Operation, _i: usize| {});
+        l.append(&o, 1, |_o: Operation, _i: usize| {});
 
         assert_eq!(l.head.load(Ordering::Relaxed), 0);
         assert_eq!(l.tail.load(Ordering::Relaxed), 1);
@@ -609,7 +603,7 @@ mod tests {
     fn test_log_append_multiple() {
         let l = Log::<Operation>::default();
         let o = [Operation::Read, Operation::Write(119)];
-        l.append(&o, 1, 1, |_o: Operation, _i: usize| {});
+        l.append(&o, 1, |_o: Operation, _i: usize| {});
 
         assert_eq!(l.head.load(Ordering::Relaxed), 0);
         assert_eq!(l.tail.load(Ordering::Relaxed), 2);
@@ -626,7 +620,7 @@ mod tests {
         l.ltails[2].store(4096, Ordering::Relaxed);
         l.ltails[3].store(799, Ordering::Relaxed);
 
-        l.advance_head(0, 1, &mut |_o: Operation, _i: usize| {});
+        l.advance_head(0, &mut |_o: Operation, _i: usize| {});
         assert_eq!(l.head.load(Ordering::Relaxed), 224);
     }
 
@@ -645,7 +639,7 @@ mod tests {
         l.next.store(2, Ordering::Relaxed);
         l.tail.store(l.size - GC_FROM_HEAD - 1, Ordering::Relaxed);
         l.ltails[0].store(1024, Ordering::Relaxed);
-        l.append(&o, 1, 1, |_o: Operation, _i: usize| {});
+        l.append(&o, 1, |_o: Operation, _i: usize| {});
 
         assert_eq!(l.head.load(Ordering::Relaxed), 1024);
         assert_eq!(l.tail.load(Ordering::Relaxed), l.size - GC_FROM_HEAD + 3);
@@ -667,7 +661,7 @@ mod tests {
         l.next.store(2, Ordering::Relaxed);
         l.head.store(8192, Ordering::Relaxed);
         l.tail.store(l.size - 10, Ordering::Relaxed);
-        l.append(&o, 1, 1, |_o: Operation, _i: usize| {});
+        l.append(&o, 1, |_o: Operation, _i: usize| {});
 
         assert_eq!(l.lmasks[0].get(), true);
         assert_eq!(l.tail.load(Ordering::Relaxed), l.size + 1014);
@@ -683,8 +677,8 @@ mod tests {
             assert_eq!(i, 1);
         };
 
-        l.append(&o, 1, 1, |_o: Operation, _i: usize| {});
-        l.exec(1, 1, &mut f);
+        l.append(&o, 1, |_o: Operation, _i: usize| {});
+        l.exec(1, &mut f);
     }
 
     // Test that exec() doesn't do anything when the log is empty.
@@ -695,7 +689,7 @@ mod tests {
             assert!(false);
         };
 
-        l.exec(1, 1, &mut f);
+        l.exec(1, &mut f);
     }
 
     // Test that exec() doesn't do anything if we're already up-to-date.
@@ -711,9 +705,9 @@ mod tests {
             assert!(false);
         };
 
-        l.append(&o, 1, 1, |_o: Operation, _i: usize| {});
-        l.exec(1, 1, &mut f);
-        l.exec(1, 1, &mut g);
+        l.append(&o, 1, |_o: Operation, _i: usize| {});
+        l.exec(1, &mut f);
+        l.exec(1, &mut g);
     }
 
     // Test that multiple entries on the log can be executed correctly.
@@ -728,8 +722,8 @@ mod tests {
             Operation::Invalid => assert!(false),
         };
 
-        l.append(&o, 1, 1, |_o: Operation, _i: usize| {});
-        l.exec(1, 1, &mut f);
+        l.append(&o, 1, |_o: Operation, _i: usize| {});
+        l.exec(1, &mut f);
         assert_eq!(s, 240);
     }
 
@@ -750,14 +744,14 @@ mod tests {
             assert_eq!(i, 1);
         };
 
-        l.append(&o, 1, 1, |_o: Operation, _i: usize| {}); // Required for GC to work correctly.
+        l.append(&o, 1, |_o: Operation, _i: usize| {}); // Required for GC to work correctly.
         l.next.store(2, Ordering::SeqCst);
         l.head.store(8192, Ordering::SeqCst);
         l.tail.store(l.size - 10, Ordering::SeqCst);
-        l.append(&o, 1, 1, |_o: Operation, _i: usize| {});
+        l.append(&o, 1, |_o: Operation, _i: usize| {});
 
         l.ltails[0].store(l.size - 10, Ordering::SeqCst);
-        l.exec(1, 1, &mut f);
+        l.exec(1, &mut f);
 
         assert_eq!(l.lmasks[0].get(), false);
         assert_eq!(l.tail.load(Ordering::Relaxed), l.size + 1014);
@@ -771,17 +765,17 @@ mod tests {
         assert_eq!(Arc::strong_count(&o1[0]), 1);
         assert_eq!(Arc::strong_count(&o2[0]), 1);
 
-        l.append(&o1[..], 1, 1, |_o: Arc<Operation>, _i: usize| {});
+        l.append(&o1[..], 1, |_o: Arc<Operation>, _i: usize| {});
         assert_eq!(Arc::strong_count(&o1[0]), 2);
-        l.append(&o1[..], 1, 1, |_o: Arc<Operation>, _i: usize| {});
+        l.append(&o1[..], 1, |_o: Arc<Operation>, _i: usize| {});
         assert_eq!(Arc::strong_count(&o1[0]), 3);
 
         unsafe { l.reset() };
 
-        l.append(&o2[..], 1, 1, |_o: Arc<Operation>, _i: usize| {});
+        l.append(&o2[..], 1, |_o: Arc<Operation>, _i: usize| {});
         assert_eq!(Arc::strong_count(&o1[0]), 2);
         assert_eq!(Arc::strong_count(&o2[0]), 2);
-        l.append(&o2[..], 1, 1, |_o: Arc<Operation>, _i: usize| {});
+        l.append(&o2[..], 1, |_o: Arc<Operation>, _i: usize| {});
         assert_eq!(Arc::strong_count(&o1[0]), 1);
         assert_eq!(Arc::strong_count(&o2[0]), 3);
     }
@@ -801,12 +795,12 @@ mod tests {
             assert_eq!(i, 1);
         };
 
-        l.append(&o, one, 1, |_o: Operation, _i: usize| {});
-        l.exec(one, 1, &mut f);
+        l.append(&o, one, |_o: Operation, _i: usize| {});
+        l.exec(one, &mut f);
         assert_eq!(l.is_replica_synced_for_reads(one), true);
         assert_eq!(l.is_replica_synced_for_reads(two), false);
 
-        l.exec(two, 1, &mut f);
+        l.exec(two, &mut f);
         assert_eq!(l.is_replica_synced_for_reads(two), true);
     }
 }

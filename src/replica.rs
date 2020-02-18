@@ -236,7 +236,7 @@ where
     /// Executes a passed in closure against the replica's underlying data
     /// structure. Useful for unit testing; can be used to verify certain properties
     /// of the data structure after issuing a bunch of operations against it.
-    pub fn verify<F: FnMut(&D)>(&self, tid: usize, mut v: F) {
+    pub fn verify<F: FnMut(&D)>(&self, mut v: F) {
         // Acquire the combiner lock before attempting anything on the data structure.
         // Use an idx greater than the maximum that can be allocated.
         while self
@@ -252,7 +252,7 @@ where
             Err(_) => error!("Error in operation dispatch"),
         };
 
-        self.slog.exec(self.idx, tid, &mut f);
+        self.slog.exec(self.idx, &mut f);
 
         v(&data);
 
@@ -261,7 +261,7 @@ where
 
     /// Syncs up the replica against the underlying log and executes a passed in
     /// closure against all consumed operations.
-    pub fn sync<F: FnMut(<D as Dispatch>::WriteOperation, usize)>(&self, tid: usize, mut d: F) {
+    pub fn sync<F: FnMut(<D as Dispatch>::WriteOperation, usize)>(&self, mut d: F) {
         // Acquire the combiner lock before attempting anything on the data structure.
         // Use an idx greater than the maximum that can be allocated.
         while self
@@ -270,7 +270,7 @@ where
             != 0
         {}
 
-        self.slog.exec(self.idx, tid, &mut d);
+        self.slog.exec(self.idx, &mut d);
 
         self.combiner.store(0, Ordering::Release);
     }
@@ -307,7 +307,7 @@ where
         }
 
         // Successfully became the combiner; perform one round of flat combining.
-        self.combine(tid);
+        self.combine();
 
         // Allow other threads to perform flat combining once we have finished all our work.
         // At this point, we've dropped all mutable references to thread contexts and to
@@ -317,7 +317,7 @@ where
 
     /// Performs one round of flat combining. Collects, appends and executes operations.
     #[inline(always)]
-    fn combine(&self, tid: usize) {
+    fn combine(&self) {
         let mut buffer = self.buffer.borrow_mut();
         let mut operations = self.inflight.borrow_mut();
         let mut results = self.result.borrow_mut();
@@ -341,7 +341,7 @@ where
                     results.push(resp);
                 }
             };
-            self.slog.append(&buffer, self.idx, tid, f);
+            self.slog.append(&buffer, self.idx, f);
         }
 
         // Execute any operations on the shared log against this replica.
@@ -353,7 +353,7 @@ where
                     results.push(resp)
                 };
             };
-            self.slog.exec(self.idx, tid, &mut f);
+            self.slog.exec(self.idx, &mut f);
         }
 
         // Return/Enqueue responses back into the appropriate thread context(s).
