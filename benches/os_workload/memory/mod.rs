@@ -12,7 +12,7 @@ pub mod buddy;
 
 pub use self::buddy::BuddyFrameAllocator as PhysicalMemoryAllocator;
 
-use slabmalloc::{ObjectPage, PageProvider};
+use slabmalloc::ObjectPage;
 pub use x86::current::paging::{PAddr, VAddr, BASE_PAGE_SIZE};
 
 /// Start of the kernel address space.
@@ -254,6 +254,11 @@ impl<'a> PageTableProvider<'a> for BespinPageTableProvider {
                 })
         }
     }
+}
+
+pub trait PageProvider<'a>: Send {
+    fn allocate_page(&mut self) -> Option<&'a mut ObjectPage<'a>>;
+    fn release_page(&mut self, _: &'a mut ObjectPage<'a>);
 }
 
 pub struct BespinSlabsProvider;
