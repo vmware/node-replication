@@ -232,8 +232,7 @@ where
         loop {
             if iteration % WARN_THRESHOLD == 0 {
                 warn!(
-                    "{:?} append(ops.len()={}, {}) takes too many iterations ({}) to complete...",
-                    std::thread::current().id(),
+                    "append(ops.len()={}, {}) takes too many iterations ({}) to complete...",
                     ops.len(),
                     idx,
                     iteration,
@@ -251,8 +250,7 @@ where
             if tail > head + self.size - GC_FROM_HEAD {
                 if waitgc % WARN_THRESHOLD == 0 {
                     warn!(
-                        "{:?} append(ops.len()={}, {}) takes too many iterations ({}) waiting for gc...",
-                        std::thread::current().id(),
+                        "append(ops.len()={}, {}) takes too many iterations ({}) waiting for gc...",
                         ops.len(),
                         idx,
                         waitgc,
@@ -337,8 +335,7 @@ where
             while unsafe { (*e).alivef != self.lmasks[idx - 1].get() } {
                 if iteration % WARN_THRESHOLD == 0 {
                     warn!(
-                        "{:?} alivef not being set for self.index(i={}) = {} (self.lmasks[{}] is {})...",
-                        std::thread::current().id(),
+                        "alivef not being set for self.index(i={}) = {} (self.lmasks[{}] is {})...",
                         i,
                         self.index(i),
                         idx - 1,
@@ -397,10 +394,7 @@ where
             // any new entries on the log to prevent deadlock.
             if min_local_tail == global_head {
                 if iteration % WARN_THRESHOLD == 0 {
-                    warn!(
-                        "{:?} Spending a long time in `advance_head`, are we starving?",
-                        std::thread::current().id()
-                    );
+                    warn!("Spending a long time in `advance_head`, are we starving?");
                 }
                 iteration += 1;
                 self.exec(rid, &mut s);

@@ -291,7 +291,7 @@ where
         for _i in 0..4 {
             combine += unsafe {
                 &*(&self.combiner
-                    as *const crossbeam_utils::CachePadded<std::sync::atomic::AtomicUsize>
+                    as *const crossbeam_utils::CachePadded<core::sync::atomic::AtomicUsize>
                     as *const usize)
             };
         }
@@ -376,6 +376,7 @@ mod test {
     extern crate std;
 
     use super::*;
+    use std::vec;
 
     // Really dumb data structure to test against the Replica and shared log.
     #[derive(Default)]

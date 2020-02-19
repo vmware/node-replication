@@ -2,8 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! An operation-log based approach for data replication.
-//#![no_std]
+#![no_std]
 #![feature(atomic_min_max)]
+
+#[cfg(test)]
+extern crate std;
 
 extern crate alloc;
 extern crate core;
