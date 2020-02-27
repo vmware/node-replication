@@ -314,11 +314,14 @@ where
     /// The passed in closure is expected to take in two arguments: The operation
     /// from the shared log to be executed and the replica that issued it.
     pub fn exec<F: FnMut(T, usize)>(&self, idx: usize, d: &mut F) {
-        let tail = self.tail.load(Ordering::Relaxed);
-        let head = self.head.load(Ordering::Relaxed);
-
         // Load the logical log offset from which we must execute operations.
         let local_tail = self.ltails[idx - 1].load(Ordering::Relaxed);
+
+        let tail = self.tail.load(Ordering::Relaxed);
+        if local_tail == tail {
+            return;
+        }
+        let head = self.head.load(Ordering::Relaxed);
 
         // Make sure we're within the shared log. If we aren't, then panic.
         if local_tail > tail || local_tail < head {
