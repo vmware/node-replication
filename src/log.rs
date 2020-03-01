@@ -13,6 +13,9 @@ use core::sync::atomic::{compiler_fence, AtomicUsize, Ordering};
 
 use crossbeam_utils::CachePadded;
 
+use crate::context::MAX_PENDING_OPS;
+use crate::replica::MAX_THREADS_PER_REPLICA;
+
 /// The default size of the shared log in bytes. If constructed using the
 /// default constructor, the log will be these many bytes in size. Currently
 /// set to 1 GB based on the ASPLOS 2017 paper.
@@ -24,7 +27,12 @@ const MAX_REPLICAS: usize = 64;
 /// Constant required for garbage collection. When the tail and the head are
 /// these many entries apart on the circular buffer, garbage collection will
 /// be performed by one of the replicas registered with the log.
-const GC_FROM_HEAD: usize = 1024 * 4;
+///
+/// For the GC algorithm to work, we need to ensure that we can support the
+/// largest possible append after deciding to perform GC. This largest possible
+/// append is when every thread within a replica has a full batcha of writes
+/// to be appended to the shared log.
+const GC_FROM_HEAD: usize = MAX_PENDING_OPS * MAX_THREADS_PER_REPLICA;
 
 /// Threshold after how many iterations we log a warning for busy spinning loops.
 ///
@@ -152,9 +160,15 @@ where
 
         // Calculate the number of entries that will go into the log, and retrieve a
         // slice to it from the allocated region of memory.
-        let num = bytes / Log::<T>::entry_size();
+        let mut num = bytes / Log::<T>::entry_size();
+
+        // Make sure the log is large enough to allow for periodic garbage collection.
+        if num < 2 * GC_FROM_HEAD {
+            num = 2 * GC_FROM_HEAD;
+        }
+
         if !num.is_power_of_two() {
-            panic!("Log size should be a power of two.")
+            num = num.checked_next_power_of_two().unwrap_or(2 * GC_FROM_HEAD)
         };
         let raw = unsafe { from_raw_parts_mut(mem as *mut Cell<Entry<T>>, num) };
 

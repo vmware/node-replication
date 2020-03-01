@@ -20,7 +20,7 @@ use super::Dispatch;
 /// # Important
 /// If this number is adjusted due to the use of the `arr_macro::arr` macro we
 /// have to adjust the `64` literals in the `new` constructor of `Replica`.
-const MAX_THREADS_PER_REPLICA: usize = 128;
+pub const MAX_THREADS_PER_REPLICA: usize = 128;
 
 /// The responses for a thread are enqueued in a vector (that is accessed through a RefCell).
 type ThreadResponseStorage<D> =

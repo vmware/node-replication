@@ -24,9 +24,13 @@ pub mod replica;
 
 use core::fmt::Debug;
 
-/// Trait that a data structure must implement to be usable with this library. When this
-/// library executes an operation against the data structure, it invokes the `dispatch()`
-/// method with the operation as an argument.
+/// Trait that a data structure must implement to be usable with this library.
+///
+/// When this library executes a read-only operation against the data structure,
+/// it invokes the `dispatch()` method with the operation as an argument.
+///
+/// When this library executes a write operation against the data structure, it
+/// invokes the `dispatch_mut()` method with the operation as an argument.
 pub trait Dispatch {
     type ReadOperation: Sized + Clone + PartialEq + Debug;
     type WriteOperation: Sized + Clone + PartialEq + Debug;

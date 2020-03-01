@@ -9,7 +9,7 @@ use crossbeam_utils::CachePadded;
 
 /// The maximum number of operations that can be batched inside this context.
 /// NOTE: This constant must be a power of two for index() to work.
-const MAX_PENDING_OPS: usize = 32;
+pub const MAX_PENDING_OPS: usize = 32;
 
 /// A pending operation is a combination of the its op-code (T),
 /// and the corresponding result (R, E).
