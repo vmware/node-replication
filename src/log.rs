@@ -148,16 +148,6 @@ where
     pub fn new<'b>(bytes: usize) -> Log<'b, T> {
         use arr_macro::arr;
 
-        let mem = unsafe {
-            alloc(
-                Layout::from_size_align(bytes, align_of::<Cell<Entry<T>>>())
-                    .expect("Alignment error while allocating the shared log!"),
-            )
-        };
-        if mem.is_null() {
-            panic!("Failed to allocate memory for the shared log!");
-        }
-
         // Calculate the number of entries that will go into the log, and retrieve a
         // slice to it from the allocated region of memory.
         let mut num = bytes / Log::<T>::entry_size();
@@ -170,6 +160,18 @@ where
         if !num.is_power_of_two() {
             num = num.checked_next_power_of_two().unwrap_or(2 * GC_FROM_HEAD)
         };
+
+        // Now that we have the actual number of entries, allocate the log.
+        let b = num * Log::<T>::entry_size();
+        let mem = unsafe {
+            alloc(
+                Layout::from_size_align(b, align_of::<Cell<Entry<T>>>())
+                    .expect("Alignment error while allocating the shared log!"),
+            )
+        };
+        if mem.is_null() {
+            panic!("Failed to allocate memory for the shared log!");
+        }
         let raw = unsafe { from_raw_parts_mut(mem as *mut Cell<Entry<T>>, num) };
 
         // Initialize all log entries by calling the default constructor.
@@ -193,7 +195,7 @@ where
 
         Log {
             rawp: mem,
-            rawb: bytes,
+            rawb: b,
             size: num,
             slog: raw,
             head: CachePadded::new(AtomicUsize::new(0usize)),
@@ -538,9 +540,9 @@ mod tests {
     // Tests if a small log can be correctly constructed.
     #[test]
     fn test_log_create() {
-        let l = Log::<Operation>::new(1024);
-        let n = 1024 / Log::<Operation>::entry_size();
-        assert_eq!(l.rawb, 1024);
+        let l = Log::<Operation>::new(512 * 1024);
+        let n = (512 * 1024) / Log::<Operation>::entry_size();
+        assert_eq!(l.rawb, 512 * 1024);
         assert_eq!(l.size, n);
         assert_eq!(l.slog.len(), n);
         assert_eq!(l.head.load(Ordering::Relaxed), 0);
@@ -580,8 +582,8 @@ mod tests {
     // Tests if we can correctly index into the shared log.
     #[test]
     fn test_log_index() {
-        let l = Log::<Operation>::new(4096);
-        assert_eq!(l.index(104), 40);
+        let l = Log::<Operation>::new(512 * 1024);
+        assert_eq!(l.index(9000), 808);
     }
 
     // Tests if we can correctly register with the shared log.
