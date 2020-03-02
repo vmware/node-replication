@@ -63,7 +63,9 @@ pub fn baseline_comparison<T: Dispatch + Default + Sync>(
     name: &str,
     ops: Vec<Operation<<T as Dispatch>::ReadOperation, <T as Dispatch>::WriteOperation>>,
     log_size_bytes: usize,
-) {
+) where
+    <T as node_replication::Dispatch>::ResponseError: std::fmt::Debug,
+{
     utils::disable_dvfs();
     let mut s: T = Default::default();
 
@@ -75,10 +77,10 @@ pub fn baseline_comparison<T: Dispatch + Default + Sync>(
             for i in 0..ops.len() {
                 match &ops[i] {
                     Operation::ReadOperation(o) => {
-                        s.dispatch(o.clone());
+                        s.dispatch(o.clone()).unwrap();
                     }
                     Operation::WriteOperation(o) => {
-                        s.dispatch_mut(o.clone());
+                        s.dispatch_mut(o.clone()).unwrap();
                     }
                 }
             }
@@ -92,7 +94,6 @@ pub fn baseline_comparison<T: Dispatch + Default + Sync>(
 
     group.bench_function("log", |b| {
         b.iter(|| {
-            let mut o = vec![];
             for i in 0..ops.len() {
                 match &ops[i] {
                     Operation::ReadOperation(op) => {
@@ -102,8 +103,6 @@ pub fn baseline_comparison<T: Dispatch + Default + Sync>(
                         r.execute(op.clone(), ridx);
                     }
                 }
-                while r.get_responses(ridx, &mut o) == 0 {}
-                o.clear();
             }
         })
     });

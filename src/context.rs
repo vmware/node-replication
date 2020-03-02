@@ -173,35 +173,23 @@ where
         n
     }
 
-    /// Appends any responses/results to enqueued operations into a passed in buffer.
+    /// Returns a single response if available. Otherwise, returns None.
     #[inline(always)]
-    pub fn res(&self, buffer: &mut Vec<Result<R, E>>) {
-        let mut s = self.head.get();
+    pub fn res(&self) -> Option<Result<R, E>> {
+        let s = self.head.get();
         let f = self.comb.get();
 
         // No responses ready yet; return to the caller.
         if s == f {
-            return;
+            return None;
         };
 
         if s > f {
             panic!("Head of thread-local batch has advanced beyond combiner offset!");
         }
 
-        // Iterate from `head` to `comb`, adding responses into the passed in buffer.
-        // Once we're done, update `head` to the value of `comb` we read above.
-        loop {
-            if s == f {
-                break;
-            };
-
-            unsafe {
-                buffer.push((*self.batch[self.index(s)].as_ptr()).1.clone());
-            }
-            s += 1;
-        }
-
-        self.head.set(f);
+        self.head.set(s + 1);
+        unsafe { Some((*self.batch[self.index(s)].as_ptr()).1.clone()) }
     }
 
     /// Returns the maximum number of operations that will go pending on this context.
@@ -333,37 +321,38 @@ mod test {
     fn test_context_res() {
         let c = Context::<u64, u64, ()>::default();
         let r = [Ok(11), Ok(12), Ok(13), Ok(14)];
-        let mut o = vec![];
 
         c.tail.set(16);
         c.enqueue_resps(&r);
-        c.res(&mut o);
 
         assert_eq!(c.tail.get(), 16);
-        assert_eq!(c.head.get(), 4);
         assert_eq!(c.comb.get(), 4);
 
-        assert_eq!(o.len(), 4);
-        assert_eq!(o[0], r[0]);
-        assert_eq!(o[1], r[1]);
-        assert_eq!(o[2], r[2]);
-        assert_eq!(o[3], r[3]);
+        assert_eq!(c.res(), Some(r[0]));
+        assert_eq!(c.head.get(), 1);
+
+        assert_eq!(c.res(), Some(r[1]));
+        assert_eq!(c.head.get(), 2);
+
+        assert_eq!(c.res(), Some(r[2]));
+        assert_eq!(c.head.get(), 3);
+
+        assert_eq!(c.res(), Some(r[3]));
+        assert_eq!(c.head.get(), 4);
     }
 
     // Tests that we cannot retrieve responses when none were enqueued to begin with.
     #[test]
     fn test_context_res_empty() {
         let c = Context::<usize, usize, ()>::default();
-        let mut o = vec![];
 
         c.tail.set(8);
-        c.res(&mut o);
 
         assert_eq!(c.tail.get(), 8);
         assert_eq!(c.head.get(), 0);
         assert_eq!(c.comb.get(), 0);
 
-        assert_eq!(o.len(), 0);
+        assert_eq!(c.res(), None);
     }
 
     // Tests that batch_size() works correctly.

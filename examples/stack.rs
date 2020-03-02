@@ -83,13 +83,10 @@ fn main() {
     let ridx = replica.register().expect("Couldn't register with replica");
 
     for i in 0..1024 {
-        let mut o = vec![];
         match i % 2 {
-            0 => replica.execute(OpWr::Push(i as u32), ridx),
-            1 => replica.execute(OpWr::Pop, ridx),
+            0 => replica.execute(OpWr::Push(i as u32), ridx).unwrap(),
+            1 => replica.execute(OpWr::Pop, ridx).unwrap(),
             _ => unreachable!(),
         };
-        while replica.get_responses(ridx, &mut o) == 0 {}
-        o.clear();
     }
 }

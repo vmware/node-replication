@@ -102,7 +102,7 @@ impl Default for Response {
 }
 
 /// Potential errors from the file-system
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub enum ResponseError {
     Err(Error),
 }
@@ -375,27 +375,15 @@ fn memfs_scale_out(c: &mut Criterion) {
             c,
             "memfs-scaleout",
             |_cid, rid, _log, replica, ops, _batch_size| {
-                let mut o = vec![];
                 for op in ops {
                     match op {
                         Operation::ReadOperation(o) => {
-                            replica.execute_ro(*o, rid);
+                            replica.execute_ro(*o, rid).unwrap();
                         }
                         Operation::WriteOperation(o) => {
-                            replica.execute(*o, rid);
+                            replica.execute(*o, rid).unwrap();
                         }
                     }
-                    let mut i = 1;
-                    while replica.get_responses(rid, &mut o) == 0 {
-                        if i % mkbench::WARN_THRESHOLD == 0 {
-                            log::warn!(
-                                "{:?} Waiting too long for get_responses",
-                                std::thread::current().id()
-                            );
-                        }
-                        i += 1;
-                    }
-                    o.clear();
                 }
             },
         );
