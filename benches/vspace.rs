@@ -112,18 +112,18 @@ impl Dispatch for PosixDispatcher {
 
         match op {
             OpcodeWr::Process(pop, _a, _b, _c, _d) => match pop {
-                ProcessOperation::AllocateVector => Err(()),
-                ProcessOperation::Exit => Err(()),
-                ProcessOperation::InstallVCpuArea => Err(()),
-                ProcessOperation::Log => Err(()),
-                ProcessOperation::SubscribeEvent => Err(()),
+                ProcessOperation::AllocateVector => Ok(()),
+                ProcessOperation::Exit => Ok(()),
+                ProcessOperation::InstallVCpuArea => Ok(()),
+                ProcessOperation::Log => Ok(()),
+                ProcessOperation::SubscribeEvent => Ok(()),
                 ProcessOperation::Unknown => {
                     unreachable!("Got a ProcessOperation::Unknown in dispatch")
                 }
             },
             OpcodeWr::VSpace(vop, a, b, _c, _d) => {
                 match vop {
-                    VSpaceOperation::Identify => Err(()),
+                    VSpaceOperation::Identify => Ok(()),
                     VSpaceOperation::Map => {
                         let base = a;
                         let size: nix::libc::size_t = b as nix::libc::size_t;
@@ -142,16 +142,15 @@ impl Dispatch for PosixDispatcher {
                         match res {
                             Ok(m) => {
                                 trace!("mmap worked {:p}", m);
-                                Ok(())
+                                return Ok(());
                             }
                             Err(e) => {
                                 error!("mmap failed to map: {}", e);
-                                Err(())
+                                return Err(());
                             }
                         };
-                        Err(())
                     }
-                    VSpaceOperation::MapDevice => Err(()),
+                    VSpaceOperation::MapDevice => Ok(()),
                     VSpaceOperation::Unmap => {
                         let base = a;
                         let size: nix::libc::size_t = b as nix::libc::size_t;
@@ -162,14 +161,13 @@ impl Dispatch for PosixDispatcher {
                         match res {
                             Ok(()) => {
                                 trace!("munmap worked");
-                                Ok(())
+                                return Ok(());
                             }
                             Err(e) => {
                                 error!("mmap failed to unmap: {}", e);
-                                Err(())
+                                return Err(());
                             }
                         };
-                        Err(())
                     }
                     VSpaceOperation::Unknown => {
                         unreachable!("Got a VSpaceOperation::Unknown in dispatch")
