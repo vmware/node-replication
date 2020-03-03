@@ -16,6 +16,9 @@ extern crate crossbeam_utils;
 #[macro_use]
 extern crate log as logging;
 
+#[macro_use]
+extern crate static_assertions;
+
 mod context;
 pub mod rwlock;
 

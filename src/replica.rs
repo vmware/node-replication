@@ -184,7 +184,6 @@ where
 
     /// Busy waits until a response is available within the thread's context.
     /// `idx` identifies this thread.
-    #[inline(always)]
     fn get_response(
         &self,
         idx: usize,
@@ -253,7 +252,6 @@ where
 
     /// Issues a read-only operation against the replica and returns a response.
     /// Makes sure the replica is synced up against the log before doing so.
-    #[inline(always)]
     fn read_only(
         &self,
         op: <D as Dispatch>::ReadOperation,
