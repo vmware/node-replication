@@ -216,8 +216,8 @@ impl<T: ?Sized + Default + Sync> Drop for WriteGuard<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::{RwLock, MAX_READER_THREADS};
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
-    use std::sync::atomic::{ AtomicUsize, Ordering };
     use std::thread;
     use std::vec::Vec;
 
@@ -268,7 +268,9 @@ mod tests {
         let lock = RwLock::<usize>::default();
         let val = 10;
 
-        unsafe { *lock.data.get() = val; }
+        unsafe {
+            *lock.data.get() = val;
+        }
         let guard = lock.read(0);
 
         assert_eq!(lock.wlock.load(Ordering::Relaxed), false);
@@ -295,7 +297,9 @@ mod tests {
         let lock = RwLock::<usize>::default();
         let val = 10;
 
-        unsafe { *lock.data.get() = val; }
+        unsafe {
+            *lock.data.get() = val;
+        }
 
         let f = lock.read(0);
         let s = lock.read(1);
@@ -366,7 +370,9 @@ mod tests {
         let lock = Arc::new(RwLock::<usize>::default());
         let t = 100;
 
-        unsafe { *lock.data.get() = t; }
+        unsafe {
+            *lock.data.get() = t;
+        }
 
         let mut threads = Vec::new();
         for i in 0..t {
