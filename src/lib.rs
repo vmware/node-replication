@@ -35,12 +35,30 @@ use core::fmt::Debug;
 /// When this library executes a write operation against the data structure, it
 /// invokes the `dispatch_mut()` method with the operation as an argument.
 pub trait Dispatch {
+    /// A read-only operation. When executed against the data structure, an operation
+    /// of this type must not mutate the data structure in anyway. Otherwise, the
+    /// assumptions made by this library no longer hold.
     type ReadOperation: Sized + Clone + PartialEq + Debug;
+
+    /// A write operation. When executed against the data structure, an operation of
+    /// this type is allowed to mutate state. The library ensures that this is done so
+    /// in a thread-safe manner.
     type WriteOperation: Sized + Clone + PartialEq + Debug;
+
+    /// The type on the value returned by the data structure when a `ReadOperation` or a
+    /// `WriteOperation` successfully executes against it.
     type Response: Sized + Clone + Default;
+
+    /// The type on the value returned by the data structure when a `ReadOperation` or a
+    /// `WriteOperation` unsuccessfully executes against it.
     type ResponseError: Sized + Clone + Default;
 
+    /// Method on the data structure that allows a read-only operation to be
+    /// executed against it.
     fn dispatch(&self, op: Self::ReadOperation) -> Result<Self::Response, Self::ResponseError>;
+
+    /// Method on the data structure that allows a write operation to be
+    /// executed against it.
     fn dispatch_mut(
         &mut self,
         op: Self::WriteOperation,

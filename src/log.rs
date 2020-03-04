@@ -20,6 +20,7 @@ use crate::replica::MAX_THREADS_PER_REPLICA;
 /// default constructor, the log will be these many bytes in size. Currently
 /// set to 1 GB based on the ASPLOS 2017 paper.
 const DEFAULT_LOG_BYTES: usize = 1024 * 1024 * 1024;
+const_assert!(DEFAULT_LOG_BYTES >= 1 && (DEFAULT_LOG_BYTES & (DEFAULT_LOG_BYTES - 1) == 0));
 
 /// The maximum number of replicas that can be used against the log.
 const MAX_REPLICAS: usize = 64;
@@ -30,9 +31,10 @@ const MAX_REPLICAS: usize = 64;
 ///
 /// For the GC algorithm to work, we need to ensure that we can support the
 /// largest possible append after deciding to perform GC. This largest possible
-/// append is when every thread within a replica has a full batcha of writes
+/// append is when every thread within a replica has a full batch of writes
 /// to be appended to the shared log.
 const GC_FROM_HEAD: usize = MAX_PENDING_OPS * MAX_THREADS_PER_REPLICA;
+const_assert!(GC_FROM_HEAD >= 1 && (GC_FROM_HEAD & (GC_FROM_HEAD - 1) == 0));
 
 /// Threshold after how many iterations we log a warning for busy spinning loops.
 ///
@@ -40,12 +42,12 @@ const GC_FROM_HEAD: usize = MAX_PENDING_OPS * MAX_THREADS_PER_REPLICA;
 /// Should be a power of two to avoid divisions.
 const WARN_THRESHOLD: usize = 1 << 28;
 
-/// An entry that sits on the log. Each entry consists of two fields: The operation to
-/// be performed when a thread reaches this entry on the log, and a flag indicating whether
-/// this entry is valid.
+/// An entry that sits on the log. Each entry consists of three fields: The operation to
+/// be performed when a thread reaches this entry on the log, the replica that appended
+/// this operation, and a flag indicating whether this entry is valid.
 ///
 /// `T` is the type on the operation - typically an enum class containing opcodes as well as
-/// arguments. It is required that this type be sized, cloneable, and default constructable.
+/// arguments. It is required that this type be sized and cloneable.
 #[derive(Clone, Copy, Default)]
 #[repr(align(64))]
 struct Entry<T>
@@ -54,8 +56,10 @@ where
 {
     /// The operation that this entry represents.
     operation: Option<T>,
+
     /// Identifies the replica that issued the above operation.
     replica: usize,
+
     /// Indicates whether this entry represents a valid operation when on the log.
     alivef: bool,
 }
@@ -99,7 +103,8 @@ where
     tail: CachePadded<AtomicUsize>,
 
     /// Completed tail maintains an index <= tail that points to a
-    /// log entry after which there are no completed operations.
+    /// log entry after which there are no completed operations across
+    /// all replicas registered against this log.
     ctail: CachePadded<AtomicUsize>,
 
     /// Array consisting of the local tail of each replica registered with the log.
@@ -109,12 +114,12 @@ where
     ltails: [CachePadded<AtomicUsize>; MAX_REPLICAS],
 
     /// Identifier that will be allocated to the next replica that registers with
-    /// this Log. Required to index into ltails above.
+    /// this Log. Also required to correctly index into ltails above.
     next: CachePadded<AtomicUsize>,
 
     /// Array consisting of local alive masks for each registered replica. Required
     /// because replicas make independent progress over the log, so we need to
-    /// track wrap-arounds for each of their local tails.
+    /// track log wrap-arounds for each of them separately.
     lmasks: [CachePadded<Cell<bool>>; MAX_REPLICAS],
 }
 
@@ -142,9 +147,27 @@ impl<'a, T> Log<'a, T>
 where
     T: Sized + Clone,
 {
-    /// Constructs and returns a log of size `bytes` bytes. This method also allocates
-    /// memory for the log upfront. No further allocations will be performed once this
-    /// method returns.
+    /// Constructs and returns a log of size `bytes` bytes.
+    ///
+    /// # Example
+    ///
+    /// ```
+    ///     use node_replication::log::Log;
+    ///
+    ///     // Operation type that will go onto the log.
+    ///     #[derive(Clone)]
+    ///     enum Operation {
+    ///         Read,
+    ///         Write(u64),
+    ///         Invalid,
+    ///     }
+    ///
+    ///     // Creates a 1 Mega Byte sized log.
+    ///     let l = Log::<Operation>::new(1 * 1024 * 1024);
+    /// ```
+    ///
+    /// This method also allocates memory for the log upfront. No further allocations
+    /// will be performed once this method returns.
     pub fn new<'b>(bytes: usize) -> Log<'b, T> {
         use arr_macro::arr;
 
@@ -157,6 +180,9 @@ where
             num = 2 * GC_FROM_HEAD;
         }
 
+        // Round off to the next power of two if required. If we overflow, then set
+        // the number of entries to the minimum required for GC. This is unlikely since
+        // we'd need a log size > 2^63 entries for this to happen.
         if !num.is_power_of_two() {
             num = num.checked_next_power_of_two().unwrap_or(2 * GC_FROM_HEAD)
         };
@@ -213,7 +239,28 @@ where
     }
 
     /// Registers a replica against the log. Returns an identifier that the replica
-    /// can to execute operations on the log.
+    /// can use to execute operations on the log.
+    ///
+    /// # Example
+    ///
+    /// ```
+    ///     use node_replication::log::Log;
+    ///
+    ///     // Operation type that will go onto the log.
+    ///     #[derive(Clone)]
+    ///     enum Operation {
+    ///         Read,
+    ///         Write(u64),
+    ///         Invalid,
+    ///     }
+    ///
+    ///     // Creates a 1 Mega Byte sized log.
+    ///     let l = Log::<Operation>::new(1 * 1024 * 1024);
+    ///
+    ///     // Registers against the log. `idx` can now be used to append operations
+    ///     // to the log, and execute these operations.
+    ///     let idx = l.register().expect("Failed to register with the Log.");
+    /// ```
     pub fn register(&self) -> Option<usize> {
         // Loop until we either run out of identifiers or we manage to increment `next`.
         loop {
@@ -232,7 +279,44 @@ where
         }
     }
 
-    /// Adds a batch of operations to the shared log. If there isn't enough space
+    /// Adds a batch of operations to the shared log.
+    ///
+    /// # Example
+    ///
+    /// ```
+    ///     use node_replication::log::Log;
+    ///
+    ///     // Operation type that will go onto the log.
+    ///     #[derive(Clone)]
+    ///     enum Operation {
+    ///         Read,
+    ///         Write(u64),
+    ///     }
+    ///
+    ///     let l = Log::<Operation>::new(1 * 1024 * 1024);
+    ///     let idx = l.register().expect("Failed to register with the Log.");
+    ///
+    ///     // The set of operations we would like to append. The order will
+    ///     // be preserved by the interface.
+    ///     let ops = [Operation::Write(100), Operation::Read];
+    ///
+    ///     // `append()` might have to garbage collect the log. When doing so,
+    ///     // it might encounter operations added in by another replica/thread.
+    ///     // This closure allows us to consume those operations. `id` identifies
+    ///     // the replica that added in those operations.
+    ///     let f = |op: Operation, id: usize| {
+    ///         match(op) {
+    ///             Operation::Read => println!("Read by {}", id),
+    ///             Operation::Write(x) => println!("Write({}) by {}", x, id),
+    ///         }
+    ///     };
+    ///
+    ///     // Append the operations. These operations will be marked with `idx`,
+    ///     // and will be linearized at the tail of the log.
+    ///     l.append(&ops, idx, f);
+    /// ```
+    ///
+    /// If there isn't enough space
     /// to perform the append, this method busy waits until the head is advanced.
     /// Accepts a replica `idx`; all appended operations/entries will be marked
     /// with this replica-identifier. Also accepts a closure `s`; when waiting for
@@ -327,27 +411,67 @@ where
     /// a replica's local tail on the shared log. The replica is identified through an
     /// `idx` passed in as an argument.
     ///
+    /// # Example
+    ///
+    /// ```
+    ///     use node_replication::log::Log;
+    ///
+    ///     // Operation type that will go onto the log.
+    ///     #[derive(Clone)]
+    ///     enum Operation {
+    ///         Read,
+    ///         Write(u64),
+    ///     }
+    ///
+    ///     let l = Log::<Operation>::new(1 * 1024 * 1024);
+    ///     let idx = l.register().expect("Failed to register with the Log.");
+    ///     let ops = [Operation::Write(100), Operation::Read];
+    ///
+    ///     let f = |op: Operation, id: usize| {
+    ///         match(op) {
+    ///             Operation::Read => println!("Read by {}", id),
+    ///             Operation::Write(x) => println!("Write({}) by {}", x, id),
+    ///         }
+    ///     };
+    ///     l.append(&ops, idx, f);
+    ///
+    ///     // This closure is executed on every operation appended to the
+    ///     // since the last call to `exec()` by this replica/thread.
+    ///     let mut d = 0;
+    ///     let mut g = |op: Operation, id: usize| {
+    ///         match(op) {
+    ///             // The write happened before the read.
+    ///             Operation::Read => assert_eq!(100, d),
+    ///             Operation::Write(x) => d += 100,
+    ///         }
+    ///     };
+    ///     l.exec(idx, &mut g);
+    /// ```
+    ///
     /// The passed in closure is expected to take in two arguments: The operation
     /// from the shared log to be executed and the replica that issued it.
     pub fn exec<F: FnMut(T, usize)>(&self, idx: usize, d: &mut F) {
         // Load the logical log offset from which we must execute operations.
-        let local_tail = self.ltails[idx - 1].load(Ordering::Relaxed);
+        let l = self.ltails[idx - 1].load(Ordering::Relaxed);
 
-        let tail = self.tail.load(Ordering::Relaxed);
-        if local_tail == tail {
+        // Check if we have any work to do by comparing our local tail with the log's
+        // global tail. If they're equal, then we're done here and can simply return.
+        let t = self.tail.load(Ordering::Relaxed);
+        if l == t {
             return;
         }
-        let head = self.head.load(Ordering::Relaxed);
+
+        let h = self.head.load(Ordering::Relaxed);
 
         // Make sure we're within the shared log. If we aren't, then panic.
-        if local_tail > tail || local_tail < head {
+        if l > t || l < h {
             panic!("Local tail not within the shared log!")
         };
 
         // Execute all operations from the passed in offset to the shared log's tail. Check if
         // the entry is live first; we could have a replica that has reserved entries, but not
         // filled them into the log yet.
-        for i in local_tail..tail {
+        for i in l..t {
             let mut iteration = 1;
             let e = self.slog[self.index(i)].as_ptr();
 
@@ -373,10 +497,10 @@ where
             }
         }
 
-        self.ctail.fetch_max(tail, Ordering::Relaxed);
-
-        // Update the replica's local tail.
-        self.ltails[idx - 1].store(tail, Ordering::Relaxed);
+        // Update the completed tail after we've executed these operations.
+        // Also update this replica's local tail.
+        self.ctail.fetch_max(t, Ordering::Relaxed);
+        self.ltails[idx - 1].store(t, Ordering::Relaxed);
     }
 
     /// Returns a physical index given a logical index into the shared log.
@@ -425,6 +549,7 @@ where
 
             // Make sure that we freed up enough space so that threads waiting for
             // GC in append can make progress. Otherwise, try to make progress again.
+            // If we're making progress again, then try consuming entries on the log.
             if f < min_local_tail + self.size - GC_FROM_HEAD {
                 return;
             } else {
@@ -464,12 +589,65 @@ where
     }
 
     /// This method checks if the replica is in sync to execute a read-only operation
-    /// right away. And to check the same, it compares the localTail with completedTail.
+    /// right away. It does so by comparing the replica's local tail with the log's
+    /// completed tail.
+    ///
+    /// # Example
+    ///
+    /// ```
+    ///     use node_replication::log::Log;
+    ///
+    ///     // Operation type that will go onto the log.
+    ///     #[derive(Clone)]
+    ///     enum Operation {
+    ///         Read,
+    ///         Write(u64),
+    ///     }
+    ///
+    ///     // We register two replicas here, `idx1` and `idx2`.
+    ///     let l = Log::<Operation>::new(1 * 1024 * 1024);
+    ///     let idx1 = l.register().expect("Failed to register with the Log.");
+    ///     let idx2 = l.register().expect("Failed to register with the Log.");
+    ///     let ops = [Operation::Write(100), Operation::Read];
+    ///
+    ///     let f = |op: Operation, id: usize| {
+    ///         match(op) {
+    ///             Operation::Read => println!("Read by {}", id),
+    ///             Operation::Write(x) => println!("Write({}) by {}", x, id),
+    ///         }
+    ///     };
+    ///     l.append(&ops, idx2, f);
+    ///
+    ///     let mut d = 0;
+    ///     let mut g = |op: Operation, id: usize| {
+    ///         match(op) {
+    ///             // The write happened before the read.
+    ///             Operation::Read => assert_eq!(100, d),
+    ///             Operation::Write(x) => d += 100,
+    ///         }
+    ///     };
+    ///     l.exec(idx2, &mut g);
+    ///
+    ///     // This assertion fails because `idx1` has not executed operations
+    ///     // that were appended by `idx2`.
+    ///     assert_eq!(false, l.is_replica_synced_for_reads(idx1));
+    ///
+    ///     let mut e = 0;
+    ///     let mut g = |op: Operation, id: usize| {
+    ///         match(op) {
+    ///             // The write happened before the read.
+    ///             Operation::Read => assert_eq!(100, e),
+    ///             Operation::Write(x) => e += 100,
+    ///         }
+    ///     };
+    ///     l.exec(idx1, &mut g);
+    ///
+    ///     // `idx1` is all synced up, so this assertion passes.
+    ///     assert_eq!(true, l.is_replica_synced_for_reads(idx1));
+    /// ```
     #[inline(always)]
     pub fn is_replica_synced_for_reads(&self, idx: usize) -> bool {
-        let read_tail = self.ctail.load(Ordering::Relaxed);
-        let local_tail = self.ltails[idx - 1].load(Ordering::Relaxed);
-        local_tail >= read_tail
+        self.ltails[idx - 1].load(Ordering::Relaxed) >= self.ctail.load(Ordering::Relaxed)
     }
 }
 
@@ -516,6 +694,7 @@ mod tests {
         Invalid,
     }
 
+    // Required so that we can unit test Entry.
     impl Default for Operation {
         fn default() -> Operation {
             Operation::Invalid
@@ -548,6 +727,7 @@ mod tests {
         assert_eq!(l.head.load(Ordering::Relaxed), 0);
         assert_eq!(l.tail.load(Ordering::Relaxed), 0);
         assert_eq!(l.next.load(Ordering::Relaxed), 1);
+        assert_eq!(l.ctail.load(Ordering::Relaxed), 0);
 
         for i in 0..MAX_REPLICAS {
             assert_eq!(l.ltails[i].load(Ordering::Relaxed), 0);
@@ -556,6 +736,26 @@ mod tests {
         for i in 0..MAX_REPLICAS {
             assert_eq!(l.lmasks[i].get(), true);
         }
+    }
+
+    // Tests if the constructor allocates enough space for GC.
+    #[test]
+    fn test_log_min_size() {
+        let l = Log::<Operation>::new(1024);
+        assert_eq!(l.rawb, 2 * GC_FROM_HEAD * Log::<Operation>::entry_size());
+        assert_eq!(l.size, 2 * GC_FROM_HEAD);
+        assert_eq!(l.slog.len(), 2 * GC_FROM_HEAD);
+    }
+
+    // Tests that the constructor allocates a log whose number of entries
+    // are a power of two.
+    #[test]
+    fn test_log_power_of_two() {
+        let l = Log::<Operation>::new(524 * 1024);
+        let n = ((524 * 1024) / Log::<Operation>::entry_size()).checked_next_power_of_two();
+        assert_eq!(l.rawb, n.unwrap() * Log::<Operation>::entry_size());
+        assert_eq!(l.size, n.unwrap());
+        assert_eq!(l.slog.len(), n.unwrap());
     }
 
     // Tests if the log can be successfully default constructed.
@@ -569,6 +769,7 @@ mod tests {
         assert_eq!(l.head.load(Ordering::Relaxed), 0);
         assert_eq!(l.tail.load(Ordering::Relaxed), 0);
         assert_eq!(l.next.load(Ordering::Relaxed), 1);
+        assert_eq!(l.ctail.load(Ordering::Relaxed), 0);
 
         for i in 0..MAX_REPLICAS {
             assert_eq!(l.ltails[i].load(Ordering::Relaxed), 0);
@@ -594,13 +795,13 @@ mod tests {
         assert_eq!(l.next.load(Ordering::Relaxed), 2);
     }
 
-    // Tests that we cannot register more than 32 replicas with the log.
+    // Tests that we cannot register more than the max replicas with the log.
     #[test]
     fn test_log_register_none() {
         let l = Log::<Operation>::new(1024);
-        l.next.store(64, Ordering::Relaxed);
+        l.next.store(MAX_REPLICAS, Ordering::Relaxed);
         assert!(l.register().is_none());
-        assert_eq!(l.next.load(Ordering::Relaxed), 64);
+        assert_eq!(l.next.load(Ordering::Relaxed), MAX_REPLICAS);
     }
 
     // Test that we can correctly append an entry into the log.
@@ -664,7 +865,7 @@ mod tests {
         assert_eq!(l.tail.load(Ordering::Relaxed), l.size - GC_FROM_HEAD + 3);
     }
 
-    // Tests that on log wrap around, the global mask gets flipped, but the local mask stays
+    // Tests that on log wrap around, the local mask stays
     // the same because entries have not been executed yet.
     #[test]
     fn test_log_append_wrap() {
@@ -776,6 +977,30 @@ mod tests {
         assert_eq!(l.tail.load(Ordering::Relaxed), l.size + 1014);
     }
 
+    // Tests that exec() panics if the head of the log advances beyond the tail.
+    #[test]
+    #[should_panic]
+    fn test_exec_panic() {
+        let l = Log::<Operation>::default();
+        let o: [Operation; 1024] = unsafe {
+            let mut a: [Operation; 1024] = ::std::mem::MaybeUninit::zeroed().assume_init();
+            for i in &mut a[..] {
+                ::std::ptr::write(i, Operation::Read);
+            }
+            a
+        };
+        let mut f = |_op: Operation, _i: usize| {
+            assert!(false);
+        };
+
+        l.append(&o, 1, |_o: Operation, _i: usize| {});
+        l.head.store(8192, Ordering::SeqCst);
+
+        l.exec(1, &mut f);
+    }
+
+    // Tests that operations are cloned when added to the log, and that
+    // they are correctly dropped once overwritten.
     #[test]
     fn test_log_change_refcount() {
         let l = Log::<Arc<Operation>>::default();
@@ -791,6 +1016,9 @@ mod tests {
 
         unsafe { l.reset() };
 
+        // Over here, we overwrite entries that were written to by the two
+        // previous appends. This decreases the refcount of o1 and increases
+        // the refcount of o2.
         l.append(&o2[..], 1, |_o: Arc<Operation>, _i: usize| {});
         assert_eq!(Arc::strong_count(&o1[0]), 2);
         assert_eq!(Arc::strong_count(&o2[0]), 2);
@@ -799,6 +1027,8 @@ mod tests {
         assert_eq!(Arc::strong_count(&o2[0]), 3);
     }
 
+    // Tests that is_replica_synced_for_read() works correctly; it returns
+    // false when a replica is not synced up and true when it is.
     #[test]
     fn test_replica_synced_for_read() {
         let l = Log::<Operation>::default();
