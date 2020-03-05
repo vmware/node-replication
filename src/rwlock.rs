@@ -77,6 +77,22 @@ where
     /// a mutable reference from the returned `WriteGuard`.
     ///
     /// `n` is the number of active readers currently using this reader-writer lock.
+    ///
+    /// # Example
+    ///
+    /// ```
+    ///     use node_replication::rwlock::RwLock;
+    ///
+    ///     // Create the lock.
+    ///     let lock = RwLock::<usize>::default();
+    ///
+    ///     // Acquire the write lock. This returns a guard that can be used
+    ///     // to perform writes against the protected data. We need to know
+    ///     // the number of concurrent reader threads upfront.
+    ///     const N_CONCURRENT_READERS: usize = 32;
+    ///     let mut w_guard = lock.write(N_CONCURRENT_READERS);
+    ///     *w_guard = 777;
+    /// ```
     pub fn write(&self, n: usize) -> WriteGuard<T> {
         // First, wait until we can acquire the writer lock.
         while self.wlock.compare_and_swap(false, true, Ordering::Acquire) {
@@ -99,6 +115,21 @@ where
 
     /// Locks the underlying data-structure for reads. Allows multiple readers to acquire the lock.
     /// Blocks until there aren't any active writers.
+    ///
+    /// # Example
+    ///
+    /// ```
+    ///     use node_replication::rwlock::RwLock;
+    ///
+    ///     // Create the lock.
+    ///     let lock = RwLock::<usize>::default();
+    ///
+    ///     // Acquire the read lock. This returns a guard that can be used
+    ///     // to perform reads against the protected data. We need
+    ///     // a thread identifier to acquire this lock.
+    ///     const MY_THREAD_ID: usize = 16;
+    ///     let r_guard = lock.read(MY_THREAD_ID);
+    ///     assert_eq!(0, *r_guard);
     pub fn read(&self, tid: usize) -> ReadGuard<T> {
         // We perform a small optimization. Before attempting to acquire a read lock, we issue
         // naked reads to the write lock and wait until it is free. For that, we retrieve a

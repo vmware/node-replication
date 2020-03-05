@@ -899,6 +899,15 @@ mod tests {
 
         l.append(&o, 1, |_o: Operation, _i: usize| {});
         l.exec(1, &mut f);
+
+        assert_eq!(
+            l.tail.load(Ordering::Relaxed),
+            l.ctail.load(Ordering::Relaxed)
+        );
+        assert_eq!(
+            l.tail.load(Ordering::Relaxed),
+            l.ltails[0].load(Ordering::Relaxed)
+        );
     }
 
     // Test that exec() doesn't do anything when the log is empty.
@@ -945,6 +954,15 @@ mod tests {
         l.append(&o, 1, |_o: Operation, _i: usize| {});
         l.exec(1, &mut f);
         assert_eq!(s, 240);
+
+        assert_eq!(
+            l.tail.load(Ordering::Relaxed),
+            l.ctail.load(Ordering::Relaxed)
+        );
+        assert_eq!(
+            l.tail.load(Ordering::Relaxed),
+            l.ltails[0].load(Ordering::Relaxed)
+        );
     }
 
     // Test that the replica local mask is updated correctly when executing over

@@ -19,8 +19,11 @@ use super::Dispatch;
 ///
 /// # Important
 /// If this number is adjusted due to the use of the `arr_macro::arr` macro we
-/// have to adjust the `64` literals in the `new` constructor of `Replica`.
+/// have to adjust the `128` literals in the `new` constructor of `Replica`.
 pub const MAX_THREADS_PER_REPLICA: usize = 128;
+const_assert!(
+    MAX_THREADS_PER_REPLICA >= 1 && (MAX_THREADS_PER_REPLICA & (MAX_THREADS_PER_REPLICA - 1) == 0)
+);
 
 /// An instance of a replicated data structure. Uses a shared log to scale operations on
 /// the data structure across cores and processors.
@@ -48,7 +51,7 @@ where
     /// Idx that will be handed out to the next thread that registers with the replica.
     next: CachePadded<AtomicUsize>,
 
-    /// Static array of thread contexts. Threads buffer operations in here when they
+    /// Static array of thread contexts. Threads buffer write operations in here when they
     /// cannot perform flat combining (because another thread might be doing so).
     contexts: [Context<
         <D as Dispatch>::WriteOperation,
@@ -100,6 +103,55 @@ where
     ///
     /// Takes in a reference to the shared log as an argument. The Log is assumed to
     /// outlive the replica. The replica is bound to the log's lifetime.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// extern crate alloc;
+    ///
+    /// use node_replication::Dispatch;
+    /// use node_replication::log::Log;
+    /// use node_replication::replica::Replica;
+    ///
+    /// use alloc::sync::Arc;
+    ///
+    /// // The data structure we want replicated.
+    /// #[derive(Default)]
+    /// struct Data {
+    ///     junk: u64,
+    /// }
+    ///
+    /// // This trait allows the `Data` to be used with node-replication.
+    /// impl Dispatch for Data {
+    ///     type ReadOperation = ();
+    ///     type WriteOperation = u64;
+    ///     type Response = Option<u64>;
+    ///     type ResponseError = ();
+    ///
+    ///     // A read returns the underlying u64.
+    ///     fn dispatch(
+    ///         &self,
+    ///         _op: Self::ReadOperation,
+    ///     ) -> Result<Self::Response, Self::ResponseError> {
+    ///         Ok(Some(self.junk))
+    ///     }
+    ///
+    ///     // A write updates the underlying u64.
+    ///     fn dispatch_mut(
+    ///         &mut self,
+    ///         op: Self::WriteOperation,
+    ///     ) -> Result<Self::Response, Self::ResponseError> {
+    ///         self.junk = op;
+    ///         Ok(None)
+    ///     }
+    /// }
+    ///
+    /// // First create a shared log.
+    /// let log = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
+    ///
+    /// // Create a replica that uses the above log.
+    /// let replica = Replica::<Data>::new(&log);
+    /// ```
     pub fn new<'b>(log: &Arc<Log<'b, <D as Dispatch>::WriteOperation>>) -> Replica<'b, D> {
         use arr_macro::arr;
 
@@ -132,6 +184,52 @@ where
 
     /// Registers a thread with this replica. Returns an idx inside an Option if the registration
     /// was successfull. None if the registration failed.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// extern crate alloc;
+    ///
+    /// use node_replication::Dispatch;
+    /// use node_replication::log::Log;
+    /// use node_replication::replica::Replica;
+    ///
+    /// use alloc::sync::Arc;
+    ///
+    /// #[derive(Default)]
+    /// struct Data {
+    ///     junk: u64,
+    /// }
+    ///
+    /// impl Dispatch for Data {
+    ///     type ReadOperation = ();
+    ///     type WriteOperation = u64;
+    ///     type Response = Option<u64>;
+    ///     type ResponseError = ();
+    ///
+    ///     fn dispatch(
+    ///         &self,
+    ///         _op: Self::ReadOperation,
+    ///     ) -> Result<Self::Response, Self::ResponseError> {
+    ///         Ok(Some(self.junk))
+    ///     }
+    ///
+    ///     fn dispatch_mut(
+    ///         &mut self,
+    ///         op: Self::WriteOperation,
+    ///     ) -> Result<Self::Response, Self::ResponseError> {
+    ///         self.junk = op;
+    ///         Ok(None)
+    ///     }
+    /// }
+    ///
+    /// let log = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
+    /// let replica = Replica::<Data>::new(&log);
+    ///
+    /// // Calling register() returns an idx that can be used to execute
+    /// // operations against the replica.
+    /// let idx = replica.register().expect("Failed to register with replica.");
+    /// ```
     pub fn register(&self) -> Option<usize> {
         // Loop until we either run out of identifiers or we manage to increment `next`.
         loop {
@@ -150,11 +248,53 @@ where
     }
 
     /// Executes an mutable operation against this replica and returns a response.
-    ///
     /// `idx` is an identifier for the thread performing the execute operation.
     ///
-    /// In addition to the supplied operation, this method might execute operations that were
-    /// received on a different replica and appended to the shared log.
+    /// # Example
+    ///
+    /// ```
+    /// extern crate alloc;
+    ///
+    /// use node_replication::Dispatch;
+    /// use node_replication::log::Log;
+    /// use node_replication::replica::Replica;
+    ///
+    /// use alloc::sync::Arc;
+    ///
+    /// #[derive(Default)]
+    /// struct Data {
+    ///     junk: u64,
+    /// }
+    ///
+    /// impl Dispatch for Data {
+    ///     type ReadOperation = ();
+    ///     type WriteOperation = u64;
+    ///     type Response = Option<u64>;
+    ///     type ResponseError = ();
+    ///
+    ///     fn dispatch(
+    ///         &self,
+    ///         _op: Self::ReadOperation,
+    ///     ) -> Result<Self::Response, Self::ResponseError> {
+    ///         Ok(Some(self.junk))
+    ///     }
+    ///
+    ///     fn dispatch_mut(
+    ///         &mut self,
+    ///         op: Self::WriteOperation,
+    ///     ) -> Result<Self::Response, Self::ResponseError> {
+    ///         self.junk = op;
+    ///         Ok(None)
+    ///     }
+    /// }
+    ///
+    /// let log = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
+    /// let replica = Replica::<Data>::new(&log);
+    /// let idx = replica.register().expect("Failed to register with replica.");
+    ///
+    /// // execute() can be used to write to the replicated data structure.
+    /// let res = replica.execute(100, idx);
+    /// assert_eq!(Ok(None), res);
     pub fn execute(
         &self,
         op: <D as Dispatch>::WriteOperation,
@@ -169,11 +309,54 @@ where
     }
 
     /// Executes a read-only operation against this replica and returns a response.
-    ///
     /// `idx` is an identifier for the thread performing the execute operation.
     ///
-    /// In addition to the supplied operation, this method might execute operations that were
-    /// received on a different replica and appended to the shared log.
+    /// # Example
+    ///
+    /// ```
+    /// extern crate alloc;
+    ///
+    /// use node_replication::Dispatch;
+    /// use node_replication::log::Log;
+    /// use node_replication::replica::Replica;
+    ///
+    /// use alloc::sync::Arc;
+    ///
+    /// #[derive(Default)]
+    /// struct Data {
+    ///     junk: u64,
+    /// }
+    ///
+    /// impl Dispatch for Data {
+    ///     type ReadOperation = ();
+    ///     type WriteOperation = u64;
+    ///     type Response = Option<u64>;
+    ///     type ResponseError = ();
+    ///
+    ///     fn dispatch(
+    ///         &self,
+    ///         _op: Self::ReadOperation,
+    ///     ) -> Result<Self::Response, Self::ResponseError> {
+    ///         Ok(Some(self.junk))
+    ///     }
+    ///
+    ///     fn dispatch_mut(
+    ///         &mut self,
+    ///         op: Self::WriteOperation,
+    ///     ) -> Result<Self::Response, Self::ResponseError> {
+    ///         self.junk = op;
+    ///         Ok(None)
+    ///     }
+    /// }
+    ///
+    /// let log = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
+    /// let replica = Replica::<Data>::new(&log);
+    /// let idx = replica.register().expect("Failed to register with replica.");
+    /// let _wr = replica.execute(100, idx);
+    ///
+    /// // execute_ro() can be used to read from the replicated data structure.
+    /// let res = replica.execute_ro((), idx);
+    /// assert_eq!(Ok(Some(100)), res);
     pub fn execute_ro(
         &self,
         op: <D as Dispatch>::ReadOperation,
@@ -385,7 +568,7 @@ mod test {
             &self,
             _op: Self::ReadOperation,
         ) -> Result<Self::Response, Self::ResponseError> {
-            Err(())
+            Ok(self.junk)
         }
 
         fn dispatch_mut(
@@ -516,15 +699,14 @@ mod test {
         let repl = Replica::<Data>::new(&slog);
         let _idx = repl.register();
 
-        repl.execute(121, 1).unwrap();
-
-        assert_eq!(repl.data.read(0).junk, 1);
+        assert_eq!(Ok(107), repl.execute(121, 1));
+        assert_eq!(1, repl.data.read(0).junk);
     }
 
-    // Tests whether get_responses() retrieves responses to an operation that was executed
+    // Tests whether get_response() retrieves a response to an operation that was executed
     // against a replica.
     #[test]
-    fn test_replica_get_responses() {
+    fn test_replica_get_response() {
         let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
         let repl = Replica::<Data>::new(&slog);
         let _idx = repl.register();
@@ -532,5 +714,32 @@ mod test {
         repl.make_pending(121, 1);
 
         assert_eq!(repl.get_response(1), Ok(107));
+    }
+
+    // Tests whether we can issue a read-only operation against the replica.
+    #[test]
+    fn test_replica_execute_ro() {
+        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
+        let repl = Replica::<Data>::new(&slog);
+        let idx = repl.register().expect("Failed to register with replica.");
+
+        assert_eq!(Ok(107), repl.execute(121, idx));
+        assert_eq!(Ok(1), repl.execute_ro(11, idx));
+    }
+
+    // Tests that execute_ro() syncs up the replica with the log before
+    // executing the read against the data structure.
+    #[test]
+    fn test_replica_execute_ro_not_synced() {
+        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
+        let repl = Replica::<Data>::new(&slog);
+
+        // Add in operations to the log off the side, not through the replica.
+        let o = [121, 212];
+        slog.append(&o, 2, |_o: u64, _i: usize| {});
+        slog.exec(2, &mut |_o: u64, _i: usize| {});
+
+        let t1 = repl.register().expect("Failed to register with replica.");
+        assert_eq!(Ok(2), repl.execute_ro(11, t1));
     }
 }
