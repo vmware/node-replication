@@ -322,6 +322,7 @@ where
     /// with this replica-identifier. Also accepts a closure `s`; when waiting for
     /// GC, this closure is passed into exec() to ensure that this replica does'nt
     /// cause a deadlock.
+    #[inline(always)]
     pub fn append<F: FnMut(T, usize)>(&self, ops: &[T], idx: usize, mut s: F) {
         let nops = ops.len();
         let mut iteration = 1;
@@ -450,6 +451,7 @@ where
     ///
     /// The passed in closure is expected to take in two arguments: The operation
     /// from the shared log to be executed and the replica that issued it.
+    #[inline(always)]
     pub fn exec<F: FnMut(T, usize)>(&self, idx: usize, d: &mut F) {
         // Load the logical log offset from which we must execute operations.
         let l = self.ltails[idx - 1].load(Ordering::Relaxed);
@@ -512,6 +514,7 @@ where
     /// Advances the head of the log forward. If a replica has stopped making progress,
     /// then this method will never return. Accepts a closure that is passed into exec()
     /// to ensure that this replica does not deadlock GC.
+    #[inline(always)]
     fn advance_head<F: FnMut(T, usize)>(&self, rid: usize, mut s: &mut F) {
         // Keep looping until we can advance the head and create some free space
         // on the log. If one of the replicas has stopped making progress, then
