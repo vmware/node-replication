@@ -145,18 +145,15 @@ fn main() {
             &mut c,
             "nrbench-stack",
             |_cid, rid, _log, replica, ops, _batch_size| {
-                let mut o = vec![];
                 for op in ops {
                     match op {
                         Operation::ReadOperation(o) => {
-                            replica.execute_ro(*o, rid);
+                            replica.execute_ro(*o, rid).unwrap();
                         }
                         Operation::WriteOperation(o) => {
-                            replica.execute(*o, rid);
+                            replica.execute(*o, rid).unwrap();
                         }
                     }
-                    while replica.get_responses(rid, &mut o) == 0 {}
-                    o.clear();
                 }
             },
         );
@@ -165,18 +162,15 @@ fn main() {
             &mut c,
             "nrbench-synthetic",
             |_cid, rid, _log, replica, ops, _batch_size| {
-                let mut o = vec![];
                 for op in ops {
                     match op {
                         Operation::ReadOperation(o) => {
-                            replica.execute_ro(*o, rid);
+                            replica.execute_ro(*o, rid).unwrap();
                         }
                         Operation::WriteOperation(o) => {
-                            replica.execute(*o, rid);
+                            replica.execute(*o, rid).unwrap();
                         }
                     }
-                    while replica.get_responses(rid, &mut o) == 0 {}
-                    o.clear();
                 }
             },
         );
@@ -185,18 +179,15 @@ fn main() {
             &mut c,
             "nrbench-hashmap",
             |_cid, rid, _log, replica, ops, _batch_size| {
-                let mut o = vec![];
                 for op in ops {
                     match op {
                         Operation::ReadOperation(o) => {
-                            replica.execute_ro(*o, rid);
+                            replica.execute_ro(*o, rid).unwrap();
                         }
                         Operation::WriteOperation(o) => {
-                            replica.execute(*o, rid);
+                            replica.execute(*o, rid).unwrap();
                         }
                     }
-                    while replica.get_responses(rid, &mut o) == 0 {}
-                    o.clear();
                 }
             },
         );

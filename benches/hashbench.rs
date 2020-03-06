@@ -400,54 +400,27 @@ impl Dispatch for NrHashMap {
 struct ReplicaAndToken<'a> {
     replica: sync::Arc<Replica<'a, NrHashMap>>,
     token: usize,
-    responses: Vec<Result<u64, ()>>,
 }
 
 impl<'a> ReplicaAndToken<'a> {
     fn new(replica: sync::Arc<Replica<'a, NrHashMap>>) -> ReplicaAndToken<'a> {
         let token = replica.register().unwrap();
-        ReplicaAndToken {
-            replica,
-            token,
-            responses: Vec::with_capacity(1),
-        }
+        ReplicaAndToken { replica, token }
     }
 }
 
 impl<'a> Backend for ReplicaAndToken<'a> {
     fn b_get(&mut self, key: u64) -> u64 {
-        self.replica.execute_ro(OpRd::Get(key), self.token);
-        let mut i = 1;
-        while self.replica.get_responses(self.token, &mut self.responses) == 0 {
-            if i % (1024 * 1024 * 2) == 0 {
-                println!(
-                    "{:?} Waiting too long for get_responses",
-                    std::thread::current().id()
-                );
-            }
-            i += 1;
-        }
-        let r = self.responses[0];
-        self.responses.clear();
-        match r {
+        match self.replica.execute_ro(OpRd::Get(key), self.token) {
             Ok(res) => return res,
             Err(_) => unreachable!(),
         }
     }
 
     fn b_put(&mut self, key: u64, value: u64) {
-        self.replica.execute(OpWr::Put(key, value), self.token);
-        let mut i = 1;
-        while self.replica.get_responses(self.token, &mut self.responses) == 0 {
-            if i % (1024 * 1024 * 2) == 0 {
-                println!(
-                    "{:?} Waiting too long for get_responses",
-                    std::thread::current().id()
-                );
-            }
-            i += 1;
-        }
-        self.responses.clear();
+        self.replica
+            .execute(OpWr::Put(key, value), self.token)
+            .unwrap();
     }
 }
 

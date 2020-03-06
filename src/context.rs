@@ -9,11 +9,12 @@ use crossbeam_utils::CachePadded;
 
 /// The maximum number of operations that can be batched inside this context.
 /// NOTE: This constant must be a power of two for index() to work.
-const MAX_PENDING_OPS: usize = 32;
+pub const MAX_PENDING_OPS: usize = 32;
+const_assert!(MAX_PENDING_OPS >= 1 && (MAX_PENDING_OPS & (MAX_PENDING_OPS - 1) == 0));
 
 /// A pending operation is a combination of the its op-code (T),
 /// and the corresponding result (R, E).
-type PendingOperation<T, R, E> = Cell<(Option<T>, Result<R, E>)>;
+type PendingOperation<T, R, E> = Cell<(Option<T>, Option<Result<R, E>>)>;
 
 /// Contains all state local to a particular thread.
 ///
@@ -27,13 +28,16 @@ type PendingOperation<T, R, E> = Cell<(Option<T>, Result<R, E>)>;
 /// required to execute these operations on the replicas.
 ///
 /// `R` is a type parameter required by the struct. It is the type on the result obtained
-/// when an operation is executed against the replica.
+/// when an operation is successfully executed against the replica.
+///
+/// `E` is a type parameter required by the struct. It is the type on the error obtained if
+/// an operation was unsuccessfully executed against the replica.
 #[repr(align(64))]
 pub struct Context<T, R, E>
 where
     T: Sized + Clone,
-    R: Sized + Clone + Default,
-    E: Sized + Clone + Default,
+    R: Sized + Clone,
+    E: Sized + Clone,
 {
     /// Array that will hold all pending operations to be appended to the shared log as
     /// well as the results obtained on executing them against a replica.
@@ -57,15 +61,15 @@ where
 impl<T, R, E> Default for Context<T, R, E>
 where
     T: Sized + Clone,
-    R: Sized + Clone + Default,
-    E: Sized + Clone + Default,
+    R: Sized + Clone,
+    E: Sized + Clone,
 {
     /// Default constructor for the context.
     fn default() -> Context<T, R, E> {
         let mut batch: [CachePadded<PendingOperation<T, R, E>>; MAX_PENDING_OPS] =
             unsafe { ::core::mem::MaybeUninit::zeroed().assume_init() };
         for elem in &mut batch[..] {
-            *elem = CachePadded::new(Cell::new((None, Err(Default::default()))));
+            *elem = CachePadded::new(Cell::new((None, None)));
         }
 
         Context {
@@ -80,8 +84,8 @@ where
 impl<T, R, E> Context<T, R, E>
 where
     T: Sized + Clone,
-    R: Sized + Clone + Default,
-    E: Sized + Clone + Default,
+    R: Sized + Clone,
+    E: Sized + Clone,
 {
     /// Enqueues an operation onto this context's batch of pending operations.
     ///
@@ -125,7 +129,7 @@ where
         for i in 0..n {
             let e = self.batch[self.index(h + i)].as_ptr();
             unsafe {
-                (*e).1 = responses[i].clone();
+                (*e).1 = Some(responses[i].clone());
             }
         }
 
@@ -145,7 +149,7 @@ where
         };
 
         if h > t {
-            panic!("Head of thread-local batch has advanced beyond tail!");
+            panic!("Combiner Head of thread-local batch has advanced beyond tail!");
         }
 
         // Iterate from `comb` to `tail`, adding pending operations into the
@@ -156,8 +160,10 @@ where
                 break;
             };
 
+            // By construction, we know that everything between `comb` and `tail` is a
+            // valid operation ready for flat combining. Hence, calling unwrap() here
+            // on the operation is safe.
             unsafe {
-                // enqueue() will always execute before ops(), so its safe to unwarp the Op.
                 buffer.push(
                     (*self.batch[self.index(h)].as_ptr())
                         .0
@@ -166,6 +172,7 @@ where
                         .clone(),
                 );
             }
+
             h += 1;
             n += 1;
         }
@@ -173,35 +180,23 @@ where
         n
     }
 
-    /// Appends any responses/results to enqueued operations into a passed in buffer.
+    /// Returns a single response if available. Otherwise, returns None.
     #[inline(always)]
-    pub fn res(&self, buffer: &mut Vec<Result<R, E>>) {
-        let mut s = self.head.get();
+    pub fn res(&self) -> Option<Result<R, E>> {
+        let s = self.head.get();
         let f = self.comb.get();
 
         // No responses ready yet; return to the caller.
         if s == f {
-            return;
+            return None;
         };
 
         if s > f {
             panic!("Head of thread-local batch has advanced beyond combiner offset!");
         }
 
-        // Iterate from `head` to `comb`, adding responses into the passed in buffer.
-        // Once we're done, update `head` to the value of `comb` we read above.
-        loop {
-            if s == f {
-                break;
-            };
-
-            unsafe {
-                buffer.push((*self.batch[self.index(s)].as_ptr()).1.clone());
-            }
-            s += 1;
-        }
-
-        self.head.set(f);
+        self.head.set(s + 1);
+        unsafe { (*self.batch[self.index(s)].as_ptr()).1.clone() }
     }
 
     /// Returns the maximum number of operations that will go pending on this context.
@@ -269,10 +264,10 @@ mod test {
         assert_eq!(c.head.get(), 0);
         assert_eq!(c.comb.get(), 16);
 
-        assert_eq!(c.batch[12].get().1, r[0]);
-        assert_eq!(c.batch[13].get().1, r[1]);
-        assert_eq!(c.batch[14].get().1, r[2]);
-        assert_eq!(c.batch[15].get().1, r[3]);
+        assert_eq!(c.batch[12].get().1, Some(r[0]));
+        assert_eq!(c.batch[13].get().1, Some(r[1]));
+        assert_eq!(c.batch[14].get().1, Some(r[2]));
+        assert_eq!(c.batch[15].get().1, Some(r[3]));
     }
 
     // Tests that attempting to enqueue an empty batch of responses on the context
@@ -289,6 +284,8 @@ mod test {
         assert_eq!(c.tail.get(), 16);
         assert_eq!(c.head.get(), 0);
         assert_eq!(c.comb.get(), 12);
+
+        assert_eq!(c.batch[12].get().1, None);
     }
 
     // Tests whether ops() can successfully retrieve operations enqueued on this context.
@@ -328,42 +325,69 @@ mod test {
         assert_eq!(c.comb.get(), 8);
     }
 
+    // Tests whether ops() panics if the combiner head advances beyond the tail.
+    #[test]
+    #[should_panic]
+    fn test_context_ops_panic() {
+        let c = Context::<usize, usize, ()>::default();
+        let mut o = vec![];
+
+        c.tail.set(6);
+        c.comb.set(9);
+
+        assert_eq!(c.ops(&mut o), 0);
+    }
+
     // Tests whether we can retrieve responses enqueued on this context.
     #[test]
     fn test_context_res() {
         let c = Context::<u64, u64, ()>::default();
         let r = [Ok(11), Ok(12), Ok(13), Ok(14)];
-        let mut o = vec![];
 
         c.tail.set(16);
         c.enqueue_resps(&r);
-        c.res(&mut o);
 
         assert_eq!(c.tail.get(), 16);
-        assert_eq!(c.head.get(), 4);
         assert_eq!(c.comb.get(), 4);
 
-        assert_eq!(o.len(), 4);
-        assert_eq!(o[0], r[0]);
-        assert_eq!(o[1], r[1]);
-        assert_eq!(o[2], r[2]);
-        assert_eq!(o[3], r[3]);
+        assert_eq!(c.res(), Some(r[0]));
+        assert_eq!(c.head.get(), 1);
+
+        assert_eq!(c.res(), Some(r[1]));
+        assert_eq!(c.head.get(), 2);
+
+        assert_eq!(c.res(), Some(r[2]));
+        assert_eq!(c.head.get(), 3);
+
+        assert_eq!(c.res(), Some(r[3]));
+        assert_eq!(c.head.get(), 4);
     }
 
     // Tests that we cannot retrieve responses when none were enqueued to begin with.
     #[test]
     fn test_context_res_empty() {
         let c = Context::<usize, usize, ()>::default();
-        let mut o = vec![];
 
         c.tail.set(8);
-        c.res(&mut o);
 
         assert_eq!(c.tail.get(), 8);
         assert_eq!(c.head.get(), 0);
         assert_eq!(c.comb.get(), 0);
 
-        assert_eq!(o.len(), 0);
+        assert_eq!(c.res(), None);
+    }
+
+    // Tests that res panics if the head moves beyond the combiner offset.
+    #[test]
+    #[should_panic]
+    fn test_context_res_panic() {
+        let c = Context::<usize, usize, ()>::default();
+
+        c.tail.set(8);
+        c.comb.set(4);
+        c.head.set(6);
+
+        assert_eq!(c.res(), None);
     }
 
     // Tests that batch_size() works correctly.

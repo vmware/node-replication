@@ -102,7 +102,7 @@ impl Default for Response {
 }
 
 /// Potential errors from the file-system
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub enum ResponseError {
     Err(Error),
 }
@@ -350,7 +350,7 @@ fn memfs_single_threaded(c: &mut Criterion) {
     let _r = env_logger::try_init();
 
     const LOG_SIZE_BYTES: usize = 16 * 1024 * 1024;
-    const NOP: usize = 100;
+    const NOP: usize = 50;
     const WRITE_RATIO: usize = 10; //% out of 100
 
     let ops = generate_fs_operations(NOP, WRITE_RATIO);
@@ -361,7 +361,7 @@ fn memfs_single_threaded(c: &mut Criterion) {
 fn memfs_scale_out(c: &mut Criterion) {
     let _r = env_logger::try_init();
 
-    const NOP: usize = 100;
+    const NOP: usize = 50;
     const WRITE_RATIO: usize = 10; //% out of 100
 
     let ops = generate_fs_operations(NOP, WRITE_RATIO);
@@ -375,27 +375,15 @@ fn memfs_scale_out(c: &mut Criterion) {
             c,
             "memfs-scaleout",
             |_cid, rid, _log, replica, ops, _batch_size| {
-                let mut o = vec![];
                 for op in ops {
                     match op {
                         Operation::ReadOperation(o) => {
-                            replica.execute_ro(*o, rid);
+                            replica.execute_ro(*o, rid).unwrap();
                         }
                         Operation::WriteOperation(o) => {
-                            replica.execute(*o, rid);
+                            replica.execute(*o, rid).unwrap();
                         }
                     }
-                    let mut i = 1;
-                    while replica.get_responses(rid, &mut o) == 0 {
-                        if i % mkbench::WARN_THRESHOLD == 0 {
-                            log::warn!(
-                                "{:?} Waiting too long for get_responses",
-                                std::thread::current().id()
-                            );
-                        }
-                        i += 1;
-                    }
-                    o.clear();
                 }
             },
         );

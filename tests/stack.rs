@@ -112,7 +112,6 @@ fn sequential_test() {
 
     let r = Replica::<Stack>::new(&log);
     let idx = r.register().expect("Failed to register with Replica.");
-    let mut o = vec![];
     let mut correct_stack: Vec<u32> = Vec::new();
     let mut correct_popped: Vec<Option<u32>> = Vec::new();
     let mut correct_peeked: Vec<Option<u32>> = Vec::new();
@@ -120,9 +119,7 @@ fn sequential_test() {
     // Populate with some initial data
     for _i in 0..50 {
         let element = orng.gen();
-        r.execute(OpWr::Push(element), idx);
-        r.get_responses(idx, &mut o);
-        o.clear();
+        r.execute(OpWr::Push(element), idx).unwrap();
         correct_stack.push(element);
     }
 
@@ -130,12 +127,10 @@ fn sequential_test() {
         let op: usize = orng.gen();
         match op % 3usize {
             0usize => {
-                r.execute(OpWr::Pop, idx);
-                while r.get_responses(idx, &mut o) == 0 {}
+                let o = r.execute(OpWr::Pop, idx);
                 let popped = correct_stack.pop();
 
-                assert_eq!(o.len(), 1);
-                match o[0] {
+                match o {
                     Ok(element) => assert_eq!(popped, element),
                     Err(_) => {}
                 }
@@ -143,25 +138,20 @@ fn sequential_test() {
             }
             1usize => {
                 let element = orng.gen();
-                r.execute(OpWr::Push(element), idx);
-                while r.get_responses(idx, &mut o) == 0 {}
-                assert_eq!(o.len(), 1);
-                match o[0] {
+                match r.execute(OpWr::Push(element), idx) {
                     Ok(ele) => assert_eq!(Some(element), ele),
                     Err(_) => {}
                 }
                 correct_stack.push(element);
             }
             2usize => {
-                r.execute_ro(OpRd::Peek, idx);
+                let o = r.execute_ro(OpRd::Peek, idx);
                 let mut ele = None;
                 let len = correct_stack.len();
                 if len > 0 {
                     ele = Some(correct_stack[len - 1]);
                 }
-                while r.get_responses(idx, &mut o) == 0 {}
-                assert_eq!(o.len(), 1);
-                match o[0] {
+                match o {
                     Ok(element) => assert_eq!(ele, element),
                     Err(_) => {}
                 }
@@ -169,7 +159,6 @@ fn sequential_test() {
             }
             _ => unreachable!(),
         }
-        o.clear();
     }
 
     let v = |data: &Stack| {
@@ -334,14 +323,13 @@ fn parallel_push_sequential_pop_test() {
                 let idx = replica
                     .register()
                     .expect("Failed to register with replica.");
-                let mut o = vec![];
 
                 // 1. Insert phase
                 b.wait();
                 for i in 0..nop {
-                    replica.execute(OpWr::Push((i as u32) << 16 | tid), idx);
-                    while replica.get_responses(idx, &mut o) == 0 {}
-                    o.clear();
+                    replica
+                        .execute(OpWr::Push((i as u32) << 16 | tid), idx)
+                        .unwrap();
                 }
             });
             threads.push(child);
@@ -359,16 +347,10 @@ fn parallel_push_sequential_pop_test() {
     // Verify by popping everything off all replicas:
     for i in 0..r {
         let replica = replicas[i].clone();
-        let mut o = vec![];
         for _j in 0..t {
             for _z in 0..nop {
-                replica.execute_ro(OpRd::Peek, i + 1);
-                replica.get_responses(i + 1, &mut o);
-                o.clear();
-
-                replica.execute(OpWr::Pop, i + 1);
-                replica.get_responses(i + 1, &mut o);
-                o.clear();
+                replica.execute_ro(OpRd::Peek, i + 1).unwrap();
+                replica.execute(OpWr::Pop, i + 1).unwrap();
             }
         }
     }
@@ -406,26 +388,20 @@ fn parallel_push_and_pop_test() {
                 let idx = replica
                     .register()
                     .expect("Failed to register with replica.");
-                let mut o = vec![];
 
                 // 1. Insert phase
                 b.wait();
                 for i in 0..nop {
-                    replica.execute(OpWr::Push((i as u32) << 16 | tid), idx);
-                    while replica.get_responses(idx, &mut o) == 0 {}
-                    o.clear();
+                    replica
+                        .execute(OpWr::Push((i as u32) << 16 | tid), idx)
+                        .unwrap();
                 }
 
                 // 2. Dequeue phase, verification
                 b.wait();
                 for _i in 0..nop {
-                    replica.execute_ro(OpRd::Peek, idx);
-                    while replica.get_responses(idx, &mut o) == 0 {}
-                    o.clear();
-
-                    replica.execute(OpWr::Pop, idx);
-                    while replica.get_responses(idx, &mut o) == 0 {}
-                    o.clear();
+                    replica.execute_ro(OpRd::Peek, idx).unwrap();
+                    replica.execute(OpWr::Pop, idx).unwrap();
                 }
             });
             threads.push(child);
@@ -444,7 +420,6 @@ fn parallel_push_and_pop_test() {
 fn bench(r: Arc<Replica<Stack>>, nop: usize, barrier: Arc<Barrier>) -> (u64, u64) {
     let idx = r.register().expect("Failed to register with Replica.");
 
-    let mut o = vec![];
     let mut orng = thread_rng();
     let mut arng = thread_rng();
 
@@ -460,9 +435,7 @@ fn bench(r: Arc<Replica<Stack>>, nop: usize, barrier: Arc<Barrier>) -> (u64, u64
     barrier.wait();
 
     for i in 0..nop {
-        r.execute(ops[i], idx);
-        while r.get_responses(idx, &mut o) == 0 {}
-        o.clear();
+        r.execute(ops[i], idx).unwrap();
     }
 
     barrier.wait();

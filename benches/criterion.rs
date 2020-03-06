@@ -59,27 +59,15 @@ fn stack_scale_out(c: &mut Criterion) {
             c,
             "stack-scaleout",
             |_cid, rid, _log, replica, ops, _batch_size| {
-                let mut o = vec![];
                 for op in ops {
                     match op {
                         Operation::ReadOperation(o) => {
-                            replica.execute_ro(*o, rid);
+                            replica.execute_ro(*o, rid).unwrap();
                         }
                         Operation::WriteOperation(o) => {
-                            replica.execute(*o, rid);
+                            replica.execute(*o, rid).unwrap();
                         }
                     }
-                    let mut i = 1;
-                    while replica.get_responses(rid, &mut o) == 0 {
-                        if i % mkbench::WARN_THRESHOLD == 0 {
-                            log::warn!(
-                                "{:?} Waiting too long for get_responses",
-                                std::thread::current().id()
-                            );
-                        }
-                        i += 1;
-                    }
-                    o.clear();
                 }
             },
         );
@@ -118,30 +106,17 @@ fn synthetic_scale_out(c: &mut Criterion) {
             c,
             "synthetic-scaleout",
             |cid, rid, _log, replica, ops, _batch_size| {
-                let mut o = vec![];
                 for op in ops {
                     match op {
                         Operation::ReadOperation(mut o) => {
                             o.set_tid(cid as usize);
-                            replica.execute_ro(o, rid);
+                            replica.execute_ro(o, rid).unwrap();
                         }
                         Operation::WriteOperation(mut o) => {
                             o.set_tid(cid as usize);
-                            replica.execute(o, rid);
+                            replica.execute(o, rid).unwrap();
                         }
                     }
-
-                    let mut i = 1;
-                    while replica.get_responses(rid, &mut o) == 0 {
-                        if i % mkbench::WARN_THRESHOLD == 0 {
-                            log::warn!(
-                                "{:?} Waiting too long for get_responses",
-                                std::thread::current().id()
-                            );
-                        }
-                        i += 1;
-                    }
-                    o.clear();
                 }
             },
         );
@@ -188,29 +163,16 @@ fn hashmap_scale_out(c: &mut Criterion) {
             c,
             "hashmap-scaleout",
             |cid, rid, _log, replica, ops, _batch_size| {
-                let mut o = vec![];
                 for op in ops {
                     match op {
                         Operation::ReadOperation(op) => {
-                            replica.execute_ro(*op, rid);
+                            replica.execute_ro(*op, rid).unwrap();
                         }
                         Operation::WriteOperation(op) => {
-                            replica.execute(*op, rid);
+                            replica.execute(*op, rid).unwrap();
                         }
-                    }
-
-                    let mut i = 1;
-                    while replica.get_responses(rid, &mut o) == 0 {
-                        if i % mkbench::WARN_THRESHOLD == 0 {
-                            log::warn!(
-                                "{:?} Waiting too long for get_responses",
-                                std::thread::current().id()
-                            );
-                        }
-                        i += 1;
                     }
                 }
-                o.clear();
             },
         );
 }
