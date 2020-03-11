@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Defines a hash-map that can be replicated.
+#![feature(test)]
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -13,7 +14,11 @@ use zipf::ZipfDistribution;
 
 use node_replication::Dispatch;
 
-use crate::utils::Operation;
+mod mkbench;
+mod utils;
+
+use utils::benchmark::*;
+use utils::Operation;
 
 /// Operations we can perform on the stack.
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
@@ -123,4 +128,66 @@ pub fn generate_operations(
 
     ops.shuffle(&mut t_rng);
     ops
+}
+
+/// Compare a replicated hashmap against a single-threaded implementation.
+fn hashmap_single_threaded(c: &mut TestHarness) {
+    env_logger::try_init();
+
+    // How many operations per iteration
+    const NOP: usize = 1_000;
+    // Size of the log.
+    const LOG_SIZE_BYTES: usize = 2 * 1024 * 1024;
+    // Biggest key in the hash-map
+    const KEY_SPACE: usize = 10_000;
+    // Key distribution
+    const UNIFORM: &'static str = "uniform";
+    //const SKEWED: &'static str = "skewed";
+    // Read/Write ratio
+    let write_ratio = 10; //% out of 100
+
+    let ops = hashmap::generate_operations(NOP, write_ratio, KEY_SPACE, UNIFORM);
+    mkbench::baseline_comparison::<hashmap::NrHashMap>(c, "hashmap", ops, LOG_SIZE_BYTES);
+}
+
+/// Compare scale-out behaviour of synthetic data-structure.
+fn hashmap_scale_out(c: &mut TestHarness) {
+    env_logger::try_init();
+
+    // How many operations per iteration
+    const NOP: usize = 515_000;
+    // Biggest key in the hash-map
+    const KEY_SPACE: usize = 5_000_000;
+    // Key distribution
+    const UNIFORM: &'static str = "uniform";
+    //const SKEWED: &'static str = "skewed";
+    // Read/Write ratio
+    const WRITE_RATIO: usize = 0; //% out of 100
+
+    let ops = crate::hashmap::generate_operations(NOP, WRITE_RATIO, KEY_SPACE, UNIFORM);
+    mkbench::ScaleBenchBuilder::<hashmap::NrHashMap>::new(ops)
+        .machine_defaults()
+        .configure(
+            c,
+            "hashmap-scaleout",
+            |cid, rid, _log, replica, ops, _batch_size| {
+                for op in ops {
+                    match op {
+                        Operation::ReadOperation(op) => {
+                            replica.execute_ro(*op, rid).unwrap();
+                        }
+                        Operation::WriteOperation(op) => {
+                            replica.execute(*op, rid).unwrap();
+                        }
+                    }
+                }
+            },
+        );
+}
+
+fn main() {
+    let mut harness = Default::default();
+
+    hashmap_single_threaded(&mut harness);
+    hashmap_scale_out(&mut harness);
 }

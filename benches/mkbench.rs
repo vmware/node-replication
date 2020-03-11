@@ -14,6 +14,7 @@ use std::cell::RefMut;
 use std::collections::HashMap;
 use std::fmt;
 use std::fs::OpenOptions;
+use std::hint::black_box;
 use std::io::Write;
 use std::path::Path;
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -21,13 +22,13 @@ use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc, Barrier, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use criterion::{black_box, BenchmarkId, Criterion, Throughput};
 use csv::WriterBuilder;
 use log::*;
 use node_replication::{log::Log, replica::Replica, Dispatch};
 use serde::Serialize;
 
 use crate::utils;
+use crate::utils::benchmark::*;
 use crate::utils::topology::*;
 use crate::utils::Operation;
 
@@ -46,7 +47,6 @@ type BenchFn<T> = fn(
     usize,
     &Arc<Log<'static, <T as Dispatch>::WriteOperation>>,
     &Arc<Replica<T>>,
-    &Vec<Operation<<T as Dispatch>::ReadOperation, <T as Dispatch>::WriteOperation>>,
     usize,
 );
 
@@ -58,8 +58,8 @@ type BenchFn<T> = fn(
 /// Then configures the supplied criterion runner to do two benchmarks:
 /// - Running the DS operations on a single-thread directly against the DS.
 /// - Running the DS operation on a single-thread but go through a replica/log.
-pub fn baseline_comparison<T: Dispatch + Default + Sync>(
-    c: &mut Criterion,
+pub(crate) fn baseline_comparison<T: Dispatch + Default + Sync>(
+    c: &mut TestHarness,
     name: &str,
     ops: Vec<Operation<<T as Dispatch>::ReadOperation, <T as Dispatch>::WriteOperation>>,
     log_size_bytes: usize,
@@ -71,7 +71,6 @@ pub fn baseline_comparison<T: Dispatch + Default + Sync>(
 
     // First benchmark is just a stack on a single thread:
     let mut group = c.benchmark_group(name);
-    group.throughput(Throughput::Elements(ops.len() as u64));
     group.bench_function("baseline", |b| {
         b.iter(|| {
             for i in 0..ops.len() {
@@ -84,6 +83,7 @@ pub fn baseline_comparison<T: Dispatch + Default + Sync>(
                     }
                 }
             }
+            ops.len()
         })
     });
 
@@ -104,6 +104,7 @@ pub fn baseline_comparison<T: Dispatch + Default + Sync>(
                     }
                 }
             }
+            ops.len()
         })
     });
 
@@ -169,15 +170,13 @@ where
     ts: usize,
     /// Replica <-> Thread/Cpu mapping as used by the benchmark.
     rm: HashMap<usize, Vec<Cpu>>,
-    /// An Arc reference to operations executed on the log.
-    operations: Vec<Operation<<T as Dispatch>::ReadOperation, <T as Dispatch>::WriteOperation>>,
     /// An Arc reference to the log.
     log: Arc<Log<'static, <T as Dispatch>::WriteOperation>>,
-    /// Results of the benchmark we map the #iteration to a list of per-thread runtimes.
-    /// It's a hash-map to ensure it acts like a cache i.e., we ensure to only save the latest
-    /// iteration numbers (so we avoid storing the warm-up results).
+    /// Results of the benchmark we map the #iteration to a list of per-thread oepration count.
+    /// It's a hash-map so it acts like a cache i.e., we ensure to only save the latest
+    /// experiement for a specific duration (avoids storing the warm-up results).
     /// It has to be a Mutex because we can only access a RO version of ScaleBenchmark at execution time.
-    results: Mutex<HashMap<u64, Vec<(Core, Duration)>>>,
+    results: Mutex<HashMap<Duration, Vec<(Core, usize)>>>,
     /// Batch-size (passed as a parameter to benchmark funtion `f`)
     batch_size: usize,
     /// If we should wait at the end and periodically process the log
@@ -187,9 +186,9 @@ where
     /// Benchmark function to execute
     f: BenchFn<T>,
     /// A series of channels to communicate iteration count to every worker.
-    cmd_channels: Vec<Sender<u64>>,
+    cmd_channels: Vec<Sender<Duration>>,
     /// A result channel
-    result_channel: (Sender<(Core, Duration)>, Receiver<(Core, Duration)>),
+    result_channel: (Sender<(Core, usize)>, Receiver<(Core, usize)>),
     /// Thread handles
     handles: Vec<JoinHandle<()>>,
 }
@@ -211,7 +210,6 @@ where
         rs: ReplicaStrategy,
         tm: ThreadMapping,
         ts: usize,
-        operations: Vec<Operation<<T as Dispatch>::ReadOperation, <T as Dispatch>::WriteOperation>>,
         batch_size: usize,
         sync: bool,
         log: Arc<Log<'static, <T as Dispatch>::WriteOperation>>,
@@ -223,7 +221,6 @@ where
             tm,
             ts,
             rm: ScaleBenchmark::<T>::replica_core_allocation(topology, rs, tm, ts),
-            operations,
             log,
             results: Default::default(),
             batch_size,
@@ -249,7 +246,8 @@ where
     /// Terminate the worker threads by sending 0 to the iter channel:
     fn terminate(&self) -> std::io::Result<()> {
         for tx in self.cmd_channels.iter() {
-            tx.send(0).expect("Can't send termination.");
+            tx.send(Duration::from_secs(0))
+                .expect("Can't send termination.");
         }
 
         // Log the per-thread runtimes to the CSV file
@@ -273,8 +271,8 @@ where
             .has_headers(write_headers)
             .from_writer(csv_file);
 
-        for (iter, core_durations) in results.iter() {
-            for (tid, (cid, duration)) in core_durations.iter().enumerate() {
+        for (duration, core_iterations) in results.iter() {
+            for (tid, (cid, iterations)) in core_iterations.iter().enumerate() {
                 #[derive(Serialize)]
                 struct Record {
                     name: String,
@@ -282,10 +280,10 @@ where
                     tm: ThreadMapping,
                     batch_size: usize,
                     threads: usize,
-                    iter: u64,
+                    duration: f64,
                     thread_id: usize,
                     core_id: u64,
-                    duration: f64,
+                    iterations: usize,
                 };
 
                 let record = Record {
@@ -294,10 +292,10 @@ where
                     tm: self.tm,
                     batch_size: self.batch_size,
                     threads: self.ts,
-                    iter: *iter,
+                    duration: duration.as_secs_f64(),
                     thread_id: tid,
                     core_id: *cid,
-                    duration: duration.as_secs_f64(),
+                    iterations: *iterations,
                 };
                 wtr.serialize(record);
             }
@@ -311,7 +309,7 @@ where
     /// then waits to receive the respective duration from the workers
     /// finally it returns the minimal Duration over all threads
     /// after ensuring the run was fair.
-    fn execute(&self, iters: u64, reset_log: bool) -> Duration {
+    fn execute(&self, duration: Duration, reset_log: bool) -> usize {
         if reset_log {
             unsafe {
                 self.log.reset();
@@ -319,37 +317,35 @@ where
         }
 
         for tx in self.cmd_channels.iter() {
-            tx.send(iters).expect("Can't send iter.");
+            tx.send(duration).expect("Can't send iter.");
         }
 
         // Wait for all threads to finish and gather runtimes
-        let mut durations: Vec<(Core, Duration)> = Vec::with_capacity(self.threads());
+        let mut core_iteratios: Vec<(Core, usize)> = Vec::with_capacity(self.threads());
         for i in 0..self.threads() {
-            let core_duration: (Core, Duration) = self
+            let core_ops: (Core, usize) = self
                 .result_channel
                 .1
                 .recv()
-                .expect("Can't receive a Duration?");
-            durations.push(core_duration);
+                .expect("Can't receive a per-thread result?");
+            core_iteratios.push(core_ops);
         }
 
         // Sort floats to get min/max, can't just do sort() because floats are weird:
-        durations.sort_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let min_thread_duration: f64 = durations
-            .first()
-            .unwrap_or(&Default::default())
-            .1
-            .as_secs_f64();
-        let max_thread_duration: f64 = durations
-            .last()
-            .unwrap_or(&Default::default())
-            .1
-            .as_secs_f64();
+        core_iteratios.sort_by(|(_, a), (_, b)| a.cmp(b));
+        let min_thread_ops: usize = core_iteratios.first().unwrap_or(&Default::default()).1;
+        let max_thread_ops: usize = core_iteratios.last().unwrap_or(&Default::default()).1;
+        info!(
+            "Thread fairness = {:?}",
+            min_thread_ops / (max_thread_ops + 1)
+        );
 
         let mut results = self.results.lock().unwrap();
-        results.insert(iters, durations.clone());
-        let average = durations.iter().map(|(_, d)| d).sum::<Duration>() / durations.len() as u32;
-        average
+        results.insert(duration, core_iteratios.clone());
+        core_iteratios
+            .iter()
+            .map(|(cid, iters)| iters)
+            .sum::<usize>()
     }
 
     fn alloc_replicas(&self, replicas: &mut Vec<Arc<Replica<T>>>) {
@@ -388,26 +384,27 @@ where
                 let b = barrier.clone();
                 let log: Arc<_> = self.log.clone();
                 let replica = replicas[rid].clone();
-                let operations = self.operations.clone();
                 let f = self.f.clone();
                 let batch_size = self.batch_size;
                 let replica_token = replica
                     .register()
                     .expect("Can't register replica, out of slots?");
 
-                let (iter_tx, iter_rx) = channel();
-                self.cmd_channels.push(iter_tx);
+                let (duration_tx, duration_rx) = channel();
+                self.cmd_channels.push(duration_tx);
                 let result_channel = self.result_channel.0.clone();
 
                 let com = complete.clone();
                 let nre = replicas.len();
                 let rmc = self.rm.clone();
 
+                let start_time = Instant::now();
+
                 self.handles.push(thread::spawn(move || {
                     utils::pin_thread(core_id);
                     loop {
-                        let iters = iter_rx.recv().expect("Can't get iter from channel?");
-                        if iters == 0 {
+                        let duration = duration_rx.recv().expect("Can't get iter from channel?");
+                        if duration.as_nanos() == 0 {
                             debug!(
                                 "Finished with this ScaleBench, worker thread {} is done.",
                                 tid
@@ -416,62 +413,35 @@ where
                         }
 
                         debug!(
-                            "Running {:?} on core {} replica#{} rtoken#{} iters={}",
+                            "Running {:?} on core {} replica#{} rtoken#{} for {:?}",
                             thread::current().id(),
                             core_id,
                             rid,
                             replica_token,
-                            iters
+                            duration
                         );
 
+                        let end_experiment = start_time + duration;
+
                         b.wait();
-                        let start = Instant::now();
-                        for _i in 0..iters {
-                            black_box((f)(
-                                core_id,
-                                replica_token,
-                                &log,
-                                &replica,
-                                &operations,
-                                batch_size,
-                            ));
+                        let mut operations_completed: usize = 0;
+                        while Instant::now() < end_experiment {
+                            black_box((f)(core_id, replica_token, &log, &replica, batch_size));
+                            operations_completed += 1;
                         }
-                        let elapsed = start.elapsed();
 
                         debug!(
-                            "Completed {:?} on core {} replica#{} rtoken#{} in {:?}",
+                            "Completed {:?} on core {} replica#{} rtoken#{} did {} ops in {:?}",
                             thread::current().id(),
                             core_id,
                             rid,
                             replica_token,
-                            elapsed
+                            operations_completed,
+                            duration
                         );
 
-                        result_channel.send((core_id, elapsed));
-                        if !do_sync {
-                            b.wait();
-                            continue;
-                        } else if com[rid].fetch_add(1, Ordering::Relaxed) == num - 1 {
-                            // Periodically sync/advance all, and return once all
-                            // replicas have completed.
-                            loop {
-                                let mut done = 0; // How many replicas are done with the operations
-                                for (r, c) in rmc.clone().into_iter() {
-                                    if com[r].load(Ordering::Relaxed) == c.len() {
-                                        done += 1;
-                                    }
-                                }
-                                if done == nre {
-                                    break;
-                                }
-
-                                // Consume the log but we don't apply operations anymore
-                                replica.sync(|_o: <T as Dispatch>::WriteOperation, _r: usize| {});
-                            }
-                        }
-
+                        result_channel.send((core_id, operations_completed));
                         b.wait();
-                        com[rid].store(0, Ordering::Relaxed);
                     }
                 }));
 
@@ -565,13 +535,7 @@ where
 
 /// A generic benchmark configurator for node-replication scalability benchmarks.
 #[derive(Debug)]
-pub struct ScaleBenchBuilder<T: Dispatch + Default>
-where
-    <T as node_replication::Dispatch>::WriteOperation: std::marker::Send,
-    <T as node_replication::Dispatch>::Response: std::marker::Send,
-    <T as node_replication::Dispatch>::ReadOperation: std::marker::Send,
-    T: 'static + std::marker::Sync,
-{
+pub struct ScaleBenchBuilder {
     /// Replica granularity.
     replica_strategies: Vec<ReplicaStrategy>,
     /// Thread assignments.
@@ -584,32 +548,18 @@ where
     sync: bool,
     /// Log size (bytes).
     log_size: usize,
-    /// Operations executed on the log.
-    operations: Vec<Operation<<T as Dispatch>::ReadOperation, <T as Dispatch>::WriteOperation>>,
     /// Reset the log between different `execute`
     /// If we have many ops and do tests where there is no GC, we may starve
     reset_log: bool,
 }
 
-impl<T: Dispatch + Default> ScaleBenchBuilder<T>
-where
-    <T as node_replication::Dispatch>::WriteOperation: std::marker::Send,
-    <T as node_replication::Dispatch>::WriteOperation: std::marker::Sync,
-    <T as node_replication::Dispatch>::ReadOperation: std::marker::Sync,
-    <T as node_replication::Dispatch>::ReadOperation: std::marker::Send,
-    <T as node_replication::Dispatch>::Response: std::marker::Send,
-    <T as node_replication::Dispatch>::ResponseError: std::marker::Send,
-    T: 'static,
-    T: std::marker::Send + std::marker::Sync,
-{
+impl ScaleBenchBuilder {
     /// Initialize an "empty" ScaleBenchBuilder with a  MiB log.
     ///
     /// By default this won't execute any runs,
     /// you have to at least call `threads`, `thread_mapping`
     /// `replica_strategy` once and set `operations`.
-    pub fn new(
-        ops: Vec<Operation<<T as Dispatch>::ReadOperation, <T as Dispatch>::WriteOperation>>,
-    ) -> ScaleBenchBuilder<T> {
+    pub fn new() -> ScaleBenchBuilder {
         ScaleBenchBuilder {
             replica_strategies: Vec::new(),
             thread_mappings: Vec::new(),
@@ -617,7 +567,6 @@ where
             batches: vec![1usize],
             sync: true,
             log_size: 1024 * 1024 * 2,
-            operations: ops,
             reset_log: false,
         }
     }
@@ -628,8 +577,8 @@ where
         let max_cores = topology.cores();
 
         self.thread_mapping(ThreadMapping::Sequential);
-        self.replica_strategy(ReplicaStrategy::One);
-        self.replica_strategy(ReplicaStrategy::Socket);
+        //self.replica_strategy(ReplicaStrategy::One);
+        //self.replica_strategy(ReplicaStrategy::Socket);
         self.replica_strategy(ReplicaStrategy::L1);
 
         // On larger machines thread increments are bigger than on
@@ -724,9 +673,20 @@ where
     /// as many benchmarks as result from the configuration options set in the
     /// ScaleBenchBuilder arguments.
     ///
-    /// Criterion will be configured to create a run for every
+    /// TestHarness will be configured to create a run for every
     /// possible triplet: (replica strategy, thread mapping, #threads).
-    pub fn configure(&self, c: &mut Criterion, name: &str, f: BenchFn<T>) {
+    pub(crate) fn configure<T: Dispatch + Default>(
+        &self,
+        c: &mut TestHarness,
+        name: &str,
+        f: BenchFn<T>,
+    ) where
+        <T as node_replication::Dispatch>::WriteOperation: std::marker::Send + std::marker::Sync,
+        <T as node_replication::Dispatch>::ReadOperation: std::marker::Send + std::marker::Sync,
+        <T as node_replication::Dispatch>::Response: std::marker::Send + std::marker::Sync,
+        <T as node_replication::Dispatch>::ResponseError: std::marker::Send + std::marker::Sync,
+        T: 'static + std::marker::Send + std::marker::Sync,
+    {
         let topology = MachineTopology::new();
         utils::disable_dvfs();
 
@@ -743,7 +703,6 @@ where
                             *rs,
                             *tm,
                             *ts,
-                            self.operations.to_vec(),
                             *b,
                             self.sync,
                             log.clone(),
@@ -752,12 +711,11 @@ where
                         runner.startup();
 
                         let name = format!("{:?} {:?} BS={}", *rs, *tm, *b);
-                        group.throughput(Throughput::Elements((self.operations.len() * ts) as u64));
                         group.bench_with_input(
                             BenchmarkId::new(name, *ts),
                             &runner,
                             |cb, runner| {
-                                cb.iter_custom(|iters| runner.execute(iters, self.reset_log))
+                                cb.iter_custom(|duration| runner.execute(duration, self.reset_log))
                             },
                         );
 

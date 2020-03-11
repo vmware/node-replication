@@ -2,14 +2,19 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Defines a stack data-structure that can be replicated.
+#![allow(unused)]
+#![feature(test)]
 
 use std::cell::RefCell;
 
+use node_replication::Dispatch;
 use rand::{thread_rng, Rng};
 
-use node_replication::Dispatch;
+mod mkbench;
+mod utils;
 
-use crate::utils::Operation;
+use utils::benchmark::*;
+use utils::Operation;
 
 /// Operations we can perform on the stack.
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
@@ -97,4 +102,48 @@ pub fn generate_operations(nop: usize) -> Vec<Operation<OpRd, OpWr>> {
     }
 
     ops
+}
+
+/// Compare against a stack with and without a log in-front.
+fn stack_single_threaded(c: &mut TestHarness) {
+    env_logger::try_init();
+
+    // Benchmark operations per iteration
+    const NOP: usize = 1_000;
+    // Log size
+    const LOG_SIZE_BYTES: usize = 2 * 1024 * 1024;
+
+    let ops = generate_operations(NOP);
+    mkbench::baseline_comparison::<Stack>(c, "stack", ops, LOG_SIZE_BYTES);
+}
+
+/// Compare scalability of a node-replicated stack.
+fn stack_scale_out(c: &mut TestHarness) {
+    env_logger::try_init();
+
+    mkbench::ScaleBenchBuilder::new()
+        .machine_defaults()
+        .configure::<Stack>(
+            c,
+            "stack-scaleout",
+            |_cid, rid, _log, replica, _batch_size| {
+                let op = thread_rng().gen::<u8>();
+                let val = thread_rng().gen::<u32>();
+
+                match op % 2u8 {
+                    0u8 => replica.execute(OpWr::Pop, rid).unwrap(),
+                    1u8 => replica.execute(OpWr::Push(val), rid).unwrap(),
+                    _ => unreachable!(),
+                };
+            },
+        );
+}
+
+fn main() {
+    let _r = env_logger::try_init();
+
+    let mut harness = Default::default();
+
+    stack_single_threaded(&mut harness);
+    stack_scale_out(&mut harness);
 }

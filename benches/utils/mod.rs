@@ -5,6 +5,7 @@
 
 use std::fmt::Debug;
 
+pub mod benchmark;
 pub mod topology;
 
 /// A wrapper type to distinguish between arbitrary generated read or write operations

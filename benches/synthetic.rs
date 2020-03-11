@@ -16,7 +16,11 @@ use rand::{thread_rng, Rng};
 
 use node_replication::Dispatch;
 
-use crate::utils::Operation;
+mod mkbench;
+mod utils;
+
+use utils::benchmark::*;
+use utils::Operation;
 
 /// Operations we can perform on the AbstractDataStructure.
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
@@ -290,4 +294,60 @@ pub fn generate_operations(
     }
 
     ops
+}
+
+/// Compare a synthetic benchmark against a single-threaded implementation.
+fn synthetic_single_threaded(c: &mut TestHarness) {
+    env_logger::try_init();
+
+    // How many operations per iteration
+    const NOP: usize = 1_000;
+    // Size of the log.
+    const LOG_SIZE_BYTES: usize = 2 * 1024 * 1024;
+
+    let ops = synthetic::generate_operations(NOP, 0, false, false, true);
+    mkbench::baseline_comparison::<synthetic::AbstractDataStructure>(
+        c,
+        "synthetic",
+        ops,
+        LOG_SIZE_BYTES,
+    );
+}
+
+/// Compare scale-out behaviour of synthetic data-structure.
+fn synthetic_scale_out(c: &mut TestHarness) {
+    env_logger::try_init();
+
+    // How many operations per iteration
+    const NOP: usize = 10_000;
+    // Operations to perform
+    let ops = synthetic::generate_operations(NOP, 0, false, false, true);
+
+    mkbench::ScaleBenchBuilder::<synthetic::AbstractDataStructure>::new(ops)
+        .machine_defaults()
+        .configure(
+            c,
+            "synthetic-scaleout",
+            |cid, rid, _log, replica, ops, _batch_size| {
+                for op in ops {
+                    match op {
+                        Operation::ReadOperation(mut o) => {
+                            o.set_tid(cid as usize);
+                            replica.execute_ro(o, rid).unwrap();
+                        }
+                        Operation::WriteOperation(mut o) => {
+                            o.set_tid(cid as usize);
+                            replica.execute(o, rid).unwrap();
+                        }
+                    }
+                }
+            },
+        );
+}
+
+fn main() {
+    let mut harness = Default::default();
+
+    synthetic_single_threaded(&mut harness);
+    synthetic_scale_out(&mut harness);
 }

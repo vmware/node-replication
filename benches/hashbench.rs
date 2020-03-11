@@ -4,7 +4,6 @@
 
 //! Integration of the rust-evmap benchmarks (https://github.com/jonhoo/rust-evmap/)
 //! for various hash-maps; added a node-replicated and urcu hash-table for comparison.
-
 use chashmap::CHashMap;
 use clap::{crate_version, value_t, App, Arg};
 use rand::distributions::Distribution;

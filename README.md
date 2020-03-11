@@ -110,7 +110,7 @@ theoretically possible (if we are ignoring the overhead of synchronization
 within a replica).
 
 To run these benchmarks execute:
-`RUST_TEST_THREADS=1 cargo bench --bench criterion -- log`
+`RUST_TEST_THREADS=1 cargo bench --bench log`
 
 ### Stack [[data-structure](benches/stack.rs)] [[runner](benches/criterion.rs)]
 
@@ -120,7 +120,7 @@ log/replica), and a benchmark that evaluates the scalability of the stack by
 running with increasing amounts of threads.
 
 To run these benchmarks execute:
-`RUST_TEST_THREADS=1 cargo bench --bench criterion -- stack`
+`RUST_TEST_THREADS=1 cargo bench --bench stack`
 
 ### Hash-map [[data-structure](benches/hashmap.rs)] [[runner](benches/criterion.rs)]
 
@@ -130,7 +130,7 @@ log/replica), and a benchmark that evaluates the scalability of the hash-map by
 running with increasing amounts of threads.
 
 To run these benchmarks execute:
-`RUST_TEST_THREADS=1 cargo bench --bench criterion -- hashmap`
+`RUST_TEST_THREADS=1 cargo bench --bench hashmap`
 
 ### Synthetic data-structure [[data-structure](benches/synthetic.rs)] [[runner](benches/criterion.rs)]
 
@@ -143,12 +143,12 @@ added synchronization and (b) evaluate the scalability of the synthetic
 data-structure. All benchmarks report throughput in ops/s.
 
 To run these benchmarks execute:
-`RUST_TEST_THREADS=1 cargo bench --bench criterion -- synthetic`
+`RUST_TEST_THREADS=1 cargo bench --bench synthetic`
 
 Example: To run a specific benchmark of the synthetic data-structure with 8 threads
 (using one replica, sequential thread mapping, and batch size 1):
 
-`RUST_TEST_THREADS=1 cargo bench --bench criterion -- 'synthetic-scaleout/RS=System TM=Sequential BS=1/8'`
+`RUST_TEST_THREADS=1 cargo bench --bench synthetic -- 'synthetic-scaleout/RS=System TM=Sequential BS=1/8'`
 
 ### VSpace [[src](benches/vspace.rs)]
 
@@ -165,14 +165,6 @@ operations, by using a very simple in-memory file-system ([btfs](https://crates.
 
 To run these benchmarks execute:
 `RUST_TEST_THREADS=1 cargo bench --bench memfs`
-
-### NRbench [[src](benches/nrbench.rs)]
-
-NRbench is a CLI tool that can quickly run a benchmark (stack or synthetic)
-configured by command-line parameters.
-
-Use `RUST_TEST_THREADS=1 cargo bench --bench nrbench -- --help` to see an
-overview of supported configuration.
 
 ### Hashbench [[src](benches/hashbench.rs)]
 
