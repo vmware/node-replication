@@ -392,6 +392,7 @@ where
 
                 let (duration_tx, duration_rx) = channel();
                 self.cmd_channels.push(duration_tx);
+                let com = complete.clone();
                 let result_channel = self.result_channel.0.clone();
 
                 let com = complete.clone();
@@ -421,10 +422,10 @@ where
                             duration
                         );
 
+                        let mut operations_completed: usize = 0;
                         let end_experiment = start_time + duration;
 
                         b.wait();
-                        let mut operations_completed: usize = 0;
                         while Instant::now() < end_experiment {
                             black_box((f)(core_id, replica_token, &log, &replica, batch_size));
                             operations_completed += 1;
@@ -441,7 +442,31 @@ where
                         );
 
                         result_channel.send((core_id, operations_completed));
+                        
+                        if !do_sync {
+                            b.wait();
+                            continue;
+                        } else if com[rid].fetch_add(1, Ordering::Relaxed) == num - 1 {
+                            // Periodically sync/advance all, and return once all
+                            // replicas have completed.
+                            loop {
+                                let mut done = 0; // How many replicas are done with the operations
+                                for (r, c) in rmc.clone().into_iter() {
+                                    if com[r].load(Ordering::Relaxed) == c.len() {
+                                        done += 1;
+                                    }
+                                }
+                                if done == nre {
+                                    break;
+                                }
+
+                                // Consume the log but we don't apply operations anymore
+                                replica.sync(|_o: <T as Dispatch>::WriteOperation, _r: usize| {});
+                            }
+                        }
+
                         b.wait();
+                        com[rid].store(0, Ordering::Relaxed);
                     }
                 }));
 
