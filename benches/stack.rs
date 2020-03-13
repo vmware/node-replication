@@ -28,7 +28,7 @@ pub enum OpWr {
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
 pub enum OpRd {}
 
-/// Single-threaded implementation of the stack
+/// Single-threaded implementation of the stack.
 ///
 /// We just use a vector.
 #[derive(Debug, Clone)]
@@ -71,7 +71,7 @@ impl Dispatch for Stack {
         unreachable!()
     }
 
-    /// Implements how we execute operation from the log against our local stack
+    /// Implements how we execute operations from the log against our local stack
     fn dispatch_mut(
         &mut self,
         op: Self::WriteOperation,
@@ -119,16 +119,14 @@ fn stack_single_threaded(c: &mut TestHarness) {
 
 /// Compare scalability of a node-replicated stack.
 fn stack_scale_out(c: &mut TestHarness) {
-    env_logger::try_init();
-
     mkbench::ScaleBenchBuilder::new()
         .machine_defaults()
         .configure::<Stack>(
             c,
             "stack-scaleout",
-            |_cid, rid, _log, replica, _batch_size| {
-                let op = thread_rng().gen::<u8>();
-                let val = thread_rng().gen::<u32>();
+            |_cid, rid, _log, replica, _batch_size, rng| {
+                let op = rng.gen::<u8>();
+                let val = rng.gen::<u32>();
 
                 match op % 2u8 {
                     0u8 => replica.execute(OpWr::Pop, rid).unwrap(),
@@ -141,7 +139,6 @@ fn stack_scale_out(c: &mut TestHarness) {
 
 fn main() {
     let _r = env_logger::try_init();
-
     let mut harness = Default::default();
 
     stack_single_threaded(&mut harness);

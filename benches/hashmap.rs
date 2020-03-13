@@ -4,12 +4,9 @@
 //! Defines a hash-map that can be replicated.
 #![feature(test)]
 
-use std::cell::RefCell;
 use std::collections::HashMap;
 
-use rand::distributions::Distribution;
-use rand::seq::SliceRandom;
-use rand::{thread_rng, RngCore};
+use rand::{distributions::Distribution, Rng, RngCore};
 use zipf::ZipfDistribution;
 
 use node_replication::Dispatch;
@@ -92,44 +89,36 @@ impl Dispatch for NrHashMap {
 /// Generate a random sequence of operations
 ///
 /// # Arguments
-///  - `nop`: Number of operations to generate
-///  - `write`: true will Put, false will generate Get sequences
-///  - `span`: Maximum key
+///  - `write_ratio`: Probability of generation a write give a value in [0..100]
+///  - `span`: Maximum key-space
 ///  - `distribution`: Supported distribution 'uniform' or 'skewed'
-pub fn generate_operations(
-    nop: usize,
+pub fn generate_operation(
+    rng: &mut rand::rngs::SmallRng,
     write_ratio: usize,
     span: usize,
     distribution: &'static str,
-) -> Vec<Operation<OpRd, OpWr>> {
+) -> Operation<OpRd, OpWr> {
     assert!(distribution == "skewed" || distribution == "uniform");
-
-    use rand::Rng;
-    let mut ops = Vec::with_capacity(nop);
 
     let skewed = distribution == "skewed";
     let mut t_rng = rand::thread_rng();
-    let mut zipf = ZipfDistribution::new(span, 1.03).unwrap();
+    let zipf = ZipfDistribution::new(span, 1.03).unwrap();
 
-    for idx in 0..nop {
-        let id = if skewed {
-            zipf.sample(&mut t_rng) as u64
-        } else {
-            // uniform
-            t_rng.gen_range(0, span as u64)
-        };
+    let id = if skewed {
+        zipf.sample(&mut t_rng) as u64
+    } else {
+        // uniform
+        t_rng.gen_range(0, span as u64)
+    };
 
-        if idx % 100 < write_ratio {
-            ops.push(Operation::WriteOperation(OpWr::Put(id, t_rng.next_u64())));
-        } else {
-            ops.push(Operation::ReadOperation(OpRd::Get(id)));
-        }
+    if rng.gen::<usize>() % 100 < write_ratio {
+        Operation::WriteOperation(OpWr::Put(id, t_rng.next_u64()))
+    } else {
+        Operation::ReadOperation(OpRd::Get(id))
     }
-
-    ops.shuffle(&mut t_rng);
-    ops
 }
 
+/*
 /// Compare a replicated hashmap against a single-threaded implementation.
 fn hashmap_single_threaded(c: &mut TestHarness) {
     env_logger::try_init();
@@ -146,48 +135,45 @@ fn hashmap_single_threaded(c: &mut TestHarness) {
     // Read/Write ratio
     let write_ratio = 10; //% out of 100
 
-    let ops = hashmap::generate_operations(NOP, write_ratio, KEY_SPACE, UNIFORM);
-    mkbench::baseline_comparison::<hashmap::NrHashMap>(c, "hashmap", ops, LOG_SIZE_BYTES);
-}
+    let ops = generate_operations(NOP, write_ratio, KEY_SPACE, UNIFORM);
+    mkbench::baseline_comparison::<NrHashMap>(c, "hashmap", ops, LOG_SIZE_BYTES);
+}*/
 
 /// Compare scale-out behaviour of synthetic data-structure.
 fn hashmap_scale_out(c: &mut TestHarness) {
-    env_logger::try_init();
-
-    // How many operations per iteration
-    const NOP: usize = 515_000;
     // Biggest key in the hash-map
     const KEY_SPACE: usize = 5_000_000;
     // Key distribution
     const UNIFORM: &'static str = "uniform";
     //const SKEWED: &'static str = "skewed";
     // Read/Write ratio
-    const WRITE_RATIO: usize = 0; //% out of 100
+    const WRITE_RATIO: usize = 10; //% out of 100
 
-    let ops = crate::hashmap::generate_operations(NOP, WRITE_RATIO, KEY_SPACE, UNIFORM);
-    mkbench::ScaleBenchBuilder::<hashmap::NrHashMap>::new(ops)
+    mkbench::ScaleBenchBuilder::new()
         .machine_defaults()
-        .configure(
+        .configure::<NrHashMap>(
             c,
             "hashmap-scaleout",
-            |cid, rid, _log, replica, ops, _batch_size| {
-                for op in ops {
-                    match op {
-                        Operation::ReadOperation(op) => {
-                            replica.execute_ro(*op, rid).unwrap();
-                        }
-                        Operation::WriteOperation(op) => {
-                            replica.execute(*op, rid).unwrap();
-                        }
-                    }
+            |_cid, rid, _log, replica, _batch_size, rng| match generate_operation(
+                rng,
+                WRITE_RATIO,
+                KEY_SPACE,
+                UNIFORM,
+            ) {
+                Operation::ReadOperation(op) => {
+                    replica.execute_ro(op, rid).unwrap();
+                }
+                Operation::WriteOperation(op) => {
+                    replica.execute(op, rid).unwrap();
                 }
             },
         );
 }
 
 fn main() {
+    let _r = env_logger::try_init();
     let mut harness = Default::default();
 
-    hashmap_single_threaded(&mut harness);
+    //hashmap_single_threaded(&mut harness);
     hashmap_scale_out(&mut harness);
 }

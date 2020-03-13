@@ -25,6 +25,7 @@ use std::time::{Duration, Instant};
 use csv::WriterBuilder;
 use log::*;
 use node_replication::{log::Log, replica::Replica, Dispatch};
+use rand::{rngs::SmallRng, Rng, SeedableRng};
 use serde::Serialize;
 
 use crate::utils;
@@ -48,6 +49,7 @@ type BenchFn<T> = fn(
     &Arc<Log<'static, <T as Dispatch>::WriteOperation>>,
     &Arc<Replica<T>>,
     usize,
+    &mut SmallRng,
 );
 
 /// Creates a benchmark to evalute the overhead the log adds for a given data-structure.
@@ -172,11 +174,12 @@ where
     rm: HashMap<usize, Vec<Cpu>>,
     /// An Arc reference to the log.
     log: Arc<Log<'static, <T as Dispatch>::WriteOperation>>,
-    /// Results of the benchmark we map the #iteration to a list of per-thread oepration count.
+    /// Results of the benchmark we map the #iteration to a list of per-thread results
+    /// (each per-thread stores completed ops in per-sec intervals).
     /// It's a hash-map so it acts like a cache i.e., we ensure to only save the latest
     /// experiement for a specific duration (avoids storing the warm-up results).
     /// It has to be a Mutex because we can only access a RO version of ScaleBenchmark at execution time.
-    results: Mutex<HashMap<Duration, Vec<(Core, usize)>>>,
+    results: Mutex<HashMap<Duration, Vec<(Core, Vec<usize>)>>>,
     /// Batch-size (passed as a parameter to benchmark funtion `f`)
     batch_size: usize,
     /// If we should wait at the end and periodically process the log
@@ -188,7 +191,7 @@ where
     /// A series of channels to communicate iteration count to every worker.
     cmd_channels: Vec<Sender<Duration>>,
     /// A result channel
-    result_channel: (Sender<(Core, usize)>, Receiver<(Core, usize)>),
+    result_channel: (Sender<(Core, Vec<usize>)>, Receiver<(Core, Vec<usize>)>),
     /// Thread handles
     handles: Vec<JoinHandle<()>>,
 }
@@ -252,27 +255,19 @@ where
 
         // Log the per-thread runtimes to the CSV file
         let file_name = "criterion_per_thread_durations.csv";
+        let write_headers = !Path::new(file_name).exists(); // write headers only to new file
         let mut csv_file = OpenOptions::new()
             .append(true)
             .create(true)
             .open(file_name)?;
-        let write_headers = !Path::new(file_name).exists(); // write headers only to new file
         let results = self.results.lock().expect("Can't lock results");
-
-        // The csv library doesn't write a new-line if we
-        // append to an existing file, also we only write new line if there
-        // are actual results (otherwise we end up with lot's of newline
-        // at the end of the file if criterion skips benchmarks)
-        if !write_headers && !results.is_empty() {
-            csv_file.write_all(b"\n")?;
-        }
 
         let mut wtr = WriterBuilder::new()
             .has_headers(write_headers)
             .from_writer(csv_file);
 
-        for (duration, core_iterations) in results.iter() {
-            for (tid, (cid, iterations)) in core_iterations.iter().enumerate() {
+        for (duration, thread_results) in results.iter() {
+            for (tid, (cid, ops_per_sec)) in thread_results.iter().enumerate() {
                 #[derive(Serialize)]
                 struct Record {
                     name: String,
@@ -283,21 +278,25 @@ where
                     duration: f64,
                     thread_id: usize,
                     core_id: u64,
+                    exp_time_in_sec: usize,
                     iterations: usize,
                 };
 
-                let record = Record {
-                    name: self.name.clone(),
-                    rs: self.rs,
-                    tm: self.tm,
-                    batch_size: self.batch_size,
-                    threads: self.ts,
-                    duration: duration.as_secs_f64(),
-                    thread_id: tid,
-                    core_id: *cid,
-                    iterations: *iterations,
-                };
-                wtr.serialize(record);
+                for (idx, ops) in ops_per_sec.iter().enumerate() {
+                    let record = Record {
+                        name: self.name.clone(),
+                        rs: self.rs,
+                        tm: self.tm,
+                        batch_size: self.batch_size,
+                        threads: self.ts,
+                        duration: duration.as_secs_f64(),
+                        thread_id: tid,
+                        core_id: *cid,
+                        exp_time_in_sec: idx + 1, // start at 1 (for first second)
+                        iterations: *ops,
+                    };
+                    wtr.serialize(record);
+                }
             }
         }
         wtr.flush()?;
@@ -321,9 +320,9 @@ where
         }
 
         // Wait for all threads to finish and gather runtimes
-        let mut core_iteratios: Vec<(Core, usize)> = Vec::with_capacity(self.threads());
+        let mut core_iteratios: Vec<(Core, Vec<usize>)> = Vec::with_capacity(self.threads());
         for i in 0..self.threads() {
-            let core_ops: (Core, usize) = self
+            let core_ops: (Core, Vec<usize>) = self
                 .result_channel
                 .1
                 .recv()
@@ -331,21 +330,9 @@ where
             core_iteratios.push(core_ops);
         }
 
-        // Sort floats to get min/max, can't just do sort() because floats are weird:
-        core_iteratios.sort_by(|(_, a), (_, b)| a.cmp(b));
-        let min_thread_ops: usize = core_iteratios.first().unwrap_or(&Default::default()).1;
-        let max_thread_ops: usize = core_iteratios.last().unwrap_or(&Default::default()).1;
-        info!(
-            "Thread fairness = {:?}",
-            min_thread_ops / (max_thread_ops + 1)
-        );
-
         let mut results = self.results.lock().unwrap();
         results.insert(duration, core_iteratios.clone());
-        core_iteratios
-            .iter()
-            .map(|(cid, iters)| iters)
-            .sum::<usize>()
+        0usize
     }
 
     fn alloc_replicas(&self, replicas: &mut Vec<Arc<Replica<T>>>) {
@@ -398,8 +385,7 @@ where
                 let com = complete.clone();
                 let nre = replicas.len();
                 let rmc = self.rm.clone();
-
-                let start_time = Instant::now();
+                let log_period = Duration::from_secs(1);
 
                 self.handles.push(thread::spawn(move || {
                     utils::pin_thread(core_id);
@@ -422,13 +408,38 @@ where
                             duration
                         );
 
+                        let mut operations_per_second: Vec<usize> = Vec::with_capacity(32);
                         let mut operations_completed: usize = 0;
-                        let end_experiment = start_time + duration;
+                        let mut rng = SmallRng::from_entropy();
 
                         b.wait();
+                        let start = Instant::now();
+                        let end_experiment = start + duration;
+                        let mut next_log = start + log_period;
                         while Instant::now() < end_experiment {
-                            black_box((f)(core_id, replica_token, &log, &replica, batch_size));
-                            operations_completed += 1;
+                            black_box((f)(
+                                core_id,
+                                replica_token,
+                                &log,
+                                &replica,
+                                batch_size,
+                                &mut rng,
+                            ));
+                            operations_completed += 1 * batch_size;
+
+                            if Instant::now() >= next_log {
+                                info!("Operations completed {} / s", operations_completed);
+                                operations_per_second.push(operations_completed);
+                                // reset operations completed
+                                operations_completed = 0;
+                                next_log += log_period;
+                            }
+                        }
+
+                        // Some threads may not end up adding the last second of measuring due to bad timing,
+                        // so make sure we remove it everywhere:
+                        if operations_per_second.len() == duration.as_secs() as usize {
+                            operations_per_second.pop(); // Get rid of last second of measurements
                         }
 
                         debug!(
@@ -441,8 +452,8 @@ where
                             duration
                         );
 
-                        result_channel.send((core_id, operations_completed));
-                        
+                        result_channel.send((core_id, operations_per_second));
+
                         if !do_sync {
                             b.wait();
                             continue;
@@ -602,9 +613,9 @@ impl ScaleBenchBuilder {
         let max_cores = topology.cores();
 
         self.thread_mapping(ThreadMapping::Sequential);
-        //self.replica_strategy(ReplicaStrategy::One);
+        self.replica_strategy(ReplicaStrategy::One);
         //self.replica_strategy(ReplicaStrategy::Socket);
-        self.replica_strategy(ReplicaStrategy::L1);
+        //self.replica_strategy(ReplicaStrategy::L1);
 
         // On larger machines thread increments are bigger than on
         // smaller machines:

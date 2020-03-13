@@ -1,19 +1,22 @@
 // Copyright © 2019 VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+//! A in-memory FS benchmark.
+#![feature(test)]
+
 use std::ffi::OsStr;
 
-use rand::seq::SliceRandom;
-use rand::{thread_rng, Rng};
+use rand::Rng;
 
 mod mkbench;
 mod utils;
 
-use criterion::{criterion_group, criterion_main, Criterion};
 use log::warn;
 use node_replication::Dispatch;
 
 use btfs::{Error, FileAttr, FileType, InodeId, MemFilesystem, SetAttrRequest};
+
+use utils::benchmark::*;
 use utils::Operation;
 
 /// All FS operations we can perform through the log.
@@ -79,9 +82,6 @@ pub enum OperationWr {
     },
 }
 
-#[derive(Debug, PartialEq, Clone, Copy)]
-pub enum OperationRd {}
-
 /// Potential responses from the file-system
 #[derive(Copy, Clone)]
 pub enum Response {
@@ -126,7 +126,7 @@ impl Default for NrMemFilesystem {
 
             let ino = memfs.create(ino, &OsStr::new("00000001"), 0, 0)?.ino;
             memfs.write(ino, 0, 0, &[1; 4096], 0)?;
-            assert_eq!(ino, 5, "Adjust `generate_fs_operations` accordingly!");
+            assert_eq!(ino, 5, "Adjust `generate_fs_operation` accordingly!");
             Ok(())
         }
 
@@ -202,7 +202,7 @@ impl NrMemFilesystem {
 }
 
 impl Dispatch for NrMemFilesystem {
-    type ReadOperation = OperationRd;
+    type ReadOperation = ();
     type WriteOperation = OperationWr;
     type Response = Response;
     type ResponseError = ResponseError;
@@ -313,86 +313,70 @@ impl Dispatch for NrMemFilesystem {
     }
 }
 
-fn generate_fs_operations(
-    nop: usize,
+fn generate_fs_operation(
+    rng: &mut rand::rngs::SmallRng,
     write_ratio: usize,
-) -> Vec<Operation<OperationRd, OperationWr>> {
-    let mut ops = Vec::with_capacity(nop);
-    let mut rng = rand::thread_rng();
+) -> Operation<(), OperationWr> {
+    if rng.gen::<usize>() % 100 < write_ratio {
+        Operation::WriteOperation(OperationWr::Write {
+            ino: 5, // XXX: hard-coded ino of file `00000001`
+            fh: 0,
+            offset: rng.gen_range(0, 4096 - 256),
+            data: &[3; 128],
+            flags: 0,
+        })
+    } else {
+        let offset = rng.gen_range(0, 4096 - 256);
+        let size = rng.gen_range(0, 128);
 
-    for idx in 0..nop {
-        if idx % 100 < write_ratio {
-            ops.push(Operation::WriteOperation(OperationWr::Write {
-                ino: 5, // XXX: hard-coded ino of file `00000001`
-                fh: 0,
-                offset: rng.gen_range(0, 4096 - 256),
-                data: &[3; 128],
-                flags: 0,
-            }))
-        } else {
-            let offset = rng.gen_range(0, 4096 - 256);
-            let size = rng.gen_range(0, 128);
-
-            ops.push(Operation::WriteOperation(OperationWr::Read {
-                ino: 5, // XXX: hard-coded ino of file `00000001`
-                fh: 0,
-                offset: offset,
-                size: size,
-            }))
-        }
+        Operation::WriteOperation(OperationWr::Read {
+            ino: 5, // XXX: hard-coded ino of file `00000001`
+            fh: 0,
+            offset,
+            size,
+        })
     }
-
-    ops.shuffle(&mut thread_rng());
-    ops
 }
-
-fn memfs_single_threaded(c: &mut Criterion) {
-    let _r = env_logger::try_init();
-
+/*
+fn memfs_single_threaded(c: &mut TestHarness) {
     const LOG_SIZE_BYTES: usize = 16 * 1024 * 1024;
     const NOP: usize = 50;
     const WRITE_RATIO: usize = 10; //% out of 100
 
-    let ops = generate_fs_operations(NOP, WRITE_RATIO);
+    let ops = generate_fs_operation(NOP, WRITE_RATIO);
     mkbench::baseline_comparison::<NrMemFilesystem>(c, "memfs", ops, LOG_SIZE_BYTES);
-}
+}*/
 
 /// Compare scale-out behaviour of memfs.
-fn memfs_scale_out(c: &mut Criterion) {
-    let _r = env_logger::try_init();
-
-    const NOP: usize = 50;
+fn memfs_scale_out(c: &mut TestHarness) {
     const WRITE_RATIO: usize = 10; //% out of 100
 
-    let ops = generate_fs_operations(NOP, WRITE_RATIO);
-
-    mkbench::ScaleBenchBuilder::<NrMemFilesystem>::new(ops)
+    mkbench::ScaleBenchBuilder::new()
         .machine_defaults()
         // The only benchmark that actually seems to slightly
         // regress with 2 MiB logsize, set to 16 MiB
         .log_size(16 * 1024 * 1024)
-        .configure(
+        .configure::<NrMemFilesystem>(
             c,
             "memfs-scaleout",
-            |_cid, rid, _log, replica, ops, _batch_size| {
-                for op in ops {
-                    match op {
-                        Operation::ReadOperation(o) => {
-                            replica.execute_ro(*o, rid).unwrap();
-                        }
-                        Operation::WriteOperation(o) => {
-                            replica.execute(*o, rid).unwrap();
-                        }
-                    }
+            |_cid, rid, _log, replica, _batch_size, rng| match generate_fs_operation(
+                rng,
+                WRITE_RATIO,
+            ) {
+                Operation::ReadOperation(o) => {
+                    replica.execute_ro(o, rid).unwrap();
+                }
+                Operation::WriteOperation(o) => {
+                    replica.execute(o, rid).unwrap();
                 }
             },
         );
 }
 
-criterion_group!(
-    name = benches;
-    config = Criterion::default().sample_size(10);
-    targets = memfs_single_threaded, memfs_scale_out
-);
+fn main() {
+    let _r = env_logger::try_init();
+    let mut harness = Default::default();
 
-criterion_main!(benches);
+    //memfs_single_threaded(&mut harness);
+    memfs_scale_out(&mut harness);
+}
