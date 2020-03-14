@@ -5,6 +5,7 @@
 #![feature(test)]
 
 use std::ffi::OsStr;
+use std::sync::Arc;
 
 use rand::Rng;
 
@@ -83,7 +84,7 @@ pub enum OperationWr {
 }
 
 /// Potential responses from the file-system
-#[derive(Copy, Clone)]
+#[derive(Clone)]
 pub enum Response {
     Attr(FileAttr),
     Directory,
@@ -92,7 +93,7 @@ pub enum Response {
     Open,
     Create,
     Written(u64),
-    Data(&'static [u8]),
+    Data(Arc<Vec<u8>>),
 }
 
 impl Default for Response {
@@ -287,16 +288,8 @@ impl Dispatch for NrMemFilesystem {
                 Ok(slice) => {
                     // TODO: We make a heap allocation for the data, thn leak it below
                     // since we currently don't have a good way to return non copy things to clients:
-                    let bytes_as_vec = slice.to_vec();
-
-                    // create an alias to bytes as vec so we can leak:
-                    let slice = unsafe {
-                        std::slice::from_raw_parts(bytes_as_vec.as_ptr(), bytes_as_vec.len())
-                    };
-                    let response = Response::Data(slice);
-
-                    std::mem::forget(bytes_as_vec); // XXX leaking here
-                    Ok(response)
+                    let bytes_as_vec = Arc::new(slice.to_vec());
+                    Ok(Response::Data(bytes_as_vec))
                 }
                 Err(e) => Err(ResponseError::Err(e)),
             },
@@ -337,15 +330,14 @@ fn generate_fs_operation(
         })
     }
 }
-/*
+
 fn memfs_single_threaded(c: &mut TestHarness) {
     const LOG_SIZE_BYTES: usize = 16 * 1024 * 1024;
-    const NOP: usize = 50;
-    const WRITE_RATIO: usize = 10; //% out of 100
-
-    let ops = generate_fs_operation(NOP, WRITE_RATIO);
-    mkbench::baseline_comparison::<NrMemFilesystem>(c, "memfs", ops, LOG_SIZE_BYTES);
-}*/
+    mkbench::baseline_comparison::<NrMemFilesystem>(c, "memfs", LOG_SIZE_BYTES, &mut |rng| {
+        const WRITE_RATIO: usize = 10; //% out of 100
+        generate_fs_operation(rng, WRITE_RATIO)
+    });
+}
 
 /// Compare scale-out behaviour of memfs.
 fn memfs_scale_out(c: &mut TestHarness) {
@@ -377,6 +369,6 @@ fn main() {
     let _r = env_logger::try_init();
     let mut harness = Default::default();
 
-    //memfs_single_threaded(&mut harness);
+    memfs_single_threaded(&mut harness);
     memfs_scale_out(&mut harness);
 }

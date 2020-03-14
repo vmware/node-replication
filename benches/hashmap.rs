@@ -92,7 +92,7 @@ impl Dispatch for NrHashMap {
 ///  - `write_ratio`: Probability of generation a write give a value in [0..100]
 ///  - `span`: Maximum key-space
 ///  - `distribution`: Supported distribution 'uniform' or 'skewed'
-pub fn generate_operation(
+fn generate_operation(
     rng: &mut rand::rngs::SmallRng,
     write_ratio: usize,
     span: usize,
@@ -101,43 +101,38 @@ pub fn generate_operation(
     assert!(distribution == "skewed" || distribution == "uniform");
 
     let skewed = distribution == "skewed";
-    let mut t_rng = rand::thread_rng();
     let zipf = ZipfDistribution::new(span, 1.03).unwrap();
 
     let id = if skewed {
-        zipf.sample(&mut t_rng) as u64
+        zipf.sample(rng) as u64
     } else {
         // uniform
-        t_rng.gen_range(0, span as u64)
+        rng.gen_range(0, span as u64)
     };
 
     if rng.gen::<usize>() % 100 < write_ratio {
-        Operation::WriteOperation(OpWr::Put(id, t_rng.next_u64()))
+        Operation::WriteOperation(OpWr::Put(id, rng.next_u64()))
     } else {
         Operation::ReadOperation(OpRd::Get(id))
     }
 }
 
-/*
 /// Compare a replicated hashmap against a single-threaded implementation.
 fn hashmap_single_threaded(c: &mut TestHarness) {
-    env_logger::try_init();
-
-    // How many operations per iteration
-    const NOP: usize = 1_000;
     // Size of the log.
     const LOG_SIZE_BYTES: usize = 2 * 1024 * 1024;
-    // Biggest key in the hash-map
-    const KEY_SPACE: usize = 10_000;
-    // Key distribution
-    const UNIFORM: &'static str = "uniform";
-    //const SKEWED: &'static str = "skewed";
-    // Read/Write ratio
-    let write_ratio = 10; //% out of 100
 
-    let ops = generate_operations(NOP, write_ratio, KEY_SPACE, UNIFORM);
-    mkbench::baseline_comparison::<NrHashMap>(c, "hashmap", ops, LOG_SIZE_BYTES);
-}*/
+    mkbench::baseline_comparison::<NrHashMap>(c, "hashmap", LOG_SIZE_BYTES, &mut |rng| {
+        // Biggest key in the hash-map
+        const KEY_SPACE: usize = 10_000;
+        // Key distribution
+        const UNIFORM: &'static str = "uniform";
+        //const SKEWED: &'static str = "skewed";
+        // Read/Write ratio
+        const WRITE_RATIO: usize = 10; //% out of 100
+        generate_operation(rng, WRITE_RATIO, KEY_SPACE, UNIFORM)
+    });
+}
 
 /// Compare scale-out behaviour of synthetic data-structure.
 fn hashmap_scale_out(c: &mut TestHarness) {
@@ -174,6 +169,6 @@ fn main() {
     let _r = env_logger::try_init();
     let mut harness = Default::default();
 
-    //hashmap_single_threaded(&mut harness);
+    hashmap_single_threaded(&mut harness);
     hashmap_scale_out(&mut harness);
 }

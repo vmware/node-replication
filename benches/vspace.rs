@@ -293,7 +293,8 @@ impl VSpace {
                 // and have at least 2 MiB things to map
                 while mapped < psize && ((psize - mapped) >= LARGE_PAGE_SIZE) && pd_idx < 512 {
                     if pd[pd_idx].is_present() {
-                        panic!("Already mapped pd at {:#x}", pbase + mapped);
+                        trace!("Already mapped pd at {:#x}", pbase + mapped);
+                        return Err(VSpaceError { at: vbase.as_u64() });
                     }
 
                     pd[pd_idx] = PDEntry::new(
@@ -547,15 +548,15 @@ fn generate_operation(rng: &mut rand::rngs::SmallRng) -> Operation<OpcodeRd, Opc
     }
 }
 
-/*
 fn vspace_single_threaded(c: &mut TestHarness) {
-    env_logger::try_init();
-
     const LOG_SIZE_BYTES: usize = 16 * 1024 * 1024;
-
-    let ops = parse_syscall_trace("benches/os_workload/bsd_init.log").unwrap();
-    mkbench::baseline_comparison::<VSpaceDispatcher>(c, "vspace", ops, LOG_SIZE_BYTES);
-}*/
+    mkbench::baseline_comparison::<VSpaceDispatcher>(
+        c,
+        "vspace",
+        LOG_SIZE_BYTES,
+        &mut generate_operation,
+    );
+}
 
 fn vspace_scale_out(c: &mut TestHarness) {
     mkbench::ScaleBenchBuilder::new()
@@ -565,10 +566,10 @@ fn vspace_scale_out(c: &mut TestHarness) {
             "vspace-scaleout",
             |_cid, rid, _log, replica, _batch_size, rng| match generate_operation(rng) {
                 Operation::ReadOperation(o) => {
-                    replica.execute_ro(o, rid).unwrap();
+                    let _r = replica.execute_ro(o, rid);
                 }
                 Operation::WriteOperation(o) => {
-                    replica.execute(o, rid).unwrap();
+                    let _r = replica.execute(o, rid);
                 }
             },
         );
@@ -578,6 +579,6 @@ fn main() {
     let _r = env_logger::try_init();
     let mut harness = Default::default();
 
-    //vspace_single_threaded(&mut harness);
+    vspace_single_threaded(&mut harness);
     vspace_scale_out(&mut harness);
 }

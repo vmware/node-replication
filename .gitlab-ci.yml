@@ -23,17 +23,15 @@ test:
 bench:
   stage: bench
   script:
-    # Run criterion and hashbench
-    - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench criterion -- log
-    - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench criterion -- synthetic
-    - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench criterion -- stack
-    - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench criterion -- hashmap
+    # Run benchmark apps
+    - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench log
+    - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench synthetic
+    - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench stack
+    - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench hashmap
     - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench vspace
     - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench memfs
     - timeout 1.5h bash benches/hashbench_run.sh
     - timeout 1.5h bash benches/rwlockbench_run.sh
-    # This would run the complete suite
-    # - RUST_TEST_THREADS=1 timeout 2h cargo bench
   dependencies:
     - test
   variables:

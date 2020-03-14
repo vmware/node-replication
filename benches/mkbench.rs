@@ -52,6 +52,46 @@ type BenchFn<T> = fn(
     &mut SmallRng,
 );
 
+/// Log the baseline comparision results to a CSV file
+///
+/// # TODO
+/// Ideally this can go into the runner that was previously
+/// not possible since we used criterion for the runner.
+fn write_results(name: String, duration: Duration, results: Vec<usize>) -> std::io::Result<()> {
+    let file_name = "baseline_comparison.csv";
+    let write_headers = !Path::new(file_name).exists(); // write headers only to new file
+    let mut csv_file = OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(file_name)?;
+
+    let mut wtr = WriterBuilder::new()
+        .has_headers(write_headers)
+        .from_writer(csv_file);
+
+    #[derive(Serialize)]
+    struct Record {
+        name: String,
+        batch_size: usize,
+        duration: f64,
+        exp_time_in_sec: usize,
+        iterations: usize,
+    };
+
+    for (idx, ops) in results.iter().enumerate() {
+        let record = Record {
+            name: name.clone(),
+            batch_size: 1,
+            duration: duration.as_secs_f64(),
+            exp_time_in_sec: idx + 1, // start at 1 (for first second)
+            iterations: *ops,
+        };
+        wtr.serialize(record);
+    }
+
+    wtr.flush()
+}
+
 /// Creates a benchmark to evalute the overhead the log adds for a given data-structure.
 ///
 /// Takes a generic data-structure that implements dispatch and a vector of operations
@@ -63,52 +103,122 @@ type BenchFn<T> = fn(
 pub(crate) fn baseline_comparison<T: Dispatch + Default + Sync>(
     c: &mut TestHarness,
     name: &str,
-    ops: Vec<Operation<<T as Dispatch>::ReadOperation, <T as Dispatch>::WriteOperation>>,
-    log_size_bytes: usize,
+    log_size: usize,
+    op_generator: &mut dyn Fn(
+        &mut SmallRng,
+    ) -> Operation<
+        <T as node_replication::Dispatch>::ReadOperation,
+        <T as node_replication::Dispatch>::WriteOperation,
+    >,
 ) where
     <T as node_replication::Dispatch>::ResponseError: std::fmt::Debug,
+    <T as node_replication::Dispatch>::ReadOperation: Sized,
+    <T as node_replication::Dispatch>::WriteOperation: Sized,
 {
     utils::disable_dvfs();
     let mut s: T = Default::default();
 
-    // First benchmark is just a stack on a single thread:
+    let log_period = Duration::from_secs(1);
+    let mut rng = SmallRng::from_entropy();
+
+    // 1st benchmark: just T on a single thread
     let mut group = c.benchmark_group(name);
+    let duration = group.duration;
+
+    let mut operations_per_second: Vec<usize> = Vec::with_capacity(32);
     group.bench_function("baseline", |b| {
         b.iter(|| {
-            for i in 0..ops.len() {
-                match &ops[i] {
+            let mut operations_completed: usize = 0;
+
+            let start = Instant::now();
+            let end_experiment = start + duration;
+            let mut next_log = start + log_period;
+
+            while Instant::now() < end_experiment {
+                match op_generator(&mut rng) {
                     Operation::ReadOperation(o) => {
-                        s.dispatch(o.clone()).unwrap();
+                        s.dispatch(o);
                     }
                     Operation::WriteOperation(o) => {
-                        s.dispatch_mut(o.clone()).unwrap();
+                        s.dispatch_mut(o);
                     }
                 }
+                operations_completed += 1;
+
+                if Instant::now() >= next_log {
+                    trace!("Operations completed {} / s", operations_completed);
+                    operations_per_second.push(operations_completed);
+                    // reset operations completed
+                    operations_completed = 0;
+                    next_log += log_period;
+                }
             }
-            ops.len()
+
+            // Some threads may not end up adding the last second of measuring due to bad timing,
+            // so make sure we remove it everywhere:
+            if operations_per_second.len() == duration.as_secs() as usize {
+                operations_per_second.pop(); // Get rid of last second of measurements
+            }
+
+            operations_completed
         })
     });
+    write_results(
+        format!("{}-{}", group.group_name.clone(), "baseline"),
+        duration,
+        operations_per_second,
+    )
+    .expect("Can't write resutls");
 
-    // 2nd benchmark we compare the stack but now we put a log in front:
-    let log = Arc::new(Log::<<T as Dispatch>::WriteOperation>::new(log_size_bytes));
+    // 2nd benchmark: we compare T with a log in front:
+    let log = Arc::new(Log::<<T as Dispatch>::WriteOperation>::new(log_size));
     let r = Replica::<T>::new(&log);
     let ridx = r.register().expect("Failed to register with Replica.");
 
+    let mut operations_per_second: Vec<usize> = Vec::with_capacity(32);
     group.bench_function("log", |b| {
         b.iter(|| {
-            for i in 0..ops.len() {
-                match &ops[i] {
+            let mut operations_completed: usize = 0;
+
+            let start = Instant::now();
+            let end_experiment = start + duration;
+            let mut next_log = start + log_period;
+
+            while Instant::now() < end_experiment {
+                match op_generator(&mut rng) {
                     Operation::ReadOperation(op) => {
-                        r.execute_ro(op.clone(), ridx);
+                        r.execute_ro(op, ridx);
                     }
                     Operation::WriteOperation(op) => {
-                        r.execute(op.clone(), ridx);
+                        r.execute(op, ridx);
                     }
                 }
+
+                operations_completed += 1;
+                if Instant::now() >= next_log {
+                    trace!("Operations completed {} / s", operations_completed);
+                    operations_per_second.push(operations_completed);
+                    // reset operations completed
+                    operations_completed = 0;
+                    next_log += log_period;
+                }
             }
-            ops.len()
+
+            // Some threads may not end up adding the last second of measuring due to bad timing,
+            // so make sure we remove it everywhere:
+            if operations_per_second.len() == duration.as_secs() as usize {
+                operations_per_second.pop(); // Get rid of last second of measurements
+            }
+
+            operations_completed
         })
     });
+    write_results(
+        format!("{}-{}", group.group_name.clone(), "log"),
+        duration,
+        operations_per_second,
+    )
+    .expect("Can't write resutls");
 
     group.finish();
 }
@@ -254,6 +364,8 @@ where
         }
 
         // Log the per-thread runtimes to the CSV file
+        // TODO: Ideally this can go into the runner that was previously
+        // not possible since we used criterion for the runner.
         let file_name = "criterion_per_thread_durations.csv";
         let write_headers = !Path::new(file_name).exists(); // write headers only to new file
         let mut csv_file = OpenOptions::new()
@@ -321,14 +433,33 @@ where
 
         // Wait for all threads to finish and gather runtimes
         let mut core_iteratios: Vec<(Core, Vec<usize>)> = Vec::with_capacity(self.threads());
+        let mut intervals = 0;
         for i in 0..self.threads() {
             let core_ops: (Core, Vec<usize>) = self
                 .result_channel
                 .1
                 .recv()
                 .expect("Can't receive a per-thread result?");
+            if intervals > 0 && intervals != core_ops.1.len() {
+                error!("Receveived different no. of measurements from individual threads");
+            }
+            intervals = core_ops.1.len();
             core_iteratios.push(core_ops);
         }
+
+        let core_aggregate_tput: Vec<usize> = core_iteratios
+            .iter()
+            .map(|(cid, time_vec)| time_vec.iter().sum())
+            .collect();
+        let min_tput = *core_aggregate_tput.iter().min().unwrap_or(&1) / intervals;
+        let max_tput = *core_aggregate_tput.iter().max().unwrap_or(&1) / intervals;
+        let total_tput = core_aggregate_tput.iter().sum::<usize>() / intervals;
+        println!(
+            ">> {:.2} Mops (min {:.2} Mops, max {:.2}) Mops",
+            total_tput as f64 / 1_000_000 as f64,
+            min_tput as f64 / 1_000_000 as f64,
+            max_tput as f64 / 1_000_000 as f64,
+        );
 
         let mut results = self.results.lock().unwrap();
         results.insert(duration, core_iteratios.clone());
@@ -428,7 +559,7 @@ where
                             operations_completed += 1 * batch_size;
 
                             if Instant::now() >= next_log {
-                                info!("Operations completed {} / s", operations_completed);
+                                trace!("Operations completed {} / s", operations_completed);
                                 operations_per_second.push(operations_completed);
                                 // reset operations completed
                                 operations_completed = 0;

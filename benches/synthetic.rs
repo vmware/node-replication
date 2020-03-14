@@ -202,7 +202,7 @@ impl Dispatch for AbstractDataStructure {
 ///
 /// Flag determines which types of operation we allow on the data-structure.
 /// The split is approximately equal among the operations we allow.
-pub fn generate_operation(
+fn generate_operation(
     rng: &mut rand::rngs::SmallRng,
     tid: usize,
     readonly: bool,
@@ -243,24 +243,18 @@ pub fn generate_operation(
     }
 }
 
-/*
 /// Compare a synthetic benchmark against a single-threaded implementation.
 fn synthetic_single_threaded(c: &mut TestHarness) {
-    env_logger::try_init();
-
-    // How many operations per iteration
-    const NOP: usize = 1_000;
     // Size of the log.
     const LOG_SIZE_BYTES: usize = 2 * 1024 * 1024;
 
-    let ops = synthetic::generate_operations(NOP, 0, false, false, true);
-    mkbench::baseline_comparison::<synthetic::AbstractDataStructure>(
+    mkbench::baseline_comparison::<AbstractDataStructure>(
         c,
         "synthetic",
-        ops,
         LOG_SIZE_BYTES,
+        &mut |rng| generate_operation(rng, 1, false, false, true),
     );
-}*/
+}
 
 /// Compare scale-out behaviour of synthetic data-structure.
 fn synthetic_scale_out(c: &mut TestHarness) {
@@ -292,6 +286,6 @@ fn main() {
     let _r = env_logger::try_init();
     let mut harness = Default::default();
 
-    //synthetic_single_threaded(&mut harness);
+    synthetic_single_threaded(&mut harness);
     synthetic_scale_out(&mut harness);
 }

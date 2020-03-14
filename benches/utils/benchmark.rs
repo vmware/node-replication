@@ -13,7 +13,7 @@ pub(crate) struct Throughput(pub(crate) u64);
 
 pub struct Bencher {
     /// How long do we measure (this is fixed by the runner)
-    measurement_time: Duration,
+    pub(crate) measurement_time: Duration,
     /// How many operations did we perform (what we measured as throughput).
     iterations: usize,
 }
@@ -30,10 +30,7 @@ impl Bencher {
     where
         R: FnMut() -> usize,
     {
-        let now = Instant::now();
-        while now.elapsed() < self.measurement_time {
-            self.iterations += routine();
-        }
+        self.iterations += routine();
     }
 
     pub(crate) fn iter_custom<R>(&mut self, mut routine: R)
@@ -78,8 +75,8 @@ impl From<&str> for BenchmarkId {
 }
 
 pub(crate) struct BenchmarkGroup {
-    group_name: String,
-    duration: Duration,
+    pub(crate) group_name: String,
+    pub(crate) duration: Duration,
 }
 
 impl BenchmarkGroup {
@@ -95,7 +92,12 @@ impl BenchmarkGroup {
     where
         F: FnMut(&mut Bencher),
     {
-        println!("bench_function {:?}", id.into());
+        let bid = id.into();
+        println!(
+            "Run {}/{}:",
+            bid.function_name.unwrap_or(String::from("unknown")),
+            bid.parameter.unwrap_or(String::from("unknown"))
+        );
 
         let mut bencher = Bencher::new(self.duration);
         f(&mut bencher);
@@ -112,7 +114,12 @@ impl BenchmarkGroup {
     where
         F: FnMut(&mut Bencher, &I),
     {
-        println!("bench_with_input {:?}", id.into());
+        let bid = id.into();
+        print!(
+            "Run {}:",
+            bid.function_name.unwrap_or(String::from("unknown")),
+        );
+        println!("/{}", bid.parameter.unwrap_or(String::from("")));
 
         let mut bencher = Bencher::new(self.duration);
         f(&mut bencher, &input);
