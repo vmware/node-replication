@@ -70,6 +70,7 @@ chashmap = "2.2"
 urcu-sys = "0.0.3"
 csv = "1.1"
 core_affinity = "0.5.10"
+parking_lot = "0.7.1"
 serde = { version = "1", features = ["derive"] }
 clap = { version = "2", features = ["yaml"] }
 rand = { version = "0.7", features = ["small_rng"] }
