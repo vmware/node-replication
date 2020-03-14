@@ -43,35 +43,35 @@ deploy:
   script:
     # Get revision
     - export GIT_REV_CURRENT=`git rev-parse --short HEAD`
-    - export CSV_LINE="`date +%Y-%m-%d`",$GIT_REV_CURRENT,"criterion/$GIT_REV_CURRENT/report/index.html","hashbench/$GIT_REV_CURRENT/index.html","rwlockbench/$GIT_REV_CURRENT/index.html"
+    - export CSV_LINE="`date +%Y-%m-%d`",$GIT_REV_CURRENT,"","hashbench/$GIT_REV_CURRENT/index.html","rwlockbench/$GIT_REV_CURRENT/index.html","scalebench/$GIT_REV_CURRENT/index.html"
     # Checkout gh-pages
     - git clone git@github.com:gz/node-replication.git gh-pages
     - cd gh-pages
     - git checkout gh-pages
+    - pip3 install -r requirements.txt
     - cd ..
-    # Copy criterion results
     - echo $CSV_LINE >> gh-pages/_data/b1641.csv
-    - rm -rf gh-pages/criterion/$GIT_REV_CURRENT
-    - mkdir -p gh-pages/criterion/$GIT_REV_CURRENT
-    - cp -r target/criterion/* gh-pages/criterion/$GIT_REV_CURRENT
+    # Copy scalebench
+    - python3 scale_bench_plot.py scaleout_benchmarks.csv
+    - rm -rf gh-pages/scalebench/$GIT_REV_CURRENT
+    - mkdir -p gh-pages/scalebench/$GIT_REV_CURRENT
+    - mv baseline_comparison.csv gh-pages/scalebench/$GIT_REV_CURRENT
+    - mv scaleout_benchmarks.csv gh-pages/scalebench/$GIT_REV_CURRENT
+    - mv per_thread_times.* gh-pages/scalebench/$GIT_REV_CURRENT
+    - mv throughput-*-scaleout.* gh-pages/scalebench/$GIT_REV_CURRENT
     # Copy hashbench results
     - mkdir -p gh-pages/hashbench/$GIT_REV_CURRENT
-    - cp results.log write-throughput.png read-throughput.png gh-pages/hashbench/$GIT_REV_CURRENT
+    - mv results.log write-throughput.png read-throughput.png gh-pages/hashbench/$GIT_REV_CURRENT
     # Copy rwlockbench results
     - mkdir -p gh-pages/rwlockbench/$GIT_REV_CURRENT
-    - cp rwlockbench_results.log rwlock-write-throughput.png rwlock-read-throughput.png gh-pages/rwlockbench/$GIT_REV_CURRENT
-    # Move per-thread runtimes
-    - mv criterion_per_thread_durations.csv gh-pages/criterion/$GIT_REV_CURRENT
-    # Setup gh-pages layout
+    - mv rwlockbench_results.log rwlock-write-throughput.png rwlock-read-throughput.png gh-pages/rwlockbench/$GIT_REV_CURRENT
+    # Setup html layouts
     - cd gh-pages
     - cp hashbench/index.markdown hashbench/$GIT_REV_CURRENT
     - cp rwlockbench/index.markdown rwlockbench/$GIT_REV_CURRENT
-    # Make CI plots
-    - pip3 install -r requirements.txt
+    - cp scalebench/index.markdown scalebench/$GIT_REV_CURRENT
+    # Update CI time plots
     - python3 history_plots.py
-    # Plot per-thread runtimes
-    - python3 thread_times_plot.py criterion/$GIT_REV_CURRENT/criterion_per_thread_durations.csv
-    - mv criterion_thread_times.png criterion/$GIT_REV_CURRENT
     # Push to gh-pages
     - git add .
     - git commit -a -m "Added benchmark results for $GIT_REV_CURRENT."

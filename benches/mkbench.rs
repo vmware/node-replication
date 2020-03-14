@@ -366,7 +366,7 @@ where
         // Log the per-thread runtimes to the CSV file
         // TODO: Ideally this can go into the runner that was previously
         // not possible since we used criterion for the runner.
-        let file_name = "criterion_per_thread_durations.csv";
+        let file_name = "scaleout_benchmarks.csv";
         let write_headers = !Path::new(file_name).exists(); // write headers only to new file
         let mut csv_file = OpenOptions::new()
             .append(true)
