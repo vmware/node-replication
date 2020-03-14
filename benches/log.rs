@@ -73,6 +73,6 @@ fn log_scale_bench(c: &mut TestHarness) {
 }
 
 fn main() {
-    let mut harness = Default::default();
+    let mut harness = TestHarness::new(std::time::Duration::from_secs(3));
     log_scale_bench(&mut harness);
 }

@@ -130,19 +130,27 @@ impl BenchmarkGroup {
     pub fn finish(self) {}
 }
 
-pub(crate) struct TestHarness {}
+pub(crate) struct TestHarness {
+    duration: Duration,
+}
 
 impl TestHarness {
     pub(crate) fn benchmark_group<S: Into<String>>(&mut self, group_name: S) -> BenchmarkGroup {
         BenchmarkGroup {
             group_name: group_name.into(),
-            duration: Duration::from_secs(5),
+            duration: self.duration,
         }
+    }
+}
+
+impl TestHarness {
+    pub(crate) fn new(d: Duration) -> Self {
+        TestHarness { duration: d }
     }
 }
 
 impl Default for TestHarness {
     fn default() -> Self {
-        TestHarness {}
+        TestHarness::new(Duration::from_secs(5))
     }
 }
