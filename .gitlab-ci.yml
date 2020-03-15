@@ -52,7 +52,7 @@ deploy:
     - cd ..
     - echo $CSV_LINE >> gh-pages/_data/b1641.csv
     # Copy scalebench
-    - python3 scale_bench_plot.py scaleout_benchmarks.csv
+    - python3 gh-pages/scale_bench_plot.py scaleout_benchmarks.csv
     - rm -rf gh-pages/scalebench/$GIT_REV_CURRENT
     - mkdir -p gh-pages/scalebench/$GIT_REV_CURRENT
     - mv baseline_comparison.csv gh-pages/scalebench/$GIT_REV_CURRENT
