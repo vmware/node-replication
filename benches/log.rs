@@ -46,7 +46,7 @@ fn log_scale_bench(c: &mut TestHarness) {
     env_logger::try_init();
 
     /// Log size (needs to be big as we don't have GC in this case but high tput)
-    const LOG_SIZE_BYTES: usize = 6 * 1024 * 1024 * 1024;
+    const LOG_SIZE_BYTES: usize = 12 * 1024 * 1024 * 1024;
 
     mkbench::ScaleBenchBuilder::new()
         .machine_defaults()
