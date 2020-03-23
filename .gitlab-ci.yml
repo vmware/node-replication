@@ -8,7 +8,7 @@ build:
   stage: build
   script:
     # Dependency for node-replication
-    - sudo apt install libhwloc-dev gnuplot libfuse-dev liburcu-dev liburcu6 --yes
+    - sudo apt install libhwloc-dev gnuplot libfuse-dev liburcu-dev liburcu6 pkg-config --yes
     - cargo build
 test:
   stage: test
