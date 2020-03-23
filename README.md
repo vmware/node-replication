@@ -45,7 +45,7 @@ system.
 #### Install Benchmark/Test dependencies Ubuntu
 
 ```
-$ apt-get install libhwloc-dev gnuplot libfuse-dev liburcu-dev liburcu6 clang
+$ apt-get install libhwloc-dev gnuplot pkg-config libfuse-dev liburcu-dev liburcu6 clang r-base r-cran-plyr r-cran-ggplot2
 ```
 
 #### Install Benchmark/Test dependencies on MacOS
