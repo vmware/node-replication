@@ -477,7 +477,8 @@ where
             let mut iteration = 1;
             let e = self.slog[self.index(i)].as_ptr();
 
-            while unsafe { (*e).alivef != self.lmasks[idx - 1].get() } {
+            let mut is_alive = unsafe { (*e).alivef };
+            while is_alive != self.lmasks[idx - 1].get() {
                 if iteration % WARN_THRESHOLD == 0 {
                     warn!(
                         "alivef not being set for self.index(i={}) = {} (self.lmasks[{}] is {})...",
@@ -488,6 +489,7 @@ where
                     );
                 }
                 iteration += 1;
+                is_alive = unsafe { core::intrinsics::volatile_load(&(*e).alivef) };
             }
 
             unsafe { d((*e).operation.as_ref().unwrap().clone(), (*e).replica) };

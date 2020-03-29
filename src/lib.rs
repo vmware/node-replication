@@ -4,6 +4,7 @@
 //! An operation-log based approach for data replication.
 #![no_std]
 #![feature(atomic_min_max)]
+#![feature(core_intrinsics)]
 
 #[cfg(test)]
 extern crate std;
