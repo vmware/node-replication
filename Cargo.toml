@@ -1,6 +1,6 @@
 [package]
 name = "node-replication"
-version = "0.0.5"
+version = "0.0.6"
 authors = ["Chinmay Kulkarni <chinmayk@cs.utah.edu>", "Gerd Zellweger <mail@gerdzellweger.com>", "Ankit Bhardwaj <bhrdwj.ankit@gmail.com>"]
 edition = "2018"
 license = "MIT OR Apache-2.0"
