@@ -44,23 +44,3 @@ p <- p + geom_line(size = .5)
 p <- p + xlim(c(0, NA))
 p <- p + xlab("readers") + ylab("M writes/s") + ggtitle("Total writes/s with increasing # of readers")
 ggsave('write-throughput.png',plot=p,width=10,height=6)
-
-
-library(scales)
-
-w = compare_rate
-w <- w[w$writers == 1,]
-w <- w[w$readers == 1,]
-w <- w[w$op == "write",]
-w$variant = gsub("^evmap$", "evmap-refresh1", w$variant, perl = TRUE)
-w$period = as.numeric(gsub("evmap-refresh([\\d]+)", "\\1", w$variant, perl = TRUE))
-w$variant = gsub("evmap-refresh[\\d]+", "evmap", w$variant, perl = TRUE)
-w$opss = w$opss / 1000000.0
-p <- ggplot(data=w, aes(x=period, y=opss, color=distribution))
-p <- p + geom_point(size = 1, alpha = .2)
-p <- p + geom_line(size = .5)
-p <- p + scale_x_continuous(trans="log2",
-    breaks = trans_breaks("log2", function(x) 2^x),
-    labels = trans_format("log2", math_format(2^.x)))
-p <- p + xlab("refresh every N writes") + ylab("M writes/s") + ggtitle("Total writes/s with decreasing refresh frequency")
-ggsave('write-with-refresh.png',plot=p,width=10,height=6)
