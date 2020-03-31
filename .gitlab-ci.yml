@@ -58,7 +58,7 @@ deploy:
     - mv baseline_comparison.csv gh-pages/scalebench/$GIT_REV_CURRENT
     - mv scaleout_benchmarks.csv gh-pages/scalebench/$GIT_REV_CURRENT
     - mv per_thread_times.* gh-pages/scalebench/$GIT_REV_CURRENT
-    - mv throughput-*-scaleout.* gh-pages/scalebench/$GIT_REV_CURRENT
+    - mv throughput-*-*.* gh-pages/scalebench/$GIT_REV_CURRENT
     # Copy hashbench results
     - mkdir -p gh-pages/hashbench/$GIT_REV_CURRENT
     - mv results.log write-throughput.png read-throughput.png gh-pages/hashbench/$GIT_REV_CURRENT
