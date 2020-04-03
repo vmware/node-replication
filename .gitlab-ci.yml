@@ -13,7 +13,7 @@ build:
 test:
   stage: test
   script:
-    - cargo +nightly fmt -- --check
+    #- cargo +nightly fmt -- --check
     - timeout 1h cargo test
   dependencies:
     - build
