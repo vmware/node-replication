@@ -74,3 +74,4 @@ parking_lot = "0.7.1"
 serde = { version = "1", features = ["derive"] }
 clap = { version = "2", features = ["yaml"] }
 rand = { version = "0.7", features = ["small_rng"] }
+jemallocator = "0.3.2"

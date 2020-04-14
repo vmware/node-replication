@@ -20,6 +20,11 @@ mod utils;
 use utils::benchmark::*;
 use utils::Operation;
 
+extern crate jemallocator;
+
+#[global_allocator]
+static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
+
 #[derive(Debug, Default, Eq, PartialEq, Copy, Clone)]
 pub struct Nop(usize);
 
