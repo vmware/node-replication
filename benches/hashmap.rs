@@ -160,7 +160,7 @@ fn hashmap_scale_out(c: &mut TestHarness) {
     // Read/Write ratio
     const WRITE_RATIO: usize = 0; //% out of 100
                                   // Number of operation for test-harness.
-    const NOP: usize = 5_000_000;
+    const NOP: usize = 515_000;
 
     let ops = generate_operations(NOP, WRITE_RATIO, KEY_SPACE, UNIFORM);
 
