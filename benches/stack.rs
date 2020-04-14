@@ -92,35 +92,47 @@ impl Dispatch for Stack {
 }
 
 /// Generate a random sequence of operations that we'll perform:
-pub fn generate_operation(rng: &mut rand::rngs::SmallRng) -> Operation<OpRd, OpWr> {
-    let op: usize = rng.gen();
-    match op % 2usize {
-        0usize => Operation::WriteOperation(OpWr::Pop),
-        1usize => Operation::WriteOperation(OpWr::Push(rng.gen())),
-        _ => unreachable!(),
+pub fn generate_operations(nop: usize) -> Vec<Operation<OpRd, OpWr>> {
+    let mut orng = thread_rng();
+    let mut arng = thread_rng();
+
+    let mut ops = Vec::with_capacity(nop);
+    for _i in 0..nop {
+        let op: usize = orng.gen();
+        match op % 2usize {
+            0usize => ops.push(Operation::WriteOperation(OpWr::Pop)),
+            1usize => ops.push(Operation::WriteOperation(OpWr::Push(arng.gen()))),
+            _ => unreachable!(),
+        }
     }
+
+    ops
 }
 
 /// Compare against a stack with and without a log in-front.
 fn stack_single_threaded(c: &mut TestHarness) {
+    // Number of operations
+    const NOP: usize = 1_000;
     // Log size
     const LOG_SIZE_BYTES: usize = 2 * 1024 * 1024;
-    mkbench::baseline_comparison::<Stack>(c, "stack", LOG_SIZE_BYTES, &mut generate_operation);
+    let ops = generate_operations(NOP);
+    mkbench::baseline_comparison::<Stack>(c, "stack", ops, LOG_SIZE_BYTES);
 }
 
 /// Compare scalability of a node-replicated stack.
 fn stack_scale_out(c: &mut TestHarness) {
-    mkbench::ScaleBenchBuilder::new()
+    // How many operations per iteration
+    const NOP: usize = 10_000;
+    let ops = generate_operations(NOP);
+
+    mkbench::ScaleBenchBuilder::<Stack>::new(ops)
         .machine_defaults()
-        .configure::<Stack>(
+        .configure(
             c,
             "stack-scaleout",
-            |_cid, rid, _log, replica, _batch_size, rng| {
-                let op = rng.gen::<u8>();
-                let val = rng.gen::<u32>();
-
-                match generate_operation(rng) {
-                    Operation::WriteOperation(op) => replica.execute(op, rid).unwrap(),
+            |_cid, rid, _log, replica, op, _batch_size| {
+                match op {
+                    Operation::WriteOperation(op) => replica.execute(*op, rid).unwrap(),
                     Operation::ReadOperation(op) => unreachable!(),
                     _ => unreachable!(),
                 };

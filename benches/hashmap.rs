@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 
+use rand::seq::SliceRandom;
 use rand::{distributions::Distribution, Rng, RngCore};
 use zipf::ZipfDistribution;
 
@@ -94,49 +95,59 @@ impl Dispatch for NrHashMap {
 /// Generate a random sequence of operations
 ///
 /// # Arguments
-///  - `write_ratio`: Probability of generation a write give a value in [0..100]
-///  - `span`: Maximum key-space
+///  - `nop`: Number of operations to generate
+///  - `write`: true will Put, false will generate Get sequences
+///  - `span`: Maximum key
 ///  - `distribution`: Supported distribution 'uniform' or 'skewed'
-fn generate_operation(
-    rng: &mut rand::rngs::SmallRng,
+pub fn generate_operations(
+    nop: usize,
     write_ratio: usize,
     span: usize,
     distribution: &'static str,
-) -> Operation<OpRd, OpWr> {
+) -> Vec<Operation<OpRd, OpWr>> {
     assert!(distribution == "skewed" || distribution == "uniform");
 
+    let mut ops = Vec::with_capacity(nop);
+
     let skewed = distribution == "skewed";
+    let mut t_rng = rand::thread_rng();
     let zipf = ZipfDistribution::new(span, 1.03).unwrap();
 
-    let id = if skewed {
-        zipf.sample(rng) as u64
-    } else {
-        // uniform
-        rng.gen_range(0, span as u64)
-    };
+    for idx in 0..nop {
+        let id = if skewed {
+            zipf.sample(&mut t_rng) as u64
+        } else {
+            // uniform
+            t_rng.gen_range(0, span as u64)
+        };
 
-    if rng.gen::<usize>() % 100 < write_ratio {
-        Operation::WriteOperation(OpWr::Put(id, rng.next_u64()))
-    } else {
-        Operation::ReadOperation(OpRd::Get(id))
+        if idx % 100 < write_ratio {
+            ops.push(Operation::WriteOperation(OpWr::Put(id, t_rng.next_u64())));
+        } else {
+            ops.push(Operation::ReadOperation(OpRd::Get(id)));
+        }
     }
+
+    ops.shuffle(&mut t_rng);
+    ops
 }
 
 /// Compare a replicated hashmap against a single-threaded implementation.
 fn hashmap_single_threaded(c: &mut TestHarness) {
     // Size of the log.
     const LOG_SIZE_BYTES: usize = 2 * 1024 * 1024;
+    // How many operations per iteration
+    const NOP: usize = 1000;
+    // Biggest key in the hash-map
+    const KEY_SPACE: usize = 10_000;
+    // Key distribution
+    const UNIFORM: &'static str = "uniform";
+    //const SKEWED: &'static str = "skewed";
+    // Read/Write ratio
+    const WRITE_RATIO: usize = 10; //% out of 100
 
-    mkbench::baseline_comparison::<NrHashMap>(c, "hashmap", LOG_SIZE_BYTES, &mut |rng| {
-        // Biggest key in the hash-map
-        const KEY_SPACE: usize = 10_000;
-        // Key distribution
-        const UNIFORM: &'static str = "uniform";
-        //const SKEWED: &'static str = "skewed";
-        // Read/Write ratio
-        const WRITE_RATIO: usize = 10; //% out of 100
-        generate_operation(rng, WRITE_RATIO, KEY_SPACE, UNIFORM)
-    });
+    let ops = generate_operations(NOP, WRITE_RATIO, KEY_SPACE, UNIFORM);
+    mkbench::baseline_comparison::<NrHashMap>(c, "hashmap", ops, LOG_SIZE_BYTES);
 }
 
 /// Compare scale-out behaviour of synthetic data-structure.
@@ -148,23 +159,22 @@ fn hashmap_scale_out(c: &mut TestHarness) {
     //const SKEWED: &'static str = "skewed";
     // Read/Write ratio
     const WRITE_RATIO: usize = 0; //% out of 100
+                                  // Number of operation for test-harness.
+    const NOP: usize = 5_000_000;
 
-    mkbench::ScaleBenchBuilder::new()
+    let ops = generate_operations(NOP, WRITE_RATIO, KEY_SPACE, UNIFORM);
+
+    mkbench::ScaleBenchBuilder::<NrHashMap>::new(ops)
         .machine_defaults()
-        .configure::<NrHashMap>(
+        .configure(
             c,
             "hashmap-scaleout",
-            |_cid, rid, _log, replica, _batch_size, rng| match generate_operation(
-                rng,
-                WRITE_RATIO,
-                KEY_SPACE,
-                UNIFORM,
-            ) {
+            |_cid, rid, _log, replica, op, _batch_size| match op {
                 Operation::ReadOperation(op) => {
-                    replica.execute_ro(op, rid).unwrap();
+                    replica.execute_ro(*op, rid).unwrap();
                 }
                 Operation::WriteOperation(op) => {
-                    replica.execute(op, rid).unwrap();
+                    replica.execute(*op, rid).unwrap();
                 }
             },
         );

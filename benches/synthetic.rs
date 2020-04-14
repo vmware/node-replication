@@ -12,7 +12,7 @@
 #![feature(test)]
 
 use crossbeam_utils::CachePadded;
-use rand::Rng;
+use rand::{thread_rng, Rng};
 
 use node_replication::Dispatch;
 
@@ -207,74 +207,124 @@ impl Dispatch for AbstractDataStructure {
 ///
 /// Flag determines which types of operation we allow on the data-structure.
 /// The split is approximately equal among the operations we allow.
-fn generate_operation(
-    rng: &mut rand::rngs::SmallRng,
+pub fn generate_operations(
+    nop: usize,
     tid: usize,
     readonly: bool,
     writeonly: bool,
     readwrite: bool,
-) -> Operation<OpRd, OpWr> {
-    let op: usize = rng.gen::<usize>();
-    match (readonly, writeonly, readwrite) {
-        (true, true, true) => match op % 3 {
-            0 => Operation::ReadOperation(OpRd::ReadOnly(tid, rng.gen(), rng.gen())),
-            1 => Operation::WriteOperation(OpWr::WriteOnly(tid, rng.gen(), rng.gen())),
-            2 => Operation::WriteOperation(OpWr::ReadWrite(tid, rng.gen(), rng.gen())),
-            _ => unreachable!(),
-        },
-        (false, true, true) => match op % 2 {
-            0 => Operation::WriteOperation(OpWr::WriteOnly(tid, rng.gen(), rng.gen())),
-            1 => Operation::WriteOperation(OpWr::ReadWrite(tid, rng.gen(), rng.gen())),
-            _ => unreachable!(),
-        },
-        (true, true, false) => match op % 2 {
-            0 => Operation::ReadOperation(OpRd::ReadOnly(tid, rng.gen(), rng.gen())),
-            1 => Operation::WriteOperation(OpWr::WriteOnly(tid, rng.gen(), rng.gen())),
-            _ => unreachable!(),
-        },
-        (true, false, true) => match op % 2 {
-            0 => Operation::ReadOperation(OpRd::ReadOnly(tid, rng.gen(), rng.gen())),
-            1 => Operation::WriteOperation(OpWr::ReadWrite(tid, rng.gen(), rng.gen())),
-            _ => unreachable!(),
-        },
-        (true, false, false) => Operation::ReadOperation(OpRd::ReadOnly(tid, rng.gen(), rng.gen())),
-        (false, true, false) => {
-            Operation::WriteOperation(OpWr::WriteOnly(tid, rng.gen(), rng.gen()))
-        }
-        (false, false, true) => {
-            Operation::WriteOperation(OpWr::ReadWrite(tid, rng.gen(), rng.gen()))
-        }
-        (false, false, false) => panic!("no operations selected"),
+) -> Vec<Operation<OpRd, OpWr>> {
+    let mut orng = thread_rng();
+    let mut arng = thread_rng();
+
+    let mut ops = Vec::with_capacity(nop);
+    for _i in 0..nop {
+        let op: usize = orng.gen();
+
+        match (readonly, writeonly, readwrite) {
+            (true, true, true) => match op % 3 {
+                0 => ops.push(Operation::ReadOperation(OpRd::ReadOnly(
+                    tid,
+                    arng.gen(),
+                    arng.gen(),
+                ))),
+                1 => ops.push(Operation::WriteOperation(OpWr::WriteOnly(
+                    tid,
+                    arng.gen(),
+                    arng.gen(),
+                ))),
+                2 => ops.push(Operation::WriteOperation(OpWr::ReadWrite(
+                    tid,
+                    arng.gen(),
+                    arng.gen(),
+                ))),
+                _ => unreachable!(),
+            },
+            (false, true, true) => match op % 2 {
+                0 => ops.push(Operation::WriteOperation(OpWr::WriteOnly(
+                    tid,
+                    arng.gen(),
+                    arng.gen(),
+                ))),
+                1 => ops.push(Operation::WriteOperation(OpWr::ReadWrite(
+                    tid,
+                    arng.gen(),
+                    arng.gen(),
+                ))),
+                _ => unreachable!(),
+            },
+            (true, true, false) => match op % 2 {
+                0 => ops.push(Operation::ReadOperation(OpRd::ReadOnly(
+                    tid,
+                    arng.gen(),
+                    arng.gen(),
+                ))),
+                1 => ops.push(Operation::WriteOperation(OpWr::WriteOnly(
+                    tid,
+                    arng.gen(),
+                    arng.gen(),
+                ))),
+                _ => unreachable!(),
+            },
+            (true, false, true) => match op % 2 {
+                0 => ops.push(Operation::ReadOperation(OpRd::ReadOnly(
+                    tid,
+                    arng.gen(),
+                    arng.gen(),
+                ))),
+                1 => ops.push(Operation::WriteOperation(OpWr::ReadWrite(
+                    tid,
+                    arng.gen(),
+                    arng.gen(),
+                ))),
+                _ => unreachable!(),
+            },
+            (true, false, false) => ops.push(Operation::ReadOperation(OpRd::ReadOnly(
+                tid,
+                arng.gen(),
+                arng.gen(),
+            ))),
+            (false, true, false) => ops.push(Operation::WriteOperation(OpWr::WriteOnly(
+                tid,
+                arng.gen(),
+                arng.gen(),
+            ))),
+            (false, false, true) => ops.push(Operation::WriteOperation(OpWr::ReadWrite(
+                tid,
+                arng.gen(),
+                arng.gen(),
+            ))),
+            (false, false, false) => panic!("no operations selected"),
+        };
     }
+
+    ops
 }
 
 /// Compare a synthetic benchmark against a single-threaded implementation.
 fn synthetic_single_threaded(c: &mut TestHarness) {
+    // How many operations per iteration
+    const NOP: usize = 1_000;
     // Size of the log.
     const LOG_SIZE_BYTES: usize = 2 * 1024 * 1024;
 
-    mkbench::baseline_comparison::<AbstractDataStructure>(
-        c,
-        "synthetic",
-        LOG_SIZE_BYTES,
-        &mut |rng| generate_operation(rng, 1, false, false, true),
-    );
+    let ops = generate_operations(NOP, 0, false, false, true);
+    mkbench::baseline_comparison::<AbstractDataStructure>(c, "synthetic", ops, LOG_SIZE_BYTES);
 }
 
 /// Compare scale-out behaviour of synthetic data-structure.
 fn synthetic_scale_out(c: &mut TestHarness) {
-    mkbench::ScaleBenchBuilder::new()
+    // How many operations per iteration
+    const NOP: usize = 10_000;
+    // Operations to perform
+    let ops = generate_operations(NOP, 0, false, false, true);
+
+    mkbench::ScaleBenchBuilder::<AbstractDataStructure>::new(ops)
         .machine_defaults()
-        .configure::<AbstractDataStructure>(
+        .configure(
             c,
             "synthetic-scaleout",
-            |cid, rid, _log, replica, _batch_size, rng| match generate_operation(
-                rng,
-                cid as usize,
-                false,
-                false,
-                true,
-            ) {
+            |cid, rid, _log, replica, op, _batch_size| match op {
                 Operation::ReadOperation(mut o) => {
                     o.set_tid(cid as usize);
                     replica.execute_ro(o, rid).unwrap();

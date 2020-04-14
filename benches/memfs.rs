@@ -7,7 +7,8 @@
 use std::ffi::OsStr;
 use std::sync::Arc;
 
-use rand::Rng;
+use rand::seq::SliceRandom;
+use rand::{thread_rng, Rng};
 
 mod mkbench;
 mod utils;
@@ -311,60 +312,66 @@ impl Dispatch for NrMemFilesystem {
     }
 }
 
-fn generate_fs_operation(
-    rng: &mut rand::rngs::SmallRng,
-    write_ratio: usize,
-) -> Operation<(), OperationWr> {
-    if rng.gen::<usize>() % 100 < write_ratio {
-        Operation::WriteOperation(OperationWr::Write {
-            ino: 5, // XXX: hard-coded ino of file `00000001`
-            fh: 0,
-            offset: rng.gen_range(0, 4096 - 256),
-            data: &[3; 128],
-            flags: 0,
-        })
-    } else {
-        let offset = rng.gen_range(0, 4096 - 256);
-        let size = rng.gen_range(0, 128);
+fn generate_fs_operations(nop: usize, write_ratio: usize) -> Vec<Operation<(), OperationWr>> {
+    let mut ops = Vec::with_capacity(nop);
+    let mut rng = rand::thread_rng();
 
-        Operation::WriteOperation(OperationWr::Read {
-            ino: 5, // XXX: hard-coded ino of file `00000001`
-            fh: 0,
-            offset,
-            size,
-        })
+    for idx in 0..nop {
+        if idx % 100 < write_ratio {
+            ops.push(Operation::WriteOperation(OperationWr::Write {
+                ino: 5, // XXX: hard-coded ino of file `00000001`
+                fh: 0,
+                offset: rng.gen_range(0, 4096 - 256),
+                data: &[3; 128],
+                flags: 0,
+            }))
+        } else {
+            let offset = rng.gen_range(0, 4096 - 256);
+            let size = rng.gen_range(0, 128);
+
+            ops.push(Operation::WriteOperation(OperationWr::Read {
+                ino: 5, // XXX: hard-coded ino of file `00000001`
+                fh: 0,
+                offset: offset,
+                size: size,
+            }))
+        }
     }
+
+    ops.shuffle(&mut thread_rng());
+    ops
 }
 
 fn memfs_single_threaded(c: &mut TestHarness) {
     const LOG_SIZE_BYTES: usize = 16 * 1024 * 1024;
-    mkbench::baseline_comparison::<NrMemFilesystem>(c, "memfs", LOG_SIZE_BYTES, &mut |rng| {
-        const WRITE_RATIO: usize = 10; //% out of 100
-        generate_fs_operation(rng, WRITE_RATIO)
-    });
+    const NOP: usize = 50;
+    const WRITE_RATIO: usize = 10; //% out of 100
+
+    let ops = generate_fs_operations(NOP, WRITE_RATIO);
+    mkbench::baseline_comparison::<NrMemFilesystem>(c, "memfs", ops, LOG_SIZE_BYTES);
 }
 
 /// Compare scale-out behaviour of memfs.
 fn memfs_scale_out(c: &mut TestHarness) {
+    const NOP: usize = 50;
     const WRITE_RATIO: usize = 10; //% out of 100
 
-    mkbench::ScaleBenchBuilder::new()
+    let ops = generate_fs_operations(NOP, WRITE_RATIO);
+
+    mkbench::ScaleBenchBuilder::<NrMemFilesystem>::new(ops)
         .machine_defaults()
         // The only benchmark that actually seems to slightly
         // regress with 2 MiB logsize, set to 16 MiB
         .log_size(16 * 1024 * 1024)
-        .configure::<NrMemFilesystem>(
+        .configure(
             c,
             "memfs-scaleout",
-            |_cid, rid, _log, replica, _batch_size, rng| match generate_fs_operation(
-                rng,
-                WRITE_RATIO,
-            ) {
+            |_cid, rid, _log, replica, op, _batch_size| match op {
                 Operation::ReadOperation(o) => {
-                    replica.execute_ro(o, rid).unwrap();
+                    replica.execute_ro(*o, rid).unwrap();
                 }
                 Operation::WriteOperation(o) => {
-                    replica.execute(o, rid).unwrap();
+                    replica.execute(*o, rid).unwrap();
                 }
             },
         );

@@ -11,7 +11,7 @@ use std::mem::transmute;
 use std::pin::Pin;
 
 use log::{debug, trace};
-use rand::Rng;
+use rand::{thread_rng, Rng};
 use x86::bits64::paging::*;
 
 use node_replication::Dispatch;
@@ -533,48 +533,60 @@ impl Dispatch for VSpaceDispatcher {
     }
 }
 
-fn generate_operation(rng: &mut rand::rngs::SmallRng) -> Operation<OpcodeRd, OpcodeWr> {
+fn generate_operations(nop: usize) -> Vec<Operation<OpcodeRd, OpcodeWr>> {
+    let mut ops = Vec::with_capacity(nop);
+    let mut rng = thread_rng();
+
     const PAGE_RANGE_MASK: u64 = !0xffff_0000_0000_0fff;
     const MAP_SIZE_MASK: u64 = !0xffff_ffff_f000_0fff;
-    match rng.gen::<usize>() % 3 {
-        0 => Operation::ReadOperation(OpcodeRd::Identify(rng.gen::<u64>())),
-        1 => Operation::WriteOperation(OpcodeWr::Map(
-            VAddr::from(rng.gen::<u64>() & PAGE_RANGE_MASK),
-            rng.gen::<usize>() & MAP_SIZE_MASK as usize,
-            MapAction::ReadWriteUser,
-            PAddr::from(rng.gen::<u64>() & PAGE_RANGE_MASK),
-        )),
-        2 => Operation::WriteOperation(OpcodeWr::MapDevice(
-            VAddr::from(rng.gen::<u64>() & PAGE_RANGE_MASK),
-            PAddr::from(rng.gen::<u64>() & PAGE_RANGE_MASK),
-            rng.gen::<usize>() & MAP_SIZE_MASK as usize,
-        )),
-        _ => unreachable!(),
+    for _i in 0..nop {
+        match rng.gen::<usize>() % 3 {
+            0 => ops.push(Operation::ReadOperation(OpcodeRd::Identify(
+                rng.gen::<u64>(),
+            ))),
+            1 => ops.push(Operation::WriteOperation(OpcodeWr::Map(
+                VAddr::from(rng.gen::<u64>() & PAGE_RANGE_MASK),
+                rng.gen::<usize>() & MAP_SIZE_MASK as usize,
+                MapAction::ReadWriteUser,
+                PAddr::from(rng.gen::<u64>() & PAGE_RANGE_MASK),
+            ))),
+            2 => ops.push(Operation::WriteOperation(OpcodeWr::MapDevice(
+                VAddr::from(rng.gen::<u64>() & PAGE_RANGE_MASK),
+                PAddr::from(rng.gen::<u64>() & PAGE_RANGE_MASK),
+                rng.gen::<usize>() & MAP_SIZE_MASK as usize,
+            ))),
+            _ => unreachable!(),
+        }
     }
+    ops
 }
 
 fn vspace_single_threaded(c: &mut TestHarness) {
+    const NOP: usize = 3000;
     const LOG_SIZE_BYTES: usize = 16 * 1024 * 1024;
     mkbench::baseline_comparison::<VSpaceDispatcher>(
         c,
         "vspace",
+        generate_operations(NOP),
         LOG_SIZE_BYTES,
-        &mut generate_operation,
     );
 }
 
 fn vspace_scale_out(c: &mut TestHarness) {
-    mkbench::ScaleBenchBuilder::new()
+    const NOP: usize = 3000;
+    let ops = generate_operations(NOP);
+
+    mkbench::ScaleBenchBuilder::<VSpaceDispatcher>::new(ops)
         .machine_defaults()
-        .configure::<VSpaceDispatcher>(
+        .configure(
             c,
             "vspace-scaleout",
-            |_cid, rid, _log, replica, _batch_size, rng| match generate_operation(rng) {
+            |_cid, rid, _log, replica, op, _batch_size| match op {
                 Operation::ReadOperation(o) => {
-                    let _r = replica.execute_ro(o, rid);
+                    let _r = replica.execute_ro(*o, rid);
                 }
                 Operation::WriteOperation(o) => {
-                    let _r = replica.execute(o, rid);
+                    let _r = replica.execute(*o, rid);
                 }
             },
         );

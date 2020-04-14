@@ -53,26 +53,32 @@ fn log_scale_bench(c: &mut TestHarness) {
     /// Log size (needs to be big as we don't have GC in this case but high tput)
     const LOG_SIZE_BYTES: usize = 12 * 1024 * 1024 * 1024;
 
-    mkbench::ScaleBenchBuilder::new()
+    /// Benchmark #operations per iteration
+    const NOP: usize = 50_000;
+
+    let mut operations = Vec::new();
+    for e in 0..NOP {
+        operations.push(Operation::WriteOperation(e));
+    }
+
+    mkbench::ScaleBenchBuilder::<Nop>::new(operations)
         .machine_defaults()
         .log_size(LOG_SIZE_BYTES)
         .add_batch(8)
         .reset_log()
         .disable_sync()
-        .configure::<Nop>(
+        .configure(
             c,
             "log-append",
-            |_cid, rid, log, _replica, batch_size, rng| {
-                let mut op_batch: Vec<usize> = Vec::with_capacity(batch_size);
-                for i in 0..batch_size {
-                    op_batch.push(rng.gen::<usize>());
+            |_cid, rid, log, _replica, op, batch_size| match op {
+                Operation::WriteOperation(o) => {
+                    let _r = log.append(
+                        &vec![*o],
+                        rid,
+                        |_o: <Nop as Dispatch>::WriteOperation, _i: usize| {},
+                    );
                 }
-
-                let _r = log.append(
-                    &op_batch[..],
-                    rid,
-                    |_o: <Nop as Dispatch>::WriteOperation, _i: usize| {},
-                );
+                _ => unreachable!(),
             },
         );
 }
