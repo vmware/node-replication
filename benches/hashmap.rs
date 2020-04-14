@@ -147,7 +147,7 @@ fn hashmap_scale_out(c: &mut TestHarness) {
     const UNIFORM: &'static str = "uniform";
     //const SKEWED: &'static str = "skewed";
     // Read/Write ratio
-    const WRITE_RATIO: usize = 10; //% out of 100
+    const WRITE_RATIO: usize = 0; //% out of 100
 
     mkbench::ScaleBenchBuilder::new()
         .machine_defaults()
