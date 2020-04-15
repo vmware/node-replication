@@ -186,9 +186,8 @@ fn partitioned_hashmap_scale_out(c: &mut TestHarness) {
     const KEY_SPACE: usize = 5_000_000;
     // Key distribution
     const UNIFORM: &'static str = "uniform";
-    //const SKEWED: &'static str = "skewed";
     // Read/Write ratio
-    const WRITE_RATIO: usize = 0; //% out of 100
+    const WRITE_RATIO: usize = 0;
     // Number of operation for test-harness.
     const NOP: usize = 515_000;
 
