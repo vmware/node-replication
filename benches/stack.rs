@@ -130,7 +130,7 @@ fn stack_scale_out(c: &mut TestHarness) {
         .configure(
             c,
             "stack-scaleout",
-            |_cid, rid, _log, replica, op, _batch_size| {
+            |_cid, rid, _log, replica, op, _batch_size, _direct| {
                 match op {
                     Operation::WriteOperation(op) => replica.execute(*op, rid).unwrap(),
                     Operation::ReadOperation(op) => unreachable!(),

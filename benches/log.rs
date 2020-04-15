@@ -70,7 +70,7 @@ fn log_scale_bench(c: &mut TestHarness) {
         .configure(
             c,
             "log-append",
-            |_cid, rid, log, _replica, op, batch_size| match op {
+            |_cid, rid, log, _replica, op, batch_size, _direct| match op {
                 Operation::WriteOperation(o) => {
                     let _r = log.append(
                         &vec![*o],

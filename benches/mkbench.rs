@@ -50,6 +50,7 @@ type BenchFn<T> = fn(
     &Arc<Replica<T>>,
     &Operation<<T as Dispatch>::ReadOperation, <T as Dispatch>::WriteOperation>,
     usize,
+    &Arc<T>,
 );
 
 /// Log the baseline comparision results to a CSV file
@@ -239,6 +240,8 @@ pub enum ReplicaStrategy {
     L3,
     /// One replica per socket.
     Socket,
+    /// Replicate data-structure on each core with NR.
+    Partition,
 }
 
 impl fmt::Display for ReplicaStrategy {
@@ -249,6 +252,7 @@ impl fmt::Display for ReplicaStrategy {
             ReplicaStrategy::L2 => write!(f, "L2"),
             ReplicaStrategy::L3 => write!(f, "L3"),
             ReplicaStrategy::Socket => write!(f, "Socket"),
+            ReplicaStrategy::Partition => write!(f, "Partition"),
         }
     }
 }
@@ -261,6 +265,7 @@ impl fmt::Debug for ReplicaStrategy {
             ReplicaStrategy::L2 => write!(f, "RS=L2"),
             ReplicaStrategy::L3 => write!(f, "RS=L3"),
             ReplicaStrategy::Socket => write!(f, "RS=Socket"),
+            ReplicaStrategy::Partition => write!(f, "RS=Partition"),
         }
     }
 }
@@ -309,6 +314,9 @@ where
     result_channel: (Sender<(Core, Vec<usize>)>, Receiver<(Core, Vec<usize>)>),
     /// Thread handles
     handles: Vec<JoinHandle<()>>,
+    /// Direct reference to underlying data-structure without node-replication.
+    /// The reference is used to run the benchmarks in full partitioned mode.
+    data: Arc<T>,
 }
 
 impl<T: Dispatch + Default + Send> ScaleBenchmark<T>
@@ -349,6 +357,7 @@ where
             cmd_channels: Default::default(),
             result_channel: channel(),
             handles: Default::default(),
+            data: Arc::new(T::default()),
         }
     }
 
@@ -525,6 +534,7 @@ where
                 let nre = replicas.len();
                 let rmc = self.rm.clone();
                 let log_period = Duration::from_secs(1);
+                let data = self.data.clone();
 
                 self.handles.push(thread::spawn(move || {
                     utils::pin_thread(core_id);
@@ -564,6 +574,7 @@ where
                                 &replica,
                                 &operations[iter % nop],
                                 batch_size,
+                                &data,
                             ));
                             operations_completed += 1 * batch_size;
                             iter += 1;
@@ -704,6 +715,9 @@ where
                     );
                 }
             }
+            ReplicaStrategy::Partition => {
+                rm.insert(0, cpus.iter().map(|c| c.cpu).collect());
+            }
         };
 
         rm
@@ -842,6 +856,12 @@ where
 
     /// Run benchmark with given replication strategy.
     pub fn replica_strategy(&mut self, rs: ReplicaStrategy) -> &mut Self {
+        self.replica_strategies.push(rs);
+        self
+    }
+
+    pub fn update_replica_strategy(&mut self, rs: ReplicaStrategy) -> &mut Self {
+        self.replica_strategies.clear();
         self.replica_strategies.push(rs);
         self
     }

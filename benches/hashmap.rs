@@ -169,12 +169,43 @@ fn hashmap_scale_out(c: &mut TestHarness) {
         .configure(
             c,
             "hashmap-scaleout",
-            |_cid, rid, _log, replica, op, _batch_size| match op {
+            |_cid, rid, _log, replica, op, _batch_size, _direct| match op {
                 Operation::ReadOperation(op) => {
                     replica.execute_ro(*op, rid).unwrap();
                 }
                 Operation::WriteOperation(op) => {
                     replica.execute(*op, rid).unwrap();
+                }
+            },
+        );
+}
+
+/// Compare scale-out behaviour of partitioned hashmap data-structure.
+fn partitioned_hashmap_scale_out(c: &mut TestHarness) {
+    // Biggest key in the hash-map
+    const KEY_SPACE: usize = 5_000_000;
+    // Key distribution
+    const UNIFORM: &'static str = "uniform";
+    //const SKEWED: &'static str = "skewed";
+    // Read/Write ratio
+    const WRITE_RATIO: usize = 0; //% out of 100
+    // Number of operation for test-harness.
+    const NOP: usize = 515_000;
+
+    let ops = generate_operations(NOP, WRITE_RATIO, KEY_SPACE, UNIFORM);
+
+    mkbench::ScaleBenchBuilder::<NrHashMap>::new(ops)
+        .machine_defaults()
+        .update_replica_strategy(mkbench::ReplicaStrategy::Partition)
+        .configure(
+            c,
+            "partitioned-hashmap-scaleout",
+            |_cid, _rid, _log, _replica, op, _batch_size, direct| match op {
+                Operation::ReadOperation(op) => {
+                    direct.dispatch(*op).unwrap();
+                }
+                Operation::WriteOperation(_op) => {
+                    unreachable!("TODO: Read only hashmap benchmark");
                 }
             },
         );
@@ -186,4 +217,5 @@ fn main() {
 
     hashmap_single_threaded(&mut harness);
     hashmap_scale_out(&mut harness);
+    partitioned_hashmap_scale_out(&mut harness);
 }

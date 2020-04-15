@@ -581,7 +581,7 @@ fn vspace_scale_out(c: &mut TestHarness) {
         .configure(
             c,
             "vspace-scaleout",
-            |_cid, rid, _log, replica, op, _batch_size| match op {
+            |_cid, rid, _log, replica, op, _batch_size, _direct| match op {
                 Operation::ReadOperation(o) => {
                     let _r = replica.execute_ro(*o, rid);
                 }
