@@ -583,17 +583,19 @@ where
                         let end_experiment = start + duration;
                         let mut next_log = start + log_period;
                         while Instant::now() < end_experiment {
-                            black_box((f)(
-                                core_id,
-                                replica_token,
-                                &log,
-                                &replica,
-                                &operations[iter % nop],
-                                batch_size,
-                                &mut data,
-                            ));
+                            for _i in 0..batch_size {
+                                black_box((f)(
+                                    core_id,
+                                    replica_token,
+                                    &log,
+                                    &replica,
+                                    &operations[iter],
+                                    batch_size,
+                                    &mut data,
+                                ));
+                                iter = (iter + 1) % nop;
+                            }
                             operations_completed += 1 * batch_size;
-                            iter += 1;
 
                             if Instant::now() >= next_log {
                                 trace!("Operations completed {} / s", operations_completed);
