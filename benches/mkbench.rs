@@ -10,7 +10,7 @@
 //!    to evaluate the scalability of a data-structure with node-replication.
 #![allow(unused)]
 
-use std::cell::RefMut;
+use std::cell::{Cell, RefMut};
 use std::collections::HashMap;
 use std::fmt;
 use std::fs::OpenOptions;
@@ -50,7 +50,7 @@ type BenchFn<T> = fn(
     &Arc<Replica<T>>,
     &Operation<<T as Dispatch>::ReadOperation, <T as Dispatch>::WriteOperation>,
     usize,
-    &Arc<T>,
+    &mut Option<T>,
 );
 
 /// Log the baseline comparision results to a CSV file
@@ -316,7 +316,7 @@ where
     handles: Vec<JoinHandle<()>>,
     /// Direct reference to underlying data-structure without node-replication.
     /// The reference is used to run the benchmarks in full partitioned mode.
-    data: Arc<T>,
+    data: Vec<Cell<Option<T>>>,
 }
 
 impl<T: Dispatch + Default + Send> ScaleBenchmark<T>
@@ -342,6 +342,10 @@ where
         log: Arc<Log<'static, <T as Dispatch>::WriteOperation>>,
         f: BenchFn<T>,
     ) -> ScaleBenchmark<T> {
+        let mut data = Vec::with_capacity(ts);
+        for _i in 0..ts {
+            data.push(Cell::new(None));
+        }
         ScaleBenchmark {
             name,
             rs,
@@ -357,7 +361,7 @@ where
             cmd_channels: Default::default(),
             result_channel: channel(),
             handles: Default::default(),
-            data: Arc::new(T::default()),
+            data,
         }
     }
 
@@ -482,11 +486,23 @@ where
         0usize
     }
 
-    fn alloc_replicas(&self, replicas: &mut Vec<Arc<Replica<T>>>) {
+    fn alloc_replicas(&mut self, replicas: &mut Vec<Arc<Replica<T>>>) {
         for (rid, cores) in self.rm.clone().into_iter() {
+            let core0 = cores[0];
+            let mut tid = 0;
+            // Partitioned scheme uses system level log, so
+            // allocate partitioned DS on each core.
+            if self.rs == ReplicaStrategy::Partition {
+                for core in cores.into_iter() {
+                    utils::pin_thread(core);
+                    self.data[tid] = Cell::new(Some(T::default()));
+                    tid += 1;
+                }
+            }
+
             // Pinning the thread to the replica' cores forces the memory
             // allocation to be local to the where a replica will be used later
-            utils::pin_thread(cores[0]);
+            utils::pin_thread(core0);
 
             let log = self.log.clone();
             replicas.push(Arc::new(Replica::<T>::new(&log)));
@@ -534,7 +550,7 @@ where
                 let nre = replicas.len();
                 let rmc = self.rm.clone();
                 let log_period = Duration::from_secs(1);
-                let data = self.data.clone();
+                let mut data = self.data[tid].take();
 
                 self.handles.push(thread::spawn(move || {
                     utils::pin_thread(core_id);
@@ -574,7 +590,7 @@ where
                                 &replica,
                                 &operations[iter % nop],
                                 batch_size,
-                                &data,
+                                &mut data,
                             ));
                             operations_completed += 1 * batch_size;
                             iter += 1;

@@ -151,24 +151,22 @@ fn hashmap_single_threaded(c: &mut TestHarness) {
 }
 
 /// Compare scale-out behaviour of synthetic data-structure.
-fn hashmap_scale_out(c: &mut TestHarness) {
+fn hashmap_scale_out(c: &mut TestHarness, write_ratio: usize) {
     // Biggest key in the hash-map
     const KEY_SPACE: usize = 5_000_000;
     // Key distribution
     const UNIFORM: &'static str = "uniform";
-    //const SKEWED: &'static str = "skewed";
-    // Read/Write ratio
-    const WRITE_RATIO: usize = 0; //% out of 100
-                                  // Number of operation for test-harness.
+    // Number of operation for test-harness.
     const NOP: usize = 515_000;
 
-    let ops = generate_operations(NOP, WRITE_RATIO, KEY_SPACE, UNIFORM);
+    let ops = generate_operations(NOP, write_ratio, KEY_SPACE, UNIFORM);
+    let bench_name = format!("hashmap-scaleout-wr{}", write_ratio);
 
     mkbench::ScaleBenchBuilder::<NrHashMap>::new(ops)
         .machine_defaults()
         .configure(
             c,
-            "hashmap-scaleout",
+            &bench_name,
             |_cid, rid, _log, replica, op, _batch_size, _direct| match op {
                 Operation::ReadOperation(op) => {
                     replica.execute_ro(*op, rid).unwrap();
@@ -181,30 +179,29 @@ fn hashmap_scale_out(c: &mut TestHarness) {
 }
 
 /// Compare scale-out behaviour of partitioned hashmap data-structure.
-fn partitioned_hashmap_scale_out(c: &mut TestHarness) {
+fn partitioned_hashmap_scale_out(c: &mut TestHarness, write_ratio: usize) {
     // Biggest key in the hash-map
     const KEY_SPACE: usize = 5_000_000;
     // Key distribution
     const UNIFORM: &'static str = "uniform";
-    // Read/Write ratio
-    const WRITE_RATIO: usize = 0;
     // Number of operation for test-harness.
     const NOP: usize = 515_000;
 
-    let ops = generate_operations(NOP, WRITE_RATIO, KEY_SPACE, UNIFORM);
+    let ops = generate_operations(NOP, write_ratio, KEY_SPACE, UNIFORM);
+    let bench_name = format!("partitioned-hashmap-scaleout-wr{}", write_ratio);
 
     mkbench::ScaleBenchBuilder::<NrHashMap>::new(ops)
         .machine_defaults()
         .update_replica_strategy(mkbench::ReplicaStrategy::Partition)
         .configure(
             c,
-            "partitioned-hashmap-scaleout",
+            &bench_name,
             |_cid, _rid, _log, _replica, op, _batch_size, direct| match op {
                 Operation::ReadOperation(op) => {
-                    direct.dispatch(*op).unwrap();
+                    direct.as_ref().unwrap().dispatch(*op).unwrap();
                 }
-                Operation::WriteOperation(_op) => {
-                    unreachable!("TODO: Read only hashmap benchmark");
+                Operation::WriteOperation(op) => {
+                    direct.as_mut().unwrap().dispatch_mut(*op).unwrap();
                 }
             },
         );
@@ -213,8 +210,11 @@ fn partitioned_hashmap_scale_out(c: &mut TestHarness) {
 fn main() {
     let _r = env_logger::try_init();
     let mut harness = Default::default();
+    let write_ratios = vec![0, 10, 50, 100];
 
     hashmap_single_threaded(&mut harness);
-    hashmap_scale_out(&mut harness);
-    partitioned_hashmap_scale_out(&mut harness);
+    for write_ratio in write_ratios.into_iter() {
+        hashmap_scale_out(&mut harness, write_ratio);
+        partitioned_hashmap_scale_out(&mut harness, write_ratio);
+    }
 }
