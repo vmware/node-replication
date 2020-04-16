@@ -51,7 +51,7 @@ fn main() {
                 .short("c")
                 .multiple(true)
                 .takes_value(true)
-                .possible_values(&["std", "chashmap", "urcu", "nr", "evmap"])
+                .possible_values(&["std", "chashmap", "urcu", "nr", "evmap", "flurry"])
                 .help("What HashMap versions to benchmark."),
         )
         .arg(
@@ -92,7 +92,7 @@ fn main() {
 
     let versions: Vec<&str> = match matches.values_of("compare") {
         Some(iter) => iter.collect(),
-        None => vec!["std", "chashmap", "urcu", "nr", "evmap"],
+        None => vec!["std", "chashmap", "urcu", "nr", "evmap", "flurry"],
     };
 
     let stat = |var: &str, op, results: Vec<(_, usize)>| {
@@ -133,6 +133,30 @@ fn main() {
             .partition(|&(write, _)| write);
         stat("std", "write", wres);
         stat("std", "read", rres);
+    }
+
+    // then, benchmark Arc<flurry::HashMap>
+    if versions.contains(&"std") {
+        let map: flurry::HashMap<u64, u64> = flurry::HashMap::with_capacity(5_000_000);
+        let map = sync::Arc::new(map);
+        let start = time::Instant::now();
+        let end = start + dur;
+        join.extend((0..readers).into_iter().map(|_| {
+            let map = map.clone();
+            let dist = dist.to_owned();
+            thread::spawn(move || drive(map, end, dist, false, span))
+        }));
+        join.extend((0..writers).into_iter().map(|_| {
+            let map = map.clone();
+            let dist = dist.to_owned();
+            thread::spawn(move || drive(map, end, dist, true, span))
+        }));
+        let (wres, rres): (Vec<_>, _) = join
+            .drain(..)
+            .map(|jh| jh.join().unwrap())
+            .partition(|&(write, _)| write);
+        stat("flurry", "write", wres);
+        stat("flurry", "read", rres);
     }
 
     // then, benchmark Arc<CHashMap>
@@ -296,6 +320,16 @@ impl Backend for sync::Arc<CHashMap<u64, u64>> {
 
     fn b_put(&mut self, key: u64, value: u64) {
         self.insert(key, value);
+    }
+}
+
+impl Backend for sync::Arc<flurry::HashMap<u64, u64>> {
+    fn b_get(&mut self, key: u64) -> u64 {
+        self.pin().get(&key).map(|v| *v).unwrap_or(0)
+    }
+
+    fn b_put(&mut self, key: u64, value: u64) {
+        self.pin().insert(key, value);
     }
 }
 

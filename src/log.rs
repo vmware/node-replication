@@ -9,7 +9,7 @@ use core::fmt;
 use core::mem::{align_of, size_of};
 use core::ops::{Drop, FnMut};
 use core::slice::from_raw_parts_mut;
-use core::sync::atomic::{compiler_fence, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use crossbeam_utils::CachePadded;
 
@@ -48,7 +48,7 @@ const WARN_THRESHOLD: usize = 1 << 28;
 ///
 /// `T` is the type on the operation - typically an enum class containing opcodes as well as
 /// arguments. It is required that this type be sized and cloneable.
-#[derive(Clone, Copy, Default)]
+#[derive(Default)]
 #[repr(align(64))]
 struct Entry<T>
 where
@@ -61,7 +61,7 @@ where
     replica: usize,
 
     /// Indicates whether this entry represents a valid operation when on the log.
-    alivef: bool,
+    alivef: AtomicBool,
 }
 
 /// A log of operations that can be shared between multiple NUMA nodes.
@@ -208,7 +208,7 @@ where
                     Cell::new(Entry {
                         operation: None,
                         replica: 0usize,
-                        alivef: false,
+                        alivef: AtomicBool::new(false),
                     }),
                 );
             }
@@ -389,14 +389,13 @@ where
                 // case, we flip the mask we were originally going to write into the
                 // allocated entry. We cannot flip lmasks[idx - 1] because this replica
                 // might still need to execute a few entries before the wrap around.
-                if unsafe { (*e).alivef == m } {
+                if unsafe { (*e).alivef.load(Ordering::Relaxed) == m } {
                     m = !m;
                 }
 
                 unsafe { (*e).operation = Some(ops[i].clone()) };
                 unsafe { (*e).replica = idx };
-                compiler_fence(Ordering::AcqRel);
-                unsafe { (*e).alivef = m };
+                unsafe { (*e).alivef.store(m, Ordering::Release) };
             }
 
             // If needed, advance the head of the log forward to make room on the log.
@@ -477,8 +476,7 @@ where
             let mut iteration = 1;
             let e = self.slog[self.index(i)].as_ptr();
 
-            let mut is_alive = unsafe { (*e).alivef };
-            while is_alive != self.lmasks[idx - 1].get() {
+            while unsafe { (*e).alivef.load(Ordering::Acquire) != self.lmasks[idx - 1].get() } {
                 if iteration % WARN_THRESHOLD == 0 {
                     warn!(
                         "alivef not being set for self.index(i={}) = {} (self.lmasks[{}] is {})...",
@@ -489,7 +487,6 @@ where
                     );
                 }
                 iteration += 1;
-                is_alive = unsafe { core::intrinsics::volatile_load(&(*e).alivef) };
             }
 
             unsafe { d((*e).operation.as_ref().unwrap().clone(), (*e).replica) };
@@ -589,7 +586,7 @@ where
         // the reset of the log here.
         for i in 0..self.size {
             let e = self.slog[self.index(i)].as_ptr();
-            (*e).alivef = false;
+            (*e).alivef.store(false, Ordering::Release);
         }
     }
 
@@ -712,7 +709,7 @@ mod tests {
         let e = Entry::<Operation>::default();
         assert_eq!(e.operation, None);
         assert_eq!(e.replica, 0);
-        assert_eq!(e.alivef, false);
+        assert_eq!(e.alivef.load(Ordering::Relaxed), false);
     }
 
     // Test that our entry_size() method returns the correct size.
