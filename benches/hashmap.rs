@@ -16,6 +16,7 @@ mod mkbench;
 mod utils;
 
 use utils::benchmark::*;
+use utils::topology::ThreadMapping;
 use utils::Operation;
 
 extern crate jemallocator;
@@ -165,6 +166,7 @@ fn hashmap_scale_out(c: &mut TestHarness, write_ratio: usize) {
     mkbench::ScaleBenchBuilder::<NrHashMap>::new(ops)
         .machine_defaults()
         .add_batch(128)
+        .thread_mapping(ThreadMapping::Interleave)
         .configure(
             c,
             &bench_name,
@@ -194,6 +196,7 @@ fn partitioned_hashmap_scale_out(c: &mut TestHarness, write_ratio: usize) {
     mkbench::ScaleBenchBuilder::<NrHashMap>::new(ops)
         .machine_defaults()
         .add_batch(128)
+        .thread_mapping(ThreadMapping::Interleave)
         .update_replica_strategy(mkbench::ReplicaStrategy::Partition)
         .configure(
             c,
