@@ -5,6 +5,8 @@
 #![no_std]
 #![feature(atomic_min_max)]
 #![feature(core_intrinsics)]
+#![feature(new_uninit)]
+#![feature(get_mut_unchecked)]
 
 #[cfg(test)]
 extern crate std;

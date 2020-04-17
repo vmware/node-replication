@@ -13,3 +13,7 @@ Cargo.lock
 .vscode
 *.code-workspace
 .DS_Store
+
+# Benchmark files
+**/*.log
+**/*.csv

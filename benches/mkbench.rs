@@ -505,7 +505,7 @@ where
             utils::pin_thread(core0);
 
             let log = self.log.clone();
-            replicas.push(Arc::new(Replica::<T>::new(&log)));
+            replicas.push(Replica::<T>::new(&log));
         }
     }
 

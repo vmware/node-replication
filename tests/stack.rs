@@ -458,7 +458,7 @@ fn replicas_are_equal() {
 
     let mut replicas = Vec::with_capacity(r);
     for _i in 0..r {
-        replicas.push(Arc::new(Replica::<Stack>::new(&log)));
+        replicas.push(Replica::<Stack>::new(&log));
     }
 
     let mut threads = Vec::new();
