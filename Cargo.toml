@@ -76,3 +76,4 @@ serde = { version = "1", features = ["derive"] }
 clap = { version = "2", features = ["yaml"] }
 rand = { version = "0.7", features = ["small_rng"] }
 jemallocator = "0.3.2"
+syscall = "0.2.1"

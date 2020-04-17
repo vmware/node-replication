@@ -4,6 +4,7 @@
 //! Utility functions to do multi-threaded benchmarking of the log infrastructure.
 
 use std::fmt::Debug;
+use syscall::*;
 
 pub mod benchmark;
 pub mod topology;
@@ -27,6 +28,8 @@ pub fn pin_thread(core_id: topology::Cpu) {
     core_affinity::set_for_current(core_affinity::CoreId {
         id: core_id as usize,
     });
+    let (_node, cpu) = get_cpu();
+    assert_eq!(core_id, cpu as u64);
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -51,4 +54,21 @@ pub fn disable_dvfs() {
 #[cfg(not(target_os = "linux"))]
 pub fn disable_dvfs() {
     log::warn!("Can't disable DVFS, expect non-optimal test results!");
+}
+
+// Wrapper around get_cpu syscall in linux.
+#[cfg(target_os = "linux")]
+pub fn get_cpu() -> (usize, usize) {
+    let cpu: &mut usize = &mut 512;
+    let node: &mut usize = &mut 512;
+    let tcache: *mut usize = &mut 512;
+    unsafe {
+        syscall!(
+            GETCPU,
+            cpu as *mut usize,
+            node as *mut usize,
+            tcache as *mut usize
+        );
+        (*node, *cpu)
+    }
 }
