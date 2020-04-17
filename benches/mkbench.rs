@@ -697,18 +697,45 @@ where
                     );
                 }
             }
-            ReplicaStrategy::L1 => {
-                let mut l1: Vec<L1> = cpus.iter().map(|t| t.l1).collect();
-                l1.sort();
-                l1.dedup();
+            ReplicaStrategy::L1 => match tm {
+                ThreadMapping::None => {}
+                ThreadMapping::Sequential => {
+                    let mut l1: Vec<L1> = cpus.iter().map(|t| t.l1).collect();
+                    l1.sort();
+                    l1.dedup();
 
-                for s in l1 {
-                    rm.insert(
-                        s as usize,
-                        cpus.iter().filter(|c| c.l1 == s).map(|c| c.cpu).collect(),
-                    );
+                    for s in l1 {
+                        rm.insert(
+                            s as usize,
+                            cpus.iter().filter(|c| c.l1 == s).map(|c| c.cpu).collect(),
+                        );
+                    }
                 }
-            }
+                // Giving replica number based on L1 number won't work in this case, as the
+                // L1 numbers are allocated to Node-0 first and then to Node-1, and so on.
+                ThreadMapping::Interleave => {
+                    let mut l1: Vec<L1> = cpus.iter().map(|t| t.l1).collect();
+                    l1.sort();
+                    l1.dedup();
+
+                    let mut rid = 0;
+                    let mut mapping: HashMap<L1, usize> = HashMap::with_capacity(cpus.len());
+                    for cpu in cpus.iter() {
+                        let cache_num = cpu.l1;
+                        if mapping.get(&cache_num).is_none() {
+                            mapping.insert(cache_num, rid);
+                            rid += 1;
+                        }
+                    }
+
+                    for s in l1 {
+                        rm.insert(
+                            *mapping.get(&s).unwrap(),
+                            cpus.iter().filter(|c| c.l1 == s).map(|c| c.cpu).collect(),
+                        );
+                    }
+                }
+            },
             ReplicaStrategy::L2 => {
                 let mut l2: Vec<L2> = cpus.iter().map(|t| t.l2).collect();
                 l2.sort();
