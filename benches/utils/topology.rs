@@ -8,6 +8,8 @@ use std::fmt;
 use hwloc::*;
 use serde::Serialize;
 
+use jemalloc_ctl::opt::narenas;
+
 pub type Node = u64;
 pub type Socket = u64;
 pub type Core = u64;
@@ -150,6 +152,11 @@ impl MachineTopology {
             };
 
             data.push(cpu_info);
+        }
+
+        match narenas::read() {
+            Ok(narena) => assert_eq!(narena as usize, data.len()),
+            Err(e) => unreachable!("Unable to access Jemalloc library {}", e),
         }
 
         MachineTopology { data }

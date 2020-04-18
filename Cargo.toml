@@ -75,5 +75,6 @@ parking_lot = "0.7.1"
 serde = { version = "1", features = ["derive"] }
 clap = { version = "2", features = ["yaml"] }
 rand = { version = "0.7", features = ["small_rng"] }
-jemallocator = "0.3.2"
+jemallocator = { git = "https://github.com/gz/jemallocator.git" }
+jemalloc-ctl = { git = "https://github.com/gz/jemallocator.git" }
 syscall = "0.2.1"
