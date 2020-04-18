@@ -25,6 +25,7 @@ use std::time::{Duration, Instant};
 use csv::WriterBuilder;
 use log::*;
 use node_replication::{log::Log, replica::Replica, Dispatch};
+use rand::seq::SliceRandom;
 use rand::{rngs::SmallRng, Rng, SeedableRng};
 use serde::Serialize;
 
@@ -534,7 +535,8 @@ where
                 let b = barrier.clone();
                 let log: Arc<_> = self.log.clone();
                 let replica = replicas[rid].clone();
-                let operations = self.operations.clone();
+                let mut operations = self.operations.clone();
+                operations.shuffle(&mut rand::thread_rng());
                 let f = self.f.clone();
                 let batch_size = self.batch_size;
                 let replica_token = replica

@@ -223,7 +223,7 @@ fn main() {
         let log = sync::Arc::new(Log::<<NrHashMap as Dispatch>::WriteOperation>::new(
             LOG_SIZE_BYTES,
         ));
-        let replica = sync::Arc::new(Replica::<NrHashMap>::new(&log));
+        let replica = Replica::<NrHashMap>::new(&log);
 
         let start = time::Instant::now();
         let end = start + dur;
