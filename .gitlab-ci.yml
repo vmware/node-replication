@@ -24,7 +24,7 @@ bench:
   stage: bench
   script:
     # Run benchmark apps
-    - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench log
+    #- RUST_TEST_THREADS=1 timeout 1h cargo bench --bench log
     - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench synthetic
     - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench stack
     - RUST_TEST_THREADS=1 timeout 4h cargo bench --bench hashmap
