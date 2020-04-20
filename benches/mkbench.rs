@@ -889,6 +889,12 @@ where
         self
     }
 
+    pub fn update_batch(&mut self, b: usize) -> &mut Self {
+        self.batches.clear();
+        self.batches.push(b);
+        self
+    }
+
     /// Run benchmark with `t` threads.
     pub fn threads(&mut self, t: usize) -> &mut Self {
         self.threads.push(t);

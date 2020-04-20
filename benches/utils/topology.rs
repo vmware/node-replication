@@ -155,7 +155,7 @@ impl MachineTopology {
         }
 
         match narenas::read() {
-            Ok(narena) => assert_eq!(narena as usize, data.len()),
+            Ok(narena) => assert_eq!(narena as usize, 4 * data.len()),
             Err(e) => unreachable!("Unable to access Jemalloc library {}", e),
         }
 
