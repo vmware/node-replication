@@ -2,18 +2,27 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Defines a hash-map that can be replicated.
+#![feature(test)]
 
-use std::cell::RefCell;
 use std::collections::HashMap;
 
-use rand::distributions::Distribution;
 use rand::seq::SliceRandom;
-use rand::{thread_rng, RngCore};
+use rand::{distributions::Distribution, Rng, RngCore};
 use zipf::ZipfDistribution;
 
 use node_replication::Dispatch;
 
-use crate::utils::Operation;
+mod mkbench;
+mod utils;
+
+use utils::benchmark::*;
+use utils::topology::ThreadMapping;
+use utils::Operation;
+
+extern crate jemallocator;
+
+#[global_allocator]
+static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 /// Operations we can perform on the stack.
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
@@ -99,12 +108,11 @@ pub fn generate_operations(
 ) -> Vec<Operation<OpRd, OpWr>> {
     assert!(distribution == "skewed" || distribution == "uniform");
 
-    use rand::Rng;
     let mut ops = Vec::with_capacity(nop);
 
     let skewed = distribution == "skewed";
     let mut t_rng = rand::thread_rng();
-    let mut zipf = ZipfDistribution::new(span, 1.03).unwrap();
+    let zipf = ZipfDistribution::new(span, 1.03).unwrap();
 
     for idx in 0..nop {
         let id = if skewed {
@@ -123,4 +131,95 @@ pub fn generate_operations(
 
     ops.shuffle(&mut t_rng);
     ops
+}
+
+/// Compare a replicated hashmap against a single-threaded implementation.
+fn hashmap_single_threaded(c: &mut TestHarness) {
+    // Size of the log.
+    const LOG_SIZE_BYTES: usize = 2 * 1024 * 1024;
+    // How many operations per iteration
+    const NOP: usize = 1000;
+    // Biggest key in the hash-map
+    const KEY_SPACE: usize = 10_000;
+    // Key distribution
+    const UNIFORM: &'static str = "uniform";
+    //const SKEWED: &'static str = "skewed";
+    // Read/Write ratio
+    const WRITE_RATIO: usize = 10; //% out of 100
+
+    let ops = generate_operations(NOP, WRITE_RATIO, KEY_SPACE, UNIFORM);
+    mkbench::baseline_comparison::<NrHashMap>(c, "hashmap", ops, LOG_SIZE_BYTES);
+}
+
+/// Compare scale-out behaviour of synthetic data-structure.
+fn hashmap_scale_out(c: &mut TestHarness, write_ratio: usize) {
+    // Biggest key in the hash-map
+    const KEY_SPACE: usize = 5_000_000;
+    // Key distribution
+    const UNIFORM: &'static str = "uniform";
+    // Number of operation for test-harness.
+    const NOP: usize = 515_000;
+
+    let ops = generate_operations(NOP, write_ratio, KEY_SPACE, UNIFORM);
+    let bench_name = format!("hashmap-scaleout-wr{}", write_ratio);
+
+    mkbench::ScaleBenchBuilder::<NrHashMap>::new(ops)
+        .machine_defaults()
+        .update_batch(128)
+        .thread_mapping(ThreadMapping::Interleave)
+        .configure(
+            c,
+            &bench_name,
+            |_cid, rid, _log, replica, op, _batch_size, _direct| match op {
+                Operation::ReadOperation(op) => {
+                    replica.execute_ro(*op, rid).unwrap();
+                }
+                Operation::WriteOperation(op) => {
+                    replica.execute(*op, rid).unwrap();
+                }
+            },
+        );
+}
+
+/// Compare scale-out behaviour of partitioned hashmap data-structure.
+fn partitioned_hashmap_scale_out(c: &mut TestHarness, write_ratio: usize) {
+    // Biggest key in the hash-map
+    const KEY_SPACE: usize = 5_000_000;
+    // Key distribution
+    const UNIFORM: &'static str = "uniform";
+    // Number of operation for test-harness.
+    const NOP: usize = 515_000;
+
+    let ops = generate_operations(NOP, write_ratio, KEY_SPACE, UNIFORM);
+    let bench_name = format!("partitioned-hashmap-scaleout-wr{}", write_ratio);
+
+    mkbench::ScaleBenchBuilder::<NrHashMap>::new(ops)
+        .machine_defaults()
+        .update_batch(128)
+        .thread_mapping(ThreadMapping::Interleave)
+        .update_replica_strategy(mkbench::ReplicaStrategy::Partition)
+        .configure(
+            c,
+            &bench_name,
+            |_cid, _rid, _log, _replica, op, _batch_size, direct| match op {
+                Operation::ReadOperation(op) => {
+                    direct.as_ref().unwrap().dispatch(*op).unwrap();
+                }
+                Operation::WriteOperation(op) => {
+                    direct.as_mut().unwrap().dispatch_mut(*op).unwrap();
+                }
+            },
+        );
+}
+
+fn main() {
+    let _r = env_logger::try_init();
+    let mut harness = Default::default();
+    let write_ratios = vec![0, 10, 50, 100];
+
+    hashmap_single_threaded(&mut harness);
+    for write_ratio in write_ratios.into_iter() {
+        hashmap_scale_out(&mut harness, write_ratio);
+        partitioned_hashmap_scale_out(&mut harness, write_ratio);
+    }
 }

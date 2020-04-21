@@ -2,11 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use core::cell::RefCell;
+use core::mem::MaybeUninit;
 use core::sync::atomic::{spin_loop_hint, AtomicUsize, Ordering};
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
+use arr_macro::arr;
 use crossbeam_utils::CachePadded;
 
 use super::context::Context;
@@ -51,13 +53,17 @@ where
     /// Idx that will be handed out to the next thread that registers with the replica.
     next: CachePadded<AtomicUsize>,
 
-    /// Static array of thread contexts. Threads buffer write operations in here when they
+    /// List of per-thread contexts. Threads buffer write operations in here when they
     /// cannot perform flat combining (because another thread might be doing so).
-    contexts: [Context<
-        <D as Dispatch>::WriteOperation,
-        <D as Dispatch>::Response,
-        <D as Dispatch>::ResponseError,
-    >; MAX_THREADS_PER_REPLICA],
+    ///
+    /// The vector is initialized with `MAX_THREADS_PER_REPLICA` elements.
+    contexts: Vec<
+        Context<
+            <D as Dispatch>::WriteOperation,
+            <D as Dispatch>::Response,
+            <D as Dispatch>::ResponseError,
+        >,
+    >,
 
     /// A buffer of operations for flat combining. The combiner stages operations in
     /// here and then batch appends them into the shared log. This helps amortize
@@ -152,33 +158,49 @@ where
     /// // Create a replica that uses the above log.
     /// let replica = Replica::<Data>::new(&log);
     /// ```
-    pub fn new<'b>(log: &Arc<Log<'b, <D as Dispatch>::WriteOperation>>) -> Replica<'b, D> {
-        use arr_macro::arr;
+    pub fn new<'b>(log: &Arc<Log<'b, <D as Dispatch>::WriteOperation>>) -> Arc<Replica<'b, D>> {
+        let mut uninit_replica: Arc<MaybeUninit<Replica<D>>> = Arc::new_zeroed();
 
-        Replica {
-            idx: log.register().unwrap(),
-            combiner: CachePadded::new(AtomicUsize::new(0)),
-            next: CachePadded::new(AtomicUsize::new(1)),
-            contexts: arr![Default::default(); 128],
-            buffer: RefCell::new(Vec::with_capacity(
-                MAX_THREADS_PER_REPLICA
-                    * Context::<
-                        <D as Dispatch>::WriteOperation,
-                        <D as Dispatch>::Response,
-                        <D as Dispatch>::ResponseError,
-                    >::batch_size(),
-            )),
-            inflight: RefCell::new(arr![Default::default(); 128]),
-            result: RefCell::new(Vec::with_capacity(
-                MAX_THREADS_PER_REPLICA
-                    * Context::<
-                        <D as Dispatch>::WriteOperation,
-                        <D as Dispatch>::Response,
-                        <D as Dispatch>::ResponseError,
-                    >::batch_size(),
-            )),
-            slog: log.clone(),
-            data: CachePadded::new(RwLock::<D>::default()),
+        // This is the preferred but unsafe mode of initialization as it avoids
+        // putting the (often big) Replica object on the stack first.
+        unsafe {
+            let uninit_ptr = Arc::get_mut_unchecked(&mut uninit_replica).as_mut_ptr();
+            uninit_ptr.write(Replica {
+                idx: log.register().unwrap(),
+                combiner: CachePadded::new(AtomicUsize::new(0)),
+                next: CachePadded::new(AtomicUsize::new(1)),
+                contexts: Vec::with_capacity(128),
+                buffer: RefCell::new(Vec::with_capacity(
+                    MAX_THREADS_PER_REPLICA
+                        * Context::<
+                            <D as Dispatch>::WriteOperation,
+                            <D as Dispatch>::Response,
+                            <D as Dispatch>::ResponseError,
+                        >::batch_size(),
+                )),
+                inflight: RefCell::new(arr![Default::default(); 128]),
+                result: RefCell::new(Vec::with_capacity(
+                    MAX_THREADS_PER_REPLICA
+                        * Context::<
+                            <D as Dispatch>::WriteOperation,
+                            <D as Dispatch>::Response,
+                            <D as Dispatch>::ResponseError,
+                        >::batch_size(),
+                )),
+                slog: log.clone(),
+                data: CachePadded::new(RwLock::<D>::default()),
+            });
+
+            let mut replica = uninit_replica.assume_init();
+            // Add `MAX_THREADS_PER_REPLICA` contexts
+            for _idx in 0..128 {
+                Arc::get_mut(&mut replica)
+                    .unwrap()
+                    .contexts
+                    .push(Default::default());
+            }
+
+            replica
         }
     }
 

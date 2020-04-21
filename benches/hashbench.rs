@@ -4,7 +4,6 @@
 
 //! Integration of the rust-evmap benchmarks (https://github.com/jonhoo/rust-evmap/)
 //! for various hash-maps; added a node-replicated and urcu hash-table for comparison.
-
 use chashmap::CHashMap;
 use clap::{crate_version, value_t, App, Arg};
 use rand::distributions::Distribution;
@@ -25,6 +24,11 @@ use node_replication::Dispatch;
 use urcu_sys;
 
 mod utils;
+
+extern crate jemallocator;
+
+#[global_allocator]
+static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 fn main() {
     let args = std::env::args().filter(|e| e != "--bench");
@@ -219,7 +223,7 @@ fn main() {
         let log = sync::Arc::new(Log::<<NrHashMap as Dispatch>::WriteOperation>::new(
             LOG_SIZE_BYTES,
         ));
-        let replica = sync::Arc::new(Replica::<NrHashMap>::new(&log));
+        let replica = Replica::<NrHashMap>::new(&log);
 
         let start = time::Instant::now();
         let end = start + dur;

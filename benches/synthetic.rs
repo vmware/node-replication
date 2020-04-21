@@ -9,14 +9,23 @@
 //! It evaluates the overhead of the log with an abstracted model of a generic data-structure
 //! to measure the cache-impact.
 
-use std::cell::RefCell;
+#![feature(test)]
 
 use crossbeam_utils::CachePadded;
 use rand::{thread_rng, Rng};
 
 use node_replication::Dispatch;
 
-use crate::utils::Operation;
+mod mkbench;
+mod utils;
+
+use utils::benchmark::*;
+use utils::Operation;
+
+extern crate jemallocator;
+
+#[global_allocator]
+static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 /// Operations we can perform on the AbstractDataStructure.
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
@@ -290,4 +299,48 @@ pub fn generate_operations(
     }
 
     ops
+}
+
+/// Compare a synthetic benchmark against a single-threaded implementation.
+fn synthetic_single_threaded(c: &mut TestHarness) {
+    // How many operations per iteration
+    const NOP: usize = 1_000;
+    // Size of the log.
+    const LOG_SIZE_BYTES: usize = 2 * 1024 * 1024;
+
+    let ops = generate_operations(NOP, 0, false, false, true);
+    mkbench::baseline_comparison::<AbstractDataStructure>(c, "synthetic", ops, LOG_SIZE_BYTES);
+}
+
+/// Compare scale-out behaviour of synthetic data-structure.
+fn synthetic_scale_out(c: &mut TestHarness) {
+    // How many operations per iteration
+    const NOP: usize = 10_000;
+    // Operations to perform
+    let ops = generate_operations(NOP, 0, false, false, true);
+
+    mkbench::ScaleBenchBuilder::<AbstractDataStructure>::new(ops)
+        .machine_defaults()
+        .configure(
+            c,
+            "synthetic-scaleout",
+            |cid, rid, _log, replica, op, _batch_size, _direct| match op {
+                Operation::ReadOperation(mut o) => {
+                    o.set_tid(cid as usize);
+                    replica.execute_ro(o, rid).unwrap();
+                }
+                Operation::WriteOperation(mut o) => {
+                    o.set_tid(cid as usize);
+                    replica.execute(o, rid).unwrap();
+                }
+            },
+        );
+}
+
+fn main() {
+    let _r = env_logger::try_init();
+    let mut harness = Default::default();
+
+    synthetic_single_threaded(&mut harness);
+    synthetic_scale_out(&mut harness);
 }

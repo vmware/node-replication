@@ -1,7 +1,11 @@
 // Copyright © 2019 VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+//! A in-memory FS benchmark.
+#![feature(test)]
+
 use std::ffi::OsStr;
+use std::sync::Arc;
 
 use rand::seq::SliceRandom;
 use rand::{thread_rng, Rng};
@@ -9,12 +13,18 @@ use rand::{thread_rng, Rng};
 mod mkbench;
 mod utils;
 
-use criterion::{criterion_group, criterion_main, Criterion};
 use log::warn;
 use node_replication::Dispatch;
 
 use btfs::{Error, FileAttr, FileType, InodeId, MemFilesystem, SetAttrRequest};
+
+use utils::benchmark::*;
 use utils::Operation;
+
+extern crate jemallocator;
+
+#[global_allocator]
+static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 /// All FS operations we can perform through the log.
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -79,11 +89,8 @@ pub enum OperationWr {
     },
 }
 
-#[derive(Debug, PartialEq, Clone, Copy)]
-pub enum OperationRd {}
-
 /// Potential responses from the file-system
-#[derive(Copy, Clone)]
+#[derive(Clone)]
 pub enum Response {
     Attr(FileAttr),
     Directory,
@@ -92,7 +99,7 @@ pub enum Response {
     Open,
     Create,
     Written(u64),
-    Data(&'static [u8]),
+    Data(Arc<Vec<u8>>),
 }
 
 impl Default for Response {
@@ -126,7 +133,7 @@ impl Default for NrMemFilesystem {
 
             let ino = memfs.create(ino, &OsStr::new("00000001"), 0, 0)?.ino;
             memfs.write(ino, 0, 0, &[1; 4096], 0)?;
-            assert_eq!(ino, 5, "Adjust `generate_fs_operations` accordingly!");
+            assert_eq!(ino, 5, "Adjust `generate_fs_operation` accordingly!");
             Ok(())
         }
 
@@ -202,7 +209,7 @@ impl NrMemFilesystem {
 }
 
 impl Dispatch for NrMemFilesystem {
-    type ReadOperation = OperationRd;
+    type ReadOperation = ();
     type WriteOperation = OperationWr;
     type Response = Response;
     type ResponseError = ResponseError;
@@ -287,16 +294,8 @@ impl Dispatch for NrMemFilesystem {
                 Ok(slice) => {
                     // TODO: We make a heap allocation for the data, thn leak it below
                     // since we currently don't have a good way to return non copy things to clients:
-                    let bytes_as_vec = slice.to_vec();
-
-                    // create an alias to bytes as vec so we can leak:
-                    let slice = unsafe {
-                        std::slice::from_raw_parts(bytes_as_vec.as_ptr(), bytes_as_vec.len())
-                    };
-                    let response = Response::Data(slice);
-
-                    std::mem::forget(bytes_as_vec); // XXX leaking here
-                    Ok(response)
+                    let bytes_as_vec = Arc::new(slice.to_vec());
+                    Ok(Response::Data(bytes_as_vec))
                 }
                 Err(e) => Err(ResponseError::Err(e)),
             },
@@ -313,10 +312,7 @@ impl Dispatch for NrMemFilesystem {
     }
 }
 
-fn generate_fs_operations(
-    nop: usize,
-    write_ratio: usize,
-) -> Vec<Operation<OperationRd, OperationWr>> {
+fn generate_fs_operations(nop: usize, write_ratio: usize) -> Vec<Operation<(), OperationWr>> {
     let mut ops = Vec::with_capacity(nop);
     let mut rng = rand::thread_rng();
 
@@ -346,9 +342,7 @@ fn generate_fs_operations(
     ops
 }
 
-fn memfs_single_threaded(c: &mut Criterion) {
-    let _r = env_logger::try_init();
-
+fn memfs_single_threaded(c: &mut TestHarness) {
     const LOG_SIZE_BYTES: usize = 16 * 1024 * 1024;
     const NOP: usize = 50;
     const WRITE_RATIO: usize = 10; //% out of 100
@@ -358,9 +352,7 @@ fn memfs_single_threaded(c: &mut Criterion) {
 }
 
 /// Compare scale-out behaviour of memfs.
-fn memfs_scale_out(c: &mut Criterion) {
-    let _r = env_logger::try_init();
-
+fn memfs_scale_out(c: &mut TestHarness) {
     const NOP: usize = 50;
     const WRITE_RATIO: usize = 10; //% out of 100
 
@@ -374,25 +366,21 @@ fn memfs_scale_out(c: &mut Criterion) {
         .configure(
             c,
             "memfs-scaleout",
-            |_cid, rid, _log, replica, ops, _batch_size| {
-                for op in ops {
-                    match op {
-                        Operation::ReadOperation(o) => {
-                            replica.execute_ro(*o, rid).unwrap();
-                        }
-                        Operation::WriteOperation(o) => {
-                            replica.execute(*o, rid).unwrap();
-                        }
-                    }
+            |_cid, rid, _log, replica, op, _batch_size, _direct| match op {
+                Operation::ReadOperation(o) => {
+                    replica.execute_ro(*o, rid).unwrap();
+                }
+                Operation::WriteOperation(o) => {
+                    replica.execute(*o, rid).unwrap();
                 }
             },
         );
 }
 
-criterion_group!(
-    name = benches;
-    config = Criterion::default().sample_size(10);
-    targets = memfs_single_threaded, memfs_scale_out
-);
+fn main() {
+    let _r = env_logger::try_init();
+    let mut harness = Default::default();
 
-criterion_main!(benches);
+    memfs_single_threaded(&mut harness);
+    memfs_scale_out(&mut harness);
+}

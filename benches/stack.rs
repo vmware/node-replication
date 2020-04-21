@@ -2,14 +2,24 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Defines a stack data-structure that can be replicated.
+#![allow(unused)]
+#![feature(test)]
 
 use std::cell::RefCell;
 
+use node_replication::Dispatch;
 use rand::{thread_rng, Rng};
 
-use node_replication::Dispatch;
+mod mkbench;
+mod utils;
 
-use crate::utils::Operation;
+use utils::benchmark::*;
+use utils::Operation;
+
+extern crate jemallocator;
+
+#[global_allocator]
+static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 /// Operations we can perform on the stack.
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
@@ -23,7 +33,7 @@ pub enum OpWr {
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
 pub enum OpRd {}
 
-/// Single-threaded implementation of the stack
+/// Single-threaded implementation of the stack.
 ///
 /// We just use a vector.
 #[derive(Debug, Clone)]
@@ -66,7 +76,7 @@ impl Dispatch for Stack {
         unreachable!()
     }
 
-    /// Implements how we execute operation from the log against our local stack
+    /// Implements how we execute operations from the log against our local stack
     fn dispatch_mut(
         &mut self,
         op: Self::WriteOperation,
@@ -97,4 +107,43 @@ pub fn generate_operations(nop: usize) -> Vec<Operation<OpRd, OpWr>> {
     }
 
     ops
+}
+
+/// Compare against a stack with and without a log in-front.
+fn stack_single_threaded(c: &mut TestHarness) {
+    // Number of operations
+    const NOP: usize = 1_000;
+    // Log size
+    const LOG_SIZE_BYTES: usize = 2 * 1024 * 1024;
+    let ops = generate_operations(NOP);
+    mkbench::baseline_comparison::<Stack>(c, "stack", ops, LOG_SIZE_BYTES);
+}
+
+/// Compare scalability of a node-replicated stack.
+fn stack_scale_out(c: &mut TestHarness) {
+    // How many operations per iteration
+    const NOP: usize = 10_000;
+    let ops = generate_operations(NOP);
+
+    mkbench::ScaleBenchBuilder::<Stack>::new(ops)
+        .machine_defaults()
+        .configure(
+            c,
+            "stack-scaleout",
+            |_cid, rid, _log, replica, op, _batch_size, _direct| {
+                match op {
+                    Operation::WriteOperation(op) => replica.execute(*op, rid).unwrap(),
+                    Operation::ReadOperation(op) => unreachable!(),
+                    _ => unreachable!(),
+                };
+            },
+        );
+}
+
+fn main() {
+    let _r = env_logger::try_init();
+    let mut harness = Default::default();
+
+    stack_single_threaded(&mut harness);
+    stack_scale_out(&mut harness);
 }

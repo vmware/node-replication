@@ -494,7 +494,7 @@ where
             // Looks like we're going to wrap around now; flip this replica's local mask.
             if self.index(i) == self.size - 1 {
                 self.lmasks[idx - 1].set(!self.lmasks[idx - 1].get());
-                trace!("idx: {} lmask: {}", idx, self.lmasks[idx - 1].get());
+                //trace!("idx: {} lmask: {}", idx, self.lmasks[idx - 1].get());
             }
         }
 
