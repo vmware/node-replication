@@ -205,29 +205,6 @@ struct Partitioner<T: node_replication::Dispatch> {
 // Ok since when more than one thread tries to register we return None
 unsafe impl<T> Sync for Partitioner<T> where T: node_replication::Dispatch + Default + Sync {}
 
-impl<T> Partitioner<T>
-where
-    T: node_replication::Dispatch + Default + Sync,
-{
-    fn execute(
-        &self,
-        op: <T as Dispatch>::WriteOperation,
-        idx: usize,
-    ) -> Result<<T as Dispatch>::Response, <T as Dispatch>::ResponseError> {
-        debug_assert_eq!(idx, 0);
-        unsafe { (&mut *self.data_structure.get()).dispatch_mut(op) }
-    }
-
-    fn execute_ro(
-        &self,
-        op: <T as Dispatch>::ReadOperation,
-        idx: usize,
-    ) -> Result<<T as Dispatch>::Response, <T as Dispatch>::ResponseError> {
-        debug_assert_eq!(idx, 0);
-        unsafe { (&*self.data_structure.get()).dispatch(op) }
-    }
-}
-
 impl<T> ReplicaTrait<T> for Partitioner<T>
 where
     T: node_replication::Dispatch + Default + Sync,
@@ -251,6 +228,24 @@ where
 
     fn sync_me<F: FnMut(<T as Dispatch>::WriteOperation, usize)>(&self, _d: F) {
         /* NOP */
+    }
+
+    fn exec(
+        &self,
+        op: <T as Dispatch>::WriteOperation,
+        idx: usize,
+    ) -> Result<<T as Dispatch>::Response, <T as Dispatch>::ResponseError> {
+        debug_assert_eq!(idx, 0);
+        unsafe { (&mut *self.data_structure.get()).dispatch_mut(op) }
+    }
+
+    fn exec_ro(
+        &self,
+        op: <T as Dispatch>::ReadOperation,
+        idx: usize,
+    ) -> Result<<T as Dispatch>::Response, <T as Dispatch>::ResponseError> {
+        debug_assert_eq!(idx, 0);
+        unsafe { (&*self.data_structure.get()).dispatch(op) }
     }
 }
 
