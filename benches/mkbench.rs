@@ -540,7 +540,6 @@ where
     fn alloc_replicas(&mut self, replicas: &mut Vec<Arc<R>>) {
         for (rid, cores) in self.rm.clone().into_iter() {
             let core0 = cores[0];
-            let mut tid = 0;
 
             // Pinning the thread to the replica' cores forces the memory
             // allocation to be local to the where a replica will be used later
