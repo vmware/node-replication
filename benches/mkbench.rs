@@ -44,15 +44,67 @@ use arr_macro::arr;
 /// Should be a power of two to avoid divisions.
 pub const WARN_THRESHOLD: usize = 1 << 28;
 
-type BenchFn<T> = fn(
+type BenchFn<R, T> = fn(
     crate::utils::ThreadId,
     usize,
     &Arc<Log<'static, <T as Dispatch>::WriteOperation>>,
-    &Arc<Replica<T>>,
+    &Arc<R>,
     &Operation<<T as Dispatch>::ReadOperation, <T as Dispatch>::WriteOperation>,
     usize,
-    &mut Option<T>,
 );
+
+pub trait ReplicaTrait<D: Dispatch + Default + Sync> {
+    fn new_arc(log: &Arc<Log<'static, <D as Dispatch>::WriteOperation>>) -> std::sync::Arc<Self>;
+
+    fn register_me(&self) -> Option<usize>;
+
+    fn sync_me<F: FnMut(<D as Dispatch>::WriteOperation, usize)>(&self, d: F);
+
+    fn exec(
+        &self,
+        op: <D as Dispatch>::WriteOperation,
+        idx: usize,
+    ) -> Result<<D as Dispatch>::Response, <D as Dispatch>::ResponseError>;
+
+    fn exec_ro(
+        &self,
+        op: <D as Dispatch>::ReadOperation,
+        idx: usize,
+    ) -> Result<<D as Dispatch>::Response, <D as Dispatch>::ResponseError>;
+}
+
+impl<'a, D> ReplicaTrait<D> for node_replication::replica::Replica<'a, D>
+where
+    D: Dispatch + Default + Sync,
+{
+    fn new_arc(log: &Arc<Log<'static, <D as Dispatch>::WriteOperation>>) -> std::sync::Arc<Self> {
+        Self::new(log)
+    }
+
+    fn sync_me<F: FnMut(<D as Dispatch>::WriteOperation, usize)>(&self, mut d: F) {
+        self.sync(d);
+    }
+
+    fn register_me(&self) -> Option<usize> {
+        self.register()
+    }
+
+    fn exec(
+        &self,
+        op: <D as Dispatch>::WriteOperation,
+        idx: usize,
+    ) -> Result<<D as Dispatch>::Response, <D as Dispatch>::ResponseError> {
+        self.execute(op, idx)
+    }
+
+    fn exec_ro(
+        &self,
+        op: <D as Dispatch>::ReadOperation,
+        idx: usize,
+    ) -> Result<<D as Dispatch>::Response, <D as Dispatch>::ResponseError> {
+        self.execute_ro(op, idx)
+    }
+}
 
 /// Log the baseline comparision results to a CSV file
 ///
@@ -102,12 +154,14 @@ fn write_results(name: String, duration: Duration, results: Vec<usize>) -> std::
 /// Then configures the supplied criterion runner to do two benchmarks:
 /// - Running the DS operations on a single-thread directly against the DS.
 /// - Running the DS operation on a single-thread but go through a replica/log.
-pub(crate) fn baseline_comparison<T: Dispatch + Default + Sync>(
+pub(crate) fn baseline_comparison<R, T>(
     c: &mut TestHarness,
     name: &str,
-    ops: Vec<Operation<<T as Dispatch>::ReadOperation, <T as Dispatch>::WriteOperation>>,
+    ops: Vec<Operation<<T>::ReadOperation, <T>::WriteOperation>>,
     log_size: usize,
 ) where
+    R: ReplicaTrait<T>,
+    T: Dispatch + Sync + Default,
     <T as node_replication::Dispatch>::WriteOperation: std::marker::Send,
     <T as node_replication::Dispatch>::WriteOperation: std::marker::Sync,
     <T as node_replication::Dispatch>::ReadOperation: std::marker::Sync,
@@ -175,7 +229,7 @@ pub(crate) fn baseline_comparison<T: Dispatch + Default + Sync>(
     // 2nd benchmark: we compare T with a log in front:
     let log = Arc::new(Log::<<T as Dispatch>::WriteOperation>::new(log_size));
     let r = Replica::<T>::new(&log);
-    let ridx = r.register().expect("Failed to register with Replica.");
+    let ridx = r.register_me().expect("Failed to register with Replica.");
 
     let mut operations_per_second: Vec<usize> = Vec::with_capacity(32);
     group.bench_function("log", |b| {
@@ -191,10 +245,10 @@ pub(crate) fn baseline_comparison<T: Dispatch + Default + Sync>(
             while Instant::now() < end_experiment {
                 match &ops[iter % nop] {
                     Operation::ReadOperation(op) => {
-                        r.execute_ro(op.clone(), ridx);
+                        r.exec_ro(op.clone(), ridx);
                     }
                     Operation::WriteOperation(op) => {
-                        r.execute(op.clone(), ridx);
+                        r.exec(op.clone(), ridx);
                     }
                 }
                 operations_completed += 1;
@@ -241,8 +295,8 @@ pub enum ReplicaStrategy {
     L3,
     /// One replica per socket.
     Socket,
-    /// Replicate data-structure on each core with NR.
-    Partition,
+    /// One for every hardware thread.
+    PerThread,
 }
 
 impl fmt::Display for ReplicaStrategy {
@@ -253,7 +307,7 @@ impl fmt::Display for ReplicaStrategy {
             ReplicaStrategy::L2 => write!(f, "L2"),
             ReplicaStrategy::L3 => write!(f, "L3"),
             ReplicaStrategy::Socket => write!(f, "Socket"),
-            ReplicaStrategy::Partition => write!(f, "Partition"),
+            ReplicaStrategy::PerThread => write!(f, "PerThread"),
         }
     }
 }
@@ -266,12 +320,12 @@ impl fmt::Debug for ReplicaStrategy {
             ReplicaStrategy::L2 => write!(f, "RS=L2"),
             ReplicaStrategy::L3 => write!(f, "RS=L3"),
             ReplicaStrategy::Socket => write!(f, "RS=Socket"),
-            ReplicaStrategy::Partition => write!(f, "RS=Partition"),
+            ReplicaStrategy::PerThread => write!(f, "RS=PerThread"),
         }
     }
 }
 
-pub struct ScaleBenchmark<T: Dispatch + Default + Send>
+pub struct ScaleBenchmark<R, T: Dispatch + Default + Send>
 where
     <T as node_replication::Dispatch>::WriteOperation: std::marker::Send,
     <T as node_replication::Dispatch>::WriteOperation: std::marker::Sync,
@@ -308,19 +362,16 @@ where
     /// and now replica B can no longer make progress due to GC)
     sync: bool,
     /// Benchmark function to execute
-    f: BenchFn<T>,
+    f: BenchFn<R, T>,
     /// A series of channels to communicate iteration count to every worker.
     cmd_channels: Vec<Sender<Duration>>,
     /// A result channel
     result_channel: (Sender<(Core, Vec<usize>)>, Receiver<(Core, Vec<usize>)>),
     /// Thread handles
     handles: Vec<JoinHandle<()>>,
-    /// Direct reference to underlying data-structure without node-replication.
-    /// The reference is used to run the benchmarks in full partitioned mode.
-    data: Vec<Cell<Option<T>>>,
 }
 
-impl<T: Dispatch + Default + Send> ScaleBenchmark<T>
+impl<R: 'static, T: Dispatch + Default + Send> ScaleBenchmark<R, T>
 where
     <T as node_replication::Dispatch>::WriteOperation: std::marker::Send,
     <T as node_replication::Dispatch>::WriteOperation: std::marker::Sync,
@@ -329,6 +380,7 @@ where
     <T as node_replication::Dispatch>::Response: std::marker::Send,
     <T as node_replication::Dispatch>::ResponseError: std::marker::Send,
     T: 'static + std::marker::Sync,
+    R: ReplicaTrait<T> + std::marker::Sync + Send,
 {
     /// Create a new ScaleBenchmark.
     fn new(
@@ -341,18 +393,17 @@ where
         batch_size: usize,
         sync: bool,
         log: Arc<Log<'static, <T as Dispatch>::WriteOperation>>,
-        f: BenchFn<T>,
-    ) -> ScaleBenchmark<T> {
-        let mut data = Vec::with_capacity(ts);
-        for _i in 0..ts {
-            data.push(Cell::new(None));
-        }
+        f: BenchFn<R, T>,
+    ) -> ScaleBenchmark<R, T>
+    where
+        R: Sync,
+    {
         ScaleBenchmark {
             name,
             rs,
             tm,
             ts,
-            rm: ScaleBenchmark::<T>::replica_core_allocation(topology, rs, tm, ts),
+            rm: ScaleBenchmark::<R, T>::replica_core_allocation(topology, rs, tm, ts),
             log,
             results: Default::default(),
             operations,
@@ -362,7 +413,6 @@ where
             cmd_channels: Default::default(),
             result_channel: channel(),
             handles: Default::default(),
-            data,
         }
     }
 
@@ -487,26 +537,17 @@ where
         0usize
     }
 
-    fn alloc_replicas(&mut self, replicas: &mut Vec<Arc<Replica<T>>>) {
+    fn alloc_replicas(&mut self, replicas: &mut Vec<Arc<R>>) {
         for (rid, cores) in self.rm.clone().into_iter() {
             let core0 = cores[0];
             let mut tid = 0;
-            // Partitioned scheme uses system level log, so
-            // allocate partitioned DS on each core.
-            if self.rs == ReplicaStrategy::Partition {
-                for core in cores.into_iter() {
-                    utils::pin_thread(core);
-                    self.data[tid] = Cell::new(Some(T::default()));
-                    tid += 1;
-                }
-            }
 
             // Pinning the thread to the replica' cores forces the memory
             // allocation to be local to the where a replica will be used later
             utils::pin_thread(core0);
 
             let log = self.log.clone();
-            replicas.push(Replica::<T>::new(&log));
+            replicas.push(ReplicaTrait::new_arc(&log));
         }
     }
 
@@ -516,7 +557,7 @@ where
         let barrier = Arc::new(Barrier::new(thread_num));
 
         let complete = Arc::new(arr![AtomicUsize::default(); 128]);
-        let mut replicas: Vec<Arc<Replica<T>>> = Vec::with_capacity(self.replicas());
+        let mut replicas: Vec<Arc<R>> = Vec::with_capacity(self.replicas());
         self.alloc_replicas(&mut replicas);
         let do_sync = self.sync;
 
@@ -540,7 +581,7 @@ where
                 let f = self.f.clone();
                 let batch_size = self.batch_size;
                 let replica_token = replica
-                    .register()
+                    .register_me()
                     .expect("Can't register replica, out of slots?");
 
                 let (duration_tx, duration_rx) = channel();
@@ -552,7 +593,6 @@ where
                 let nre = replicas.len();
                 let rmc = self.rm.clone();
                 let log_period = Duration::from_secs(1);
-                let mut data = self.data[tid].take();
 
                 self.handles.push(thread::spawn(move || {
                     utils::pin_thread(core_id);
@@ -593,7 +633,6 @@ where
                                     &replica,
                                     &operations[iter],
                                     batch_size,
-                                    &mut data,
                                 ));
                                 iter = (iter + 1) % nop;
                             }
@@ -644,7 +683,8 @@ where
                                 }
 
                                 // Consume the log but we don't apply operations anymore
-                                replica.sync(|_o: <T as Dispatch>::WriteOperation, _r: usize| {});
+                                replica
+                                    .sync_me(|_o: <T as Dispatch>::WriteOperation, _r: usize| {});
                             }
                         }
 
@@ -762,8 +802,10 @@ where
                     );
                 }
             }
-            ReplicaStrategy::Partition => {
-                rm.insert(0, cpus.iter().map(|c| c.cpu).collect());
+            ReplicaStrategy::PerThread => {
+                for (idx, core) in cpus.iter().map(|c| c.cpu).enumerate() {
+                    rm.insert(idx, vec![core]);
+                }
             }
         };
 
@@ -773,7 +815,7 @@ where
 
 /// A generic benchmark configurator for node-replication scalability benchmarks.
 #[derive(Debug)]
-pub struct ScaleBenchBuilder<T: Dispatch + Default>
+pub struct ScaleBenchBuilder<R: ReplicaTrait<T>, T: Dispatch + Default>
 where
     <T as node_replication::Dispatch>::WriteOperation: std::marker::Send,
     <T as node_replication::Dispatch>::Response: std::marker::Send,
@@ -797,9 +839,11 @@ where
     reset_log: bool,
     /// Operations executed on the log.
     operations: Vec<Operation<<T as Dispatch>::ReadOperation, <T as Dispatch>::WriteOperation>>,
+    /// Marker for R
+    _marker: std::marker::PhantomData<R>,
 }
 
-impl<T: Dispatch + Default> ScaleBenchBuilder<T>
+impl<R: 'static + ReplicaTrait<T>, T: Dispatch + Default> ScaleBenchBuilder<R, T>
 where
     <T as node_replication::Dispatch>::WriteOperation: std::marker::Send,
     <T as node_replication::Dispatch>::WriteOperation: std::marker::Sync,
@@ -815,9 +859,9 @@ where
     /// By default this won't execute any runs,
     /// you have to at least call `threads`, `thread_mapping`
     /// `replica_strategy` once and set `operations`.
-    pub fn new(
+    pub fn new<P: ReplicaTrait<T>>(
         ops: Vec<Operation<<T as Dispatch>::ReadOperation, <T as Dispatch>::WriteOperation>>,
-    ) -> ScaleBenchBuilder<T> {
+    ) -> ScaleBenchBuilder<P, T> {
         ScaleBenchBuilder {
             replica_strategies: Vec::new(),
             thread_mappings: Vec::new(),
@@ -827,18 +871,22 @@ where
             log_size: 1024 * 1024 * 2,
             reset_log: false,
             operations: ops,
+            _marker: std::marker::PhantomData,
         }
     }
 
     /// Configures the builder automatically based on the underlying machine properties.
     pub fn machine_defaults(&mut self) -> &mut Self {
-        let topology = MachineTopology::new();
-        let max_cores = topology.cores();
-
         self.thread_mapping(ThreadMapping::Sequential);
         self.replica_strategy(ReplicaStrategy::One);
         self.replica_strategy(ReplicaStrategy::Socket);
-        //self.replica_strategy(ReplicaStrategy::L1);
+        self.replica_strategy(ReplicaStrategy::L1);
+        self.thread_defaults()
+    }
+
+    pub fn thread_defaults(&mut self) -> &mut Self {
+        let topology = MachineTopology::new();
+        let max_cores = topology.cores();
 
         // On larger machines thread increments are bigger than on
         // smaller machines:
@@ -915,12 +963,6 @@ where
         self
     }
 
-    pub fn update_replica_strategy(&mut self, rs: ReplicaStrategy) -> &mut Self {
-        self.replica_strategies.clear();
-        self.replica_strategies.push(rs);
-        self
-    }
-
     /// Run benchmark with the `ls` bytes of log-size.
     pub fn log_size(&mut self, ls: usize) -> &mut Self {
         self.log_size = ls;
@@ -948,8 +990,9 @@ where
     ///
     /// TestHarness will be configured to create a run for every
     /// possible triplet: (replica strategy, thread mapping, #threads).
-    pub(crate) fn configure(&self, c: &mut TestHarness, name: &str, f: BenchFn<T>)
+    pub(crate) fn configure(&self, c: &mut TestHarness, name: &str, f: BenchFn<R, T>)
     where
+        R: ReplicaTrait<T> + Sync + Send,
         <T as node_replication::Dispatch>::WriteOperation: std::marker::Send + std::marker::Sync,
         <T as node_replication::Dispatch>::ReadOperation: std::marker::Send + std::marker::Sync,
         <T as node_replication::Dispatch>::Response: std::marker::Send + std::marker::Sync,
@@ -958,6 +1001,7 @@ where
     {
         let topology = MachineTopology::new();
         utils::disable_dvfs();
+        println!("{}", name);
 
         let mut group = c.benchmark_group(name);
         for rs in self.replica_strategies.iter() {
@@ -966,7 +1010,7 @@ where
                     for b in self.batches.iter() {
                         let log =
                             Arc::new(Log::<<T as Dispatch>::WriteOperation>::new(self.log_size));
-                        let mut runner = ScaleBenchmark::<T>::new(
+                        let mut runner = ScaleBenchmark::<R, T>::new(
                             String::from(name),
                             &topology,
                             *rs,

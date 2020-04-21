@@ -10,10 +10,12 @@
 //! to measure the cache-impact.
 
 #![feature(test)]
+use std::sync::Arc;
 
 use crossbeam_utils::CachePadded;
 use rand::{thread_rng, Rng};
 
+use node_replication::replica::Replica;
 use node_replication::Dispatch;
 
 mod mkbench;
@@ -309,7 +311,12 @@ fn synthetic_single_threaded(c: &mut TestHarness) {
     const LOG_SIZE_BYTES: usize = 2 * 1024 * 1024;
 
     let ops = generate_operations(NOP, 0, false, false, true);
-    mkbench::baseline_comparison::<AbstractDataStructure>(c, "synthetic", ops, LOG_SIZE_BYTES);
+    mkbench::baseline_comparison::<Replica<AbstractDataStructure>, AbstractDataStructure>(
+        c,
+        "synthetic",
+        ops,
+        LOG_SIZE_BYTES,
+    );
 }
 
 /// Compare scale-out behaviour of synthetic data-structure.
@@ -319,19 +326,21 @@ fn synthetic_scale_out(c: &mut TestHarness) {
     // Operations to perform
     let ops = generate_operations(NOP, 0, false, false, true);
 
-    mkbench::ScaleBenchBuilder::<AbstractDataStructure>::new(ops)
+    mkbench::ScaleBenchBuilder::<Replica<AbstractDataStructure>, AbstractDataStructure>::new(ops)
         .machine_defaults()
         .configure(
             c,
             "synthetic-scaleout",
-            |cid, rid, _log, replica, op, _batch_size, _direct| match op {
-                Operation::ReadOperation(mut o) => {
-                    o.set_tid(cid as usize);
-                    replica.execute_ro(o, rid).unwrap();
-                }
-                Operation::WriteOperation(mut o) => {
-                    o.set_tid(cid as usize);
-                    replica.execute(o, rid).unwrap();
+            |cid, rid, _log, replica: &Arc<Replica<AbstractDataStructure>>, op, _batch_size| {
+                match op {
+                    Operation::ReadOperation(mut o) => {
+                        o.set_tid(cid as usize);
+                        replica.execute_ro(o, rid).unwrap();
+                    }
+                    Operation::WriteOperation(mut o) => {
+                        o.set_tid(cid as usize);
+                        replica.execute(o, rid).unwrap();
+                    }
                 }
             },
         );

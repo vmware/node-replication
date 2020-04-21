@@ -6,7 +6,9 @@
 #![feature(test)]
 
 use std::cell::RefCell;
+use std::sync::Arc;
 
+use node_replication::replica::Replica;
 use node_replication::Dispatch;
 use rand::{thread_rng, Rng};
 
@@ -116,7 +118,7 @@ fn stack_single_threaded(c: &mut TestHarness) {
     // Log size
     const LOG_SIZE_BYTES: usize = 2 * 1024 * 1024;
     let ops = generate_operations(NOP);
-    mkbench::baseline_comparison::<Stack>(c, "stack", ops, LOG_SIZE_BYTES);
+    mkbench::baseline_comparison::<Replica<Stack>, Stack>(c, "stack", ops, LOG_SIZE_BYTES);
 }
 
 /// Compare scalability of a node-replicated stack.
@@ -125,12 +127,12 @@ fn stack_scale_out(c: &mut TestHarness) {
     const NOP: usize = 10_000;
     let ops = generate_operations(NOP);
 
-    mkbench::ScaleBenchBuilder::<Stack>::new(ops)
+    mkbench::ScaleBenchBuilder::<Replica<Stack>, Stack>::new(ops)
         .machine_defaults()
         .configure(
             c,
             "stack-scaleout",
-            |_cid, rid, _log, replica, op, _batch_size, _direct| {
+            |_cid, rid, _log, replica: &Arc<Replica<Stack>>, op, _batch_size| {
                 match op {
                     Operation::WriteOperation(op) => replica.execute(*op, rid).unwrap(),
                     Operation::ReadOperation(op) => unreachable!(),

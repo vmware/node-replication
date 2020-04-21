@@ -7,16 +7,16 @@
 use std::ffi::OsStr;
 use std::sync::Arc;
 
+use btfs::{Error, FileAttr, FileType, InodeId, MemFilesystem, SetAttrRequest};
+use log::warn;
 use rand::seq::SliceRandom;
 use rand::{thread_rng, Rng};
 
 mod mkbench;
 mod utils;
 
-use log::warn;
+use node_replication::replica::Replica;
 use node_replication::Dispatch;
-
-use btfs::{Error, FileAttr, FileType, InodeId, MemFilesystem, SetAttrRequest};
 
 use utils::benchmark::*;
 use utils::Operation;
@@ -348,7 +348,12 @@ fn memfs_single_threaded(c: &mut TestHarness) {
     const WRITE_RATIO: usize = 10; //% out of 100
 
     let ops = generate_fs_operations(NOP, WRITE_RATIO);
-    mkbench::baseline_comparison::<NrMemFilesystem>(c, "memfs", ops, LOG_SIZE_BYTES);
+    mkbench::baseline_comparison::<Replica<NrMemFilesystem>, NrMemFilesystem>(
+        c,
+        "memfs",
+        ops,
+        LOG_SIZE_BYTES,
+    );
 }
 
 /// Compare scale-out behaviour of memfs.
@@ -358,7 +363,7 @@ fn memfs_scale_out(c: &mut TestHarness) {
 
     let ops = generate_fs_operations(NOP, WRITE_RATIO);
 
-    mkbench::ScaleBenchBuilder::<NrMemFilesystem>::new(ops)
+    mkbench::ScaleBenchBuilder::<Replica<NrMemFilesystem>, NrMemFilesystem>::new(ops)
         .machine_defaults()
         // The only benchmark that actually seems to slightly
         // regress with 2 MiB logsize, set to 16 MiB
@@ -366,7 +371,7 @@ fn memfs_scale_out(c: &mut TestHarness) {
         .configure(
             c,
             "memfs-scaleout",
-            |_cid, rid, _log, replica, op, _batch_size, _direct| match op {
+            |_cid, rid, _log, replica: &Arc<Replica<NrMemFilesystem>>, op, _batch_size| match op {
                 Operation::ReadOperation(o) => {
                     replica.execute_ro(*o, rid).unwrap();
                 }

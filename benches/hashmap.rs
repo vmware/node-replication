@@ -4,16 +4,24 @@
 //! Defines a hash-map that can be replicated.
 #![feature(test)]
 
+use std::cell::UnsafeCell;
 use std::collections::HashMap;
+use std::marker::Sync;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use rand::seq::SliceRandom;
 use rand::{distributions::Distribution, Rng, RngCore};
 use zipf::ZipfDistribution;
 
+use node_replication::log::Log;
+use node_replication::replica::Replica;
 use node_replication::Dispatch;
 
 mod mkbench;
 mod utils;
+
+use mkbench::ReplicaTrait;
 
 use utils::benchmark::*;
 use utils::topology::ThreadMapping;
@@ -148,7 +156,12 @@ fn hashmap_single_threaded(c: &mut TestHarness) {
     const WRITE_RATIO: usize = 10; //% out of 100
 
     let ops = generate_operations(NOP, WRITE_RATIO, KEY_SPACE, UNIFORM);
-    mkbench::baseline_comparison::<NrHashMap>(c, "hashmap", ops, LOG_SIZE_BYTES);
+    mkbench::baseline_comparison::<Replica<NrHashMap>, NrHashMap>(
+        c,
+        "hashmap",
+        ops,
+        LOG_SIZE_BYTES,
+    );
 }
 
 /// Compare scale-out behaviour of synthetic data-structure.
@@ -163,22 +176,82 @@ fn hashmap_scale_out(c: &mut TestHarness, write_ratio: usize) {
     let ops = generate_operations(NOP, write_ratio, KEY_SPACE, UNIFORM);
     let bench_name = format!("hashmap-scaleout-wr{}", write_ratio);
 
-    mkbench::ScaleBenchBuilder::<NrHashMap>::new(ops)
+    mkbench::ScaleBenchBuilder::<Replica<NrHashMap>, NrHashMap>::new(ops)
         .machine_defaults()
         .update_batch(128)
         .thread_mapping(ThreadMapping::Interleave)
         .configure(
             c,
             &bench_name,
-            |_cid, rid, _log, replica, op, _batch_size, _direct| match op {
-                Operation::ReadOperation(op) => {
-                    replica.execute_ro(*op, rid).unwrap();
-                }
-                Operation::WriteOperation(op) => {
-                    replica.execute(*op, rid).unwrap();
+            |_cid, rid, _log, replica: &std::sync::Arc<Replica<NrHashMap>>, op, _batch_size| {
+                match op {
+                    Operation::ReadOperation(op) => {
+                        replica.exec_ro(*op, rid).unwrap();
+                    }
+                    Operation::WriteOperation(op) => {
+                        replica.exec(*op, rid).unwrap();
+                    }
                 }
             },
         );
+}
+
+// It looks like a Replica but it's really a fully partitioned data-structure.
+struct Partitioner<T: node_replication::Dispatch> {
+    registered: AtomicUsize,
+    data_structure: UnsafeCell<T>,
+}
+
+// Ok since when more than one thread tries to register we return None
+unsafe impl<T> Sync for Partitioner<T> where T: node_replication::Dispatch + Default + Sync {}
+
+impl<T> Partitioner<T>
+where
+    T: node_replication::Dispatch + Default + Sync,
+{
+    fn execute(
+        &self,
+        op: <T as Dispatch>::WriteOperation,
+        idx: usize,
+    ) -> Result<<T as Dispatch>::Response, <T as Dispatch>::ResponseError> {
+        debug_assert_eq!(idx, 0);
+        unsafe { (&mut *self.data_structure.get()).dispatch_mut(op) }
+    }
+
+    fn execute_ro(
+        &self,
+        op: <T as Dispatch>::ReadOperation,
+        idx: usize,
+    ) -> Result<<T as Dispatch>::Response, <T as Dispatch>::ResponseError> {
+        debug_assert_eq!(idx, 0);
+        unsafe { (&*self.data_structure.get()).dispatch(op) }
+    }
+}
+
+impl<T> ReplicaTrait<T> for Partitioner<T>
+where
+    T: node_replication::Dispatch + Default + Sync,
+{
+    fn new_arc(_log: &Arc<Log<'static, <T as Dispatch>::WriteOperation>>) -> std::sync::Arc<Self> {
+        Arc::new(Partitioner {
+            registered: AtomicUsize::new(0),
+            data_structure: UnsafeCell::new(T::default()),
+        })
+    }
+
+    fn register_me(&self) -> Option<usize> {
+        let r = self.registered.compare_and_swap(0, 1, Ordering::SeqCst);
+        if r == 0 {
+            Some(0)
+        } else {
+            // Can't register more than one thread on partitioned DS
+            None
+        }
+    }
+
+    fn sync_me<F: FnMut(<T as Dispatch>::WriteOperation, usize)>(&self, _d: F) {
+        /* NOP */
+    }
 }
 
 /// Compare scale-out behaviour of partitioned hashmap data-structure.
@@ -193,19 +266,22 @@ fn partitioned_hashmap_scale_out(c: &mut TestHarness, write_ratio: usize) {
     let ops = generate_operations(NOP, write_ratio, KEY_SPACE, UNIFORM);
     let bench_name = format!("partitioned-hashmap-scaleout-wr{}", write_ratio);
 
-    mkbench::ScaleBenchBuilder::<NrHashMap>::new(ops)
-        .machine_defaults()
+    mkbench::ScaleBenchBuilder::<Partitioner<NrHashMap>, NrHashMap>::new(ops)
+        .thread_defaults()
+        .replica_strategy(mkbench::ReplicaStrategy::PerThread)
         .update_batch(128)
-        .update_replica_strategy(mkbench::ReplicaStrategy::Partition)
+        .thread_mapping(ThreadMapping::Interleave)
         .configure(
             c,
             &bench_name,
-            |_cid, _rid, _log, _replica, op, _batch_size, direct| match op {
-                Operation::ReadOperation(op) => {
-                    direct.as_ref().unwrap().dispatch(*op).unwrap();
-                }
-                Operation::WriteOperation(op) => {
-                    direct.as_mut().unwrap().dispatch_mut(*op).unwrap();
+            |_cid, rid, _log, replica: &std::sync::Arc<Partitioner<NrHashMap>>, op, _batch_size| {
+                match op {
+                    Operation::ReadOperation(op) => {
+                        replica.exec_ro(*op, rid).unwrap();
+                    }
+                    Operation::WriteOperation(op) => {
+                        replica.exec(*op, rid).unwrap();
+                    }
                 }
             },
         );

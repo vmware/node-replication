@@ -9,13 +9,20 @@
 extern crate log;
 extern crate zipf;
 
+use std::sync::Arc;
+
+use node_replication::log::Log;
+use node_replication::replica::Replica;
 use node_replication::Dispatch;
 use rand::distributions::Distribution;
 use rand::{Rng, RngCore};
+
 use zipf::ZipfDistribution;
 
 mod mkbench;
 mod utils;
+
+use mkbench::ReplicaTrait;
 
 use utils::benchmark::*;
 use utils::Operation;
@@ -61,7 +68,7 @@ fn log_scale_bench(c: &mut TestHarness) {
         operations.push(Operation::WriteOperation(e));
     }
 
-    mkbench::ScaleBenchBuilder::<Nop>::new(operations)
+    mkbench::ScaleBenchBuilder::<Replica<Nop>, Nop>::new(operations)
         .machine_defaults()
         .log_size(LOG_SIZE_BYTES)
         .add_batch(8)
@@ -70,7 +77,15 @@ fn log_scale_bench(c: &mut TestHarness) {
         .configure(
             c,
             "log-append",
-            |_cid, rid, log, _replica, op, batch_size, _direct| match op {
+            |_cid,
+             rid,
+             log: &Arc<Log<<Nop as Dispatch>::WriteOperation>>,
+             _replica: &Arc<Replica<Nop>>,
+             op: &utils::Operation<
+                <Nop as Dispatch>::ReadOperation,
+                <Nop as Dispatch>::WriteOperation,
+            >,
+             batch_size| match op {
                 Operation::WriteOperation(o) => {
                     let _r = log.append(
                         &vec![*o],

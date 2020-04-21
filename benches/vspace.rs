@@ -9,11 +9,13 @@ extern crate alloc;
 use std::fmt;
 use std::mem::transmute;
 use std::pin::Pin;
+use std::sync::Arc;
 
 use log::{debug, trace};
 use rand::{thread_rng, Rng};
 use x86::bits64::paging::*;
 
+use node_replication::replica::Replica;
 use node_replication::Dispatch;
 
 mod mkbench;
@@ -564,7 +566,7 @@ fn generate_operations(nop: usize) -> Vec<Operation<OpcodeRd, OpcodeWr>> {
 fn vspace_single_threaded(c: &mut TestHarness) {
     const NOP: usize = 3000;
     const LOG_SIZE_BYTES: usize = 16 * 1024 * 1024;
-    mkbench::baseline_comparison::<VSpaceDispatcher>(
+    mkbench::baseline_comparison::<Replica<VSpaceDispatcher>, VSpaceDispatcher>(
         c,
         "vspace",
         generate_operations(NOP),
@@ -576,12 +578,12 @@ fn vspace_scale_out(c: &mut TestHarness) {
     const NOP: usize = 3000;
     let ops = generate_operations(NOP);
 
-    mkbench::ScaleBenchBuilder::<VSpaceDispatcher>::new(ops)
+    mkbench::ScaleBenchBuilder::<Replica<VSpaceDispatcher>, VSpaceDispatcher>::new(ops)
         .machine_defaults()
         .configure(
             c,
             "vspace-scaleout",
-            |_cid, rid, _log, replica, op, _batch_size, _direct| match op {
+            |_cid, rid, _log, replica: &Arc<Replica<VSpaceDispatcher>>, op, _batch_size| match op {
                 Operation::ReadOperation(o) => {
                     let _r = replica.execute_ro(*o, rid);
                 }
