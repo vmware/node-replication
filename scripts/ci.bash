@@ -24,7 +24,7 @@ python3 gh-pages/scale_bench_plot.py scaleout_benchmarks.csv
 
 # Get revision
 export GIT_REV_CURRENT=`git rev-parse --short HEAD`
-export CSV_LINE="`date +%Y-%m-%d`",${GIT_REV_CURRENT},"","${CI_MACHINE_TYPE}/${GIT_REV_CURRENT}/index.html","${CI_MACHINE_TYPE}/${GIT_REV_CURRENT}/index.html","${CI_MACHINE_TYPE}/${GIT_REV_CURRENT}/index.html"
+export CSV_LINE="`date +%Y-%m-%d`",${GIT_REV_CURRENT},"","index.html","index.html","index.html"
 echo $CSV_LINE >> gh-pages/_data/${CI_MACHINE_TYPE}.csv
 
 SCALEBENCH_DEPLOY="gh-pages/scalebench/${CI_MACHINE_TYPE}/${GIT_REV_CURRENT}"
