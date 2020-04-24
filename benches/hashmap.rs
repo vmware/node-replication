@@ -196,7 +196,6 @@ fn partitioned_hashmap_scale_out(c: &mut TestHarness, write_ratio: usize) {
     mkbench::ScaleBenchBuilder::<NrHashMap>::new(ops)
         .machine_defaults()
         .update_batch(128)
-        .thread_mapping(ThreadMapping::Interleave)
         .update_replica_strategy(mkbench::ReplicaStrategy::Partition)
         .configure(
             c,
@@ -215,7 +214,7 @@ fn partitioned_hashmap_scale_out(c: &mut TestHarness, write_ratio: usize) {
 fn main() {
     let _r = env_logger::try_init();
     let mut harness = Default::default();
-    let write_ratios = vec![0, 10, 50, 100];
+    let write_ratios = vec![0, 10, 100];
 
     hashmap_single_threaded(&mut harness);
     for write_ratio in write_ratios.into_iter() {

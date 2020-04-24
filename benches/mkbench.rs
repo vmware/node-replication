@@ -838,7 +838,7 @@ where
         self.thread_mapping(ThreadMapping::Sequential);
         self.replica_strategy(ReplicaStrategy::One);
         self.replica_strategy(ReplicaStrategy::Socket);
-        self.replica_strategy(ReplicaStrategy::L1);
+        //self.replica_strategy(ReplicaStrategy::L1);
 
         // On larger machines thread increments are bigger than on
         // smaller machines:
