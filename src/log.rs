@@ -727,9 +727,9 @@ mod tests {
     // Tests if a small log can be correctly constructed.
     #[test]
     fn test_log_create() {
-        let l = Log::<Operation>::new(512 * 1024);
-        let n = (512 * 1024) / Log::<Operation>::entry_size();
-        assert_eq!(l.rawb, 512 * 1024);
+        let l = Log::<Operation>::new(1024 * 1024);
+        let n = (1024 * 1024) / Log::<Operation>::entry_size();
+        assert_eq!(l.rawb, 1024 * 1024);
         assert_eq!(l.size, n);
         assert_eq!(l.slog.len(), n);
         assert_eq!(l.head.load(Ordering::Relaxed), 0);
@@ -791,8 +791,8 @@ mod tests {
     // Tests if we can correctly index into the shared log.
     #[test]
     fn test_log_index() {
-        let l = Log::<Operation>::new(512 * 1024);
-        assert_eq!(l.index(9000), 808);
+        let l = Log::<Operation>::new(2 * 1024 * 1024);
+        assert_eq!(l.index(99000), 696);
     }
 
     // Tests if we can correctly register with the shared log.
@@ -887,7 +887,7 @@ mod tests {
         };
 
         l.next.store(2, Ordering::Relaxed);
-        l.head.store(8192, Ordering::Relaxed);
+        l.head.store(2 * 8192, Ordering::Relaxed);
         l.tail.store(l.size - 10, Ordering::Relaxed);
         l.append(&o, 1, |_o: Operation, _i: usize| {});
 
@@ -992,7 +992,7 @@ mod tests {
 
         l.append(&o, 1, |_o: Operation, _i: usize| {}); // Required for GC to work correctly.
         l.next.store(2, Ordering::SeqCst);
-        l.head.store(8192, Ordering::SeqCst);
+        l.head.store(2 * 8192, Ordering::SeqCst);
         l.tail.store(l.size - 10, Ordering::SeqCst);
         l.append(&o, 1, |_o: Operation, _i: usize| {});
 
