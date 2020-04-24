@@ -2,7 +2,11 @@ stages:
   - build
   - test
   - bench
-  - deploy
+
+before_script:
+  - 'which ssh-agent || ( apt-get update -y && apt-get install openssh-client -y )'
+  - eval $(ssh-agent -s)
+  - echo "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add -
 
 build:
   stage: build
@@ -10,75 +14,36 @@ build:
     # Dependency for node-replication
     - sudo apt install libhwloc-dev gnuplot libfuse-dev liburcu-dev liburcu6 pkg-config --yes
     - cargo build
+
 test:
   stage: test
   script:
-    #- cargo +nightly fmt -- --check
+    - cargo +nightly fmt -- --check
     - timeout 1h cargo test
+    - cargo bench --no-run
   dependencies:
     - build
   variables:
     GIT_STRATEGY: none
 
-bench:
+benchmark:skylake2x:
   stage: bench
   script:
-    # Run benchmark apps
-    - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench log
-    - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench synthetic
-    - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench stack
-    - RUST_TEST_THREADS=1 timeout 4h cargo bench --bench hashmap
-    - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench vspace
-    - RUST_TEST_THREADS=1 timeout 1h cargo bench --bench memfs
-    - timeout 1.5h bash benches/hashbench_run.sh
-    - timeout 1.5h bash benches/rwlockbench_run.sh
+    - bash scripts/ci.bash
   dependencies:
     - test
   variables:
     GIT_STRATEGY: none
+  tags:
+    - skylake2x
 
-# Deploy the benchmark go gh-pages:
-deploy:
-  stage: deploy
+benchmark:skylake4x:
+  stage: bench
   script:
-    # Get revision
-    - export GIT_REV_CURRENT=`git rev-parse --short HEAD`
-    - export CSV_LINE="`date +%Y-%m-%d`",$GIT_REV_CURRENT,"","hashbench/$GIT_REV_CURRENT/index.html","rwlockbench/$GIT_REV_CURRENT/index.html","scalebench/$GIT_REV_CURRENT/index.html"
-    # Checkout gh-pages
-    - git clone git@github.com:gz/node-replication.git gh-pages
-    - cd gh-pages
-    - git checkout gh-pages
-    - pip3 install -r requirements.txt
-    - cd ..
-    - echo $CSV_LINE >> gh-pages/_data/b1641.csv
-    # Copy scalebench
-    - python3 gh-pages/scale_bench_plot.py scaleout_benchmarks.csv
-    - rm -rf gh-pages/scalebench/$GIT_REV_CURRENT
-    - mkdir -p gh-pages/scalebench/$GIT_REV_CURRENT
-    - mv baseline_comparison.csv gh-pages/scalebench/$GIT_REV_CURRENT
-    - mv scaleout_benchmarks.csv gh-pages/scalebench/$GIT_REV_CURRENT
-    - mv per_thread_times.* gh-pages/scalebench/$GIT_REV_CURRENT
-    - mv throughput-*-*.* gh-pages/scalebench/$GIT_REV_CURRENT
-    # Copy hashbench results
-    - mkdir -p gh-pages/hashbench/$GIT_REV_CURRENT
-    - mv results.log write-throughput.png read-throughput.png gh-pages/hashbench/$GIT_REV_CURRENT
-    # Copy rwlockbench results
-    - mkdir -p gh-pages/rwlockbench/$GIT_REV_CURRENT
-    - mv rwlockbench_results.log rwlock-write-throughput.png rwlock-read-throughput.png gh-pages/rwlockbench/$GIT_REV_CURRENT
-    # Setup html layouts
-    - cd gh-pages
-    - cp hashbench/index.markdown hashbench/$GIT_REV_CURRENT
-    - cp rwlockbench/index.markdown rwlockbench/$GIT_REV_CURRENT
-    - cp scalebench/index.markdown scalebench/$GIT_REV_CURRENT
-    # Update CI time plots
-    - python3 history_plots.py
-    # Push to gh-pages
-    - git add .
-    - git commit -a -m "Added benchmark results for $GIT_REV_CURRENT."
-    - git push origin gh-pages
-    - cd ..
-    - rm -rf gh-pages
+    - bash scripts/ci.bash
   dependencies:
-    - bench
+    - test
   variables:
     GIT_STRATEGY: none
+  tags:
+    - skylake4x

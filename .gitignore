@@ -17,3 +17,6 @@ Cargo.lock
 # Benchmark files
 **/*.log
 **/*.csv
+
+# Created by CI
+gh-pages/
