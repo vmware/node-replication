@@ -23,7 +23,7 @@ const DEFAULT_LOG_BYTES: usize = 1024 * 1024 * 1024;
 const_assert!(DEFAULT_LOG_BYTES >= 1 && (DEFAULT_LOG_BYTES & (DEFAULT_LOG_BYTES - 1) == 0));
 
 /// The maximum number of replicas that can be used against the log.
-const MAX_REPLICAS: usize = 64;
+const MAX_REPLICAS: usize = 192;
 
 /// Constant required for garbage collection. When the tail and the head are
 /// these many entries apart on the circular buffer, garbage collection will
@@ -214,7 +214,7 @@ where
             }
         }
 
-        let fls: [CachePadded<Cell<bool>>; MAX_REPLICAS] = arr![Default::default(); 64];
+        let fls: [CachePadded<Cell<bool>>; MAX_REPLICAS] = arr![Default::default(); 192];
         for idx in 0..MAX_REPLICAS {
             fls[idx].set(true)
         }
@@ -227,7 +227,7 @@ where
             head: CachePadded::new(AtomicUsize::new(0usize)),
             tail: CachePadded::new(AtomicUsize::new(0usize)),
             ctail: CachePadded::new(AtomicUsize::new(0usize)),
-            ltails: arr![Default::default(); 64],
+            ltails: arr![Default::default(); 192],
             next: CachePadded::new(AtomicUsize::new(1usize)),
             lmasks: fls,
         }

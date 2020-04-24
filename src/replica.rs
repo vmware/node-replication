@@ -22,7 +22,7 @@ use super::Dispatch;
 /// # Important
 /// If this number is adjusted due to the use of the `arr_macro::arr` macro we
 /// have to adjust the `128` literals in the `new` constructor of `Replica`.
-pub const MAX_THREADS_PER_REPLICA: usize = 128;
+pub const MAX_THREADS_PER_REPLICA: usize = 256;
 const_assert!(
     MAX_THREADS_PER_REPLICA >= 1 && (MAX_THREADS_PER_REPLICA & (MAX_THREADS_PER_REPLICA - 1) == 0)
 );
@@ -169,7 +169,7 @@ where
                 idx: log.register().unwrap(),
                 combiner: CachePadded::new(AtomicUsize::new(0)),
                 next: CachePadded::new(AtomicUsize::new(1)),
-                contexts: Vec::with_capacity(128),
+                contexts: Vec::with_capacity(MAX_THREADS_PER_REPLICA),
                 buffer: RefCell::new(Vec::with_capacity(
                     MAX_THREADS_PER_REPLICA
                         * Context::<
@@ -178,7 +178,7 @@ where
                             <D as Dispatch>::ResponseError,
                         >::batch_size(),
                 )),
-                inflight: RefCell::new(arr![Default::default(); 128]),
+                inflight: RefCell::new(arr![Default::default(); 256]),
                 result: RefCell::new(Vec::with_capacity(
                     MAX_THREADS_PER_REPLICA
                         * Context::<
@@ -193,7 +193,7 @@ where
 
             let mut replica = uninit_replica.assume_init();
             // Add `MAX_THREADS_PER_REPLICA` contexts
-            for _idx in 0..128 {
+            for _idx in 0..MAX_THREADS_PER_REPLICA {
                 Arc::get_mut(&mut replica)
                     .unwrap()
                     .contexts
