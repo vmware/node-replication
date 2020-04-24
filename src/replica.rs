@@ -464,8 +464,10 @@ where
     ) -> Result<<D as Dispatch>::Response, <D as Dispatch>::ResponseError> {
         // We can perform the read only if our replica is synced up against
         // the shared log. If it isn't, then try to combine until it is synced up.
-        while !self.slog.is_replica_synced_for_reads(self.idx) {
+        let ctail = self.slog.get_ctail();
+        while !self.slog.is_replica_synced_for_reads(self.idx, ctail) {
             self.try_combine(tid);
+            spin_loop_hint();
         }
 
         self.data.read(tid - 1).dispatch(op)
@@ -483,22 +485,19 @@ where
     fn try_combine(&self, tid: usize) {
         // First, check if there already is a flat combiner. If there is no active flat combiner
         // then try to acquire the combiner lock. If there is, then just return.
-        let mut combine = 0;
         for _i in 0..4 {
-            combine += unsafe {
-                &*(&self.combiner
+            if unsafe {
+                *(&self.combiner
                     as *const crossbeam_utils::CachePadded<core::sync::atomic::AtomicUsize>
                     as *const usize)
+            } != 0
+            {
+                return;
             };
         }
 
-        if combine != 0 {
-            return;
-        };
-
         // Try to become the combiner here. If this fails, then simply return.
         if self.combiner.compare_and_swap(0, tid, Ordering::Acquire) != 0 {
-            spin_loop_hint();
             return;
         }
 

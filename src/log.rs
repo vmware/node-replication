@@ -632,7 +632,7 @@ where
     ///
     ///     // This assertion fails because `idx1` has not executed operations
     ///     // that were appended by `idx2`.
-    ///     assert_eq!(false, l.is_replica_synced_for_reads(idx1));
+    ///     assert_eq!(false, l.is_replica_synced_for_reads(idx1, l.get_ctail()));
     ///
     ///     let mut e = 0;
     ///     let mut g = |op: Operation, id: usize| {
@@ -645,11 +645,17 @@ where
     ///     l.exec(idx1, &mut g);
     ///
     ///     // `idx1` is all synced up, so this assertion passes.
-    ///     assert_eq!(true, l.is_replica_synced_for_reads(idx1));
+    ///     assert_eq!(true, l.is_replica_synced_for_reads(idx1, l.get_ctail()));
     /// ```
     #[inline(always)]
-    pub fn is_replica_synced_for_reads(&self, idx: usize) -> bool {
-        self.ltails[idx - 1].load(Ordering::Relaxed) >= self.ctail.load(Ordering::Relaxed)
+    pub fn is_replica_synced_for_reads(&self, idx: usize, ctail: usize) -> bool {
+        self.ltails[idx - 1].load(Ordering::Relaxed) >= ctail
+    }
+
+    /// This method returns the current ctail value for the log.
+    #[inline(always)]
+    pub fn get_ctail(&self) -> usize {
+        self.ctail.load(Ordering::Relaxed)
     }
 }
 
@@ -1066,10 +1072,10 @@ mod tests {
 
         l.append(&o, one, |_o: Operation, _i: usize| {});
         l.exec(one, &mut f);
-        assert_eq!(l.is_replica_synced_for_reads(one), true);
-        assert_eq!(l.is_replica_synced_for_reads(two), false);
+        assert_eq!(l.is_replica_synced_for_reads(one, l.get_ctail()), true);
+        assert_eq!(l.is_replica_synced_for_reads(two, l.get_ctail()), false);
 
         l.exec(two, &mut f);
-        assert_eq!(l.is_replica_synced_for_reads(two), true);
+        assert_eq!(l.is_replica_synced_for_reads(two, l.get_ctail()), true);
     }
 }
