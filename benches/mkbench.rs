@@ -593,8 +593,15 @@ where
                 let rmc = self.rm.clone();
                 let log_period = Duration::from_secs(1);
 
+                let name = self.name.clone();
+
                 self.handles.push(thread::spawn(move || {
                     utils::pin_thread(core_id);
+                    if name.starts_with("urcu") {
+                        unsafe {
+                            urcu_sys::rcu_register_thread();
+                        }
+                    }
                     loop {
                         let duration = duration_rx.recv().expect("Can't get iter from channel?");
                         if duration.as_nanos() == 0 {
@@ -663,6 +670,12 @@ where
                         );
 
                         result_channel.send((core_id, operations_per_second));
+
+                        if name.starts_with("urcu") {
+                            unsafe {
+                                urcu_sys::rcu_unregister_thread();
+                            }
+                        }
 
                         if !do_sync {
                             b.wait();
@@ -850,7 +863,6 @@ where
     <T as node_replication::Dispatch>::ReadOperation: std::marker::Send,
     <T as node_replication::Dispatch>::Response: std::marker::Send,
     <T as node_replication::Dispatch>::ResponseError: std::marker::Send,
-    T: 'static,
     T: std::marker::Send + std::marker::Sync,
 {
     /// Initialize an "empty" ScaleBenchBuilder with a  MiB log.

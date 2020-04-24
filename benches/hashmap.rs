@@ -4,25 +4,23 @@
 //! Defines a hash-map that can be replicated.
 #![feature(test)]
 
-use std::cell::UnsafeCell;
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::marker::Sync;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
 
 use rand::seq::SliceRandom;
 use rand::{distributions::Distribution, Rng, RngCore};
 use zipf::ZipfDistribution;
 
-use node_replication::log::Log;
 use node_replication::replica::Replica;
 use node_replication::Dispatch;
 
+mod hashmap_comparisons;
 mod mkbench;
 mod utils;
 
+use hashmap_comparisons::*;
 use mkbench::ReplicaTrait;
-
 use utils::benchmark::*;
 use utils::topology::ThreadMapping;
 use utils::Operation;
@@ -31,6 +29,18 @@ extern crate jemallocator;
 
 #[global_allocator]
 static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
+
+/// The initial amount of entries all Hashmaps are initialized with
+pub const INITIAL_CAPACITY: usize = 5_000_000;
+
+// Biggest key in the hash-map
+pub const KEY_SPACE: usize = 5_000_000;
+
+// Key distribution for all hash-maps [uniform|skewed]
+pub const UNIFORM: &'static str = "uniform";
+
+// Number of operation for test-harness.
+pub const NOP: usize = 515_000;
 
 /// Operations we can perform on the stack.
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
@@ -43,6 +53,16 @@ pub enum OpWr {
 pub enum OpRd {
     /// Get item from the hash-map.
     Get(u64),
+}
+
+/// When using a concurrent data-structure (as a comparison)
+/// all operations go as read-only ops
+#[derive(Debug, Eq, PartialEq, Clone, Copy)]
+pub enum OpConcurrent {
+    /// Get item from the hash-map.
+    Get(u64),
+    /// Add an item to the hash-map.
+    Put(u64, u64),
 }
 
 /// Single-threaded implementation of the stack
@@ -64,11 +84,10 @@ impl NrHashMap {
 }
 
 impl Default for NrHashMap {
-    /// Return a dummy hash-map with initial capacity of 50M elements.
+    /// Return a dummy hash-map with `INITIAL_CAPACITY` elements.
     fn default() -> NrHashMap {
-        let capacity = 5_000_000;
-        let mut storage = HashMap::with_capacity(capacity);
-        for i in 0..capacity {
+        let mut storage = HashMap::with_capacity(INITIAL_CAPACITY);
+        for i in 0..INITIAL_CAPACITY {
             storage.insert(i as u64, (i + 1) as u64);
         }
         NrHashMap { storage }
@@ -141,6 +160,49 @@ pub fn generate_operations(
     ops
 }
 
+/// Generate a random sequence of operations
+///
+/// # Arguments
+///  - `nop`: Number of operations to generate
+///  - `write`: true will Put, false will generate Get sequences
+///  - `span`: Maximum key
+///  - `distribution`: Supported distribution 'uniform' or 'skewed'
+pub fn generate_operations_concurrent(
+    nop: usize,
+    write_ratio: usize,
+    span: usize,
+    distribution: &'static str,
+) -> Vec<Operation<OpConcurrent, ()>> {
+    assert!(distribution == "skewed" || distribution == "uniform");
+
+    let mut ops = Vec::with_capacity(nop);
+
+    let skewed = distribution == "skewed";
+    let mut t_rng = rand::thread_rng();
+    let zipf = ZipfDistribution::new(span, 1.03).unwrap();
+
+    for idx in 0..nop {
+        let id = if skewed {
+            zipf.sample(&mut t_rng) as u64
+        } else {
+            // uniform
+            t_rng.gen_range(0, span as u64)
+        };
+
+        if idx % 100 < write_ratio {
+            ops.push(Operation::ReadOperation(OpConcurrent::Put(
+                id,
+                t_rng.next_u64(),
+            )));
+        } else {
+            ops.push(Operation::ReadOperation(OpConcurrent::Get(id)));
+        }
+    }
+
+    ops.shuffle(&mut t_rng);
+    ops
+}
+
 /// Compare a replicated hashmap against a single-threaded implementation.
 fn hashmap_single_threaded(c: &mut TestHarness) {
     // Size of the log.
@@ -166,13 +228,6 @@ fn hashmap_single_threaded(c: &mut TestHarness) {
 
 /// Compare scale-out behaviour of synthetic data-structure.
 fn hashmap_scale_out(c: &mut TestHarness, write_ratio: usize) {
-    // Biggest key in the hash-map
-    const KEY_SPACE: usize = 5_000_000;
-    // Key distribution
-    const UNIFORM: &'static str = "uniform";
-    // Number of operation for test-harness.
-    const NOP: usize = 515_000;
-
     let ops = generate_operations(NOP, write_ratio, KEY_SPACE, UNIFORM);
     let bench_name = format!("hashmap-scaleout-wr{}", write_ratio);
 
@@ -196,68 +251,8 @@ fn hashmap_scale_out(c: &mut TestHarness, write_ratio: usize) {
         );
 }
 
-// It looks like a Replica but it's really a fully partitioned data-structure.
-struct Partitioner<T: node_replication::Dispatch> {
-    registered: AtomicUsize,
-    data_structure: UnsafeCell<T>,
-}
-
-// Ok since when more than one thread tries to register we return None
-unsafe impl<T> Sync for Partitioner<T> where T: node_replication::Dispatch + Default + Sync {}
-
-impl<T> ReplicaTrait<T> for Partitioner<T>
-where
-    T: node_replication::Dispatch + Default + Sync,
-{
-    fn new_arc(_log: &Arc<Log<'static, <T as Dispatch>::WriteOperation>>) -> std::sync::Arc<Self> {
-        Arc::new(Partitioner {
-            registered: AtomicUsize::new(0),
-            data_structure: UnsafeCell::new(T::default()),
-        })
-    }
-
-    fn register_me(&self) -> Option<usize> {
-        let r = self.registered.compare_and_swap(0, 1, Ordering::SeqCst);
-        if r == 0 {
-            Some(0)
-        } else {
-            // Can't register more than one thread on partitioned DS
-            None
-        }
-    }
-
-    fn sync_me<F: FnMut(<T as Dispatch>::WriteOperation, usize)>(&self, _d: F) {
-        /* NOP */
-    }
-
-    fn exec(
-        &self,
-        op: <T as Dispatch>::WriteOperation,
-        idx: usize,
-    ) -> Result<<T as Dispatch>::Response, <T as Dispatch>::ResponseError> {
-        debug_assert_eq!(idx, 0);
-        unsafe { (&mut *self.data_structure.get()).dispatch_mut(op) }
-    }
-
-    fn exec_ro(
-        &self,
-        op: <T as Dispatch>::ReadOperation,
-        idx: usize,
-    ) -> Result<<T as Dispatch>::Response, <T as Dispatch>::ResponseError> {
-        debug_assert_eq!(idx, 0);
-        unsafe { (&*self.data_structure.get()).dispatch(op) }
-    }
-}
-
 /// Compare scale-out behaviour of partitioned hashmap data-structure.
 fn partitioned_hashmap_scale_out(c: &mut TestHarness, write_ratio: usize) {
-    // Biggest key in the hash-map
-    const KEY_SPACE: usize = 5_000_000;
-    // Key distribution
-    const UNIFORM: &'static str = "uniform";
-    // Number of operation for test-harness.
-    const NOP: usize = 515_000;
-
     let ops = generate_operations(NOP, write_ratio, KEY_SPACE, UNIFORM);
     let bench_name = format!("partitioned-hashmap-scaleout-wr{}", write_ratio);
 
@@ -282,14 +277,54 @@ fn partitioned_hashmap_scale_out(c: &mut TestHarness, write_ratio: usize) {
         );
 }
 
+fn concurrent_ds_scale_out<T>(c: &mut TestHarness, name: &str, write_ratio: usize)
+where
+    T: Dispatch<ReadOperation = OpConcurrent>,
+    T: Dispatch<WriteOperation = ()>,
+    T: 'static,
+    T: node_replication::Dispatch + Sync + Default + Send,
+    <T as node_replication::Dispatch>::Response: Send + Sync,
+    <T as node_replication::Dispatch>::ResponseError: Send + Sync + Debug,
+{
+    let ops = generate_operations_concurrent(NOP, write_ratio, KEY_SPACE, UNIFORM);
+    let bench_name = format!("{}-scaleout-wr{}", name, write_ratio);
+
+    mkbench::ScaleBenchBuilder::<ConcurrentDs<T>, T>::new(ops)
+        .thread_defaults()
+        .replica_strategy(mkbench::ReplicaStrategy::One) // Can only be One
+        .update_batch(128)
+        .thread_mapping(ThreadMapping::Interleave)
+        .thread_mapping(ThreadMapping::Sequential)
+        .configure(
+            c,
+            &bench_name,
+            |_cid, rid, _log, replica: &std::sync::Arc<ConcurrentDs<T>>, op, _batch_size| match op {
+                Operation::ReadOperation(op) => {
+                    replica.exec_ro(*op, rid).unwrap();
+                }
+                Operation::WriteOperation(op) => {
+                    replica.exec(*op, rid).unwrap();
+                }
+            },
+        );
+}
+
 fn main() {
     let _r = env_logger::try_init();
     let mut harness = Default::default();
-    let write_ratios = vec![0, 10, 100];
+    let write_ratios = vec![0, 10, 50, 75, 100];
+    unsafe {
+        urcu_sys::rcu_init();
+    }
 
     hashmap_single_threaded(&mut harness);
     for write_ratio in write_ratios.into_iter() {
         hashmap_scale_out(&mut harness, write_ratio);
         partitioned_hashmap_scale_out(&mut harness, write_ratio);
+        concurrent_ds_scale_out::<CHashMapWrapper>(&mut harness, "chashmap", write_ratio);
+        concurrent_ds_scale_out::<StdWrapper>(&mut harness, "std", write_ratio);
+        concurrent_ds_scale_out::<FlurryWrapper>(&mut harness, "flurry", write_ratio);
+        concurrent_ds_scale_out::<RcuHashMap>(&mut harness, "urcu", write_ratio);
+        concurrent_ds_scale_out::<DashWrapper>(&mut harness, "dashmap", write_ratio);
     }
 }
