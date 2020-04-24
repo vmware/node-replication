@@ -222,11 +222,21 @@ fn hashmap_single_threaded(c: &mut TestHarness) {
 }
 
 /// Compare scale-out behaviour of synthetic data-structure.
-fn hashmap_scale_out(c: &mut TestHarness, write_ratio: usize) {
+fn hashmap_scale_out<R>(c: &mut TestHarness, name: &str, write_ratio: usize)
+where
+    R: ReplicaTrait + Send + Sync + 'static,
+    R::D: Send,
+    R::D: Dispatch<ReadOperation = OpRd>,
+    R::D: Dispatch<WriteOperation = OpWr>,
+    <R::D as Dispatch>::WriteOperation: Send + Sync,
+    <R::D as Dispatch>::ReadOperation: Send + Sync,
+    <R::D as Dispatch>::Response: Sync + Send,
+    <R::D as Dispatch>::ResponseError: Sync + Send + Debug,
+{
     let ops = generate_operations(NOP, write_ratio, KEY_SPACE, UNIFORM);
-    let bench_name = format!("hashmap-scaleout-wr{}", write_ratio);
+    let bench_name = format!("{}-scaleout-wr{}", name, write_ratio);
 
-    mkbench::ScaleBenchBuilder::<Replica<NrHashMap>>::new(ops)
+    mkbench::ScaleBenchBuilder::<R>::new(ops)
         .machine_defaults()
         .update_batch(128)
         .thread_mapping(ThreadMapping::Interleave)
@@ -245,9 +255,9 @@ fn hashmap_scale_out(c: &mut TestHarness, write_ratio: usize) {
 }
 
 /// Compare scale-out behaviour of partitioned hashmap data-structure.
-fn partitioned_hashmap_scale_out(c: &mut TestHarness, write_ratio: usize) {
+fn partitioned_hashmap_scale_out(c: &mut TestHarness, name: &str, write_ratio: usize) {
     let ops = generate_operations(NOP, write_ratio, KEY_SPACE, UNIFORM);
-    let bench_name = format!("partitioned-hashmap-scaleout-wr{}", write_ratio);
+    let bench_name = format!("{}-scaleout-wr{}", name, write_ratio);
 
     mkbench::ScaleBenchBuilder::<Partitioner<NrHashMap>>::new(ops)
         .thread_defaults()
@@ -312,8 +322,8 @@ fn main() {
 
     hashmap_single_threaded(&mut harness);
     for write_ratio in write_ratios.into_iter() {
-        hashmap_scale_out(&mut harness, write_ratio);
-        partitioned_hashmap_scale_out(&mut harness, write_ratio);
+        hashmap_scale_out::<Replica<NrHashMap>>(&mut harness, "hashmap", write_ratio);
+        partitioned_hashmap_scale_out(&mut harness, "partitioned-hashmap", write_ratio);
         concurrent_ds_scale_out::<CHashMapWrapper>(&mut harness, "chashmap", write_ratio);
         concurrent_ds_scale_out::<StdWrapper>(&mut harness, "std", write_ratio);
         concurrent_ds_scale_out::<FlurryWrapper>(&mut harness, "flurry", write_ratio);
