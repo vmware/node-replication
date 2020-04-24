@@ -218,12 +218,7 @@ fn hashmap_single_threaded(c: &mut TestHarness) {
     const WRITE_RATIO: usize = 10; //% out of 100
 
     let ops = generate_operations(NOP, WRITE_RATIO, KEY_SPACE, UNIFORM);
-    mkbench::baseline_comparison::<Replica<NrHashMap>, NrHashMap>(
-        c,
-        "hashmap",
-        ops,
-        LOG_SIZE_BYTES,
-    );
+    mkbench::baseline_comparison::<Replica<NrHashMap>>(c, "hashmap", ops, LOG_SIZE_BYTES);
 }
 
 /// Compare scale-out behaviour of synthetic data-structure.
@@ -231,21 +226,19 @@ fn hashmap_scale_out(c: &mut TestHarness, write_ratio: usize) {
     let ops = generate_operations(NOP, write_ratio, KEY_SPACE, UNIFORM);
     let bench_name = format!("hashmap-scaleout-wr{}", write_ratio);
 
-    mkbench::ScaleBenchBuilder::<Replica<NrHashMap>, NrHashMap>::new(ops)
+    mkbench::ScaleBenchBuilder::<Replica<NrHashMap>>::new(ops)
         .machine_defaults()
         .update_batch(128)
         .thread_mapping(ThreadMapping::Interleave)
         .configure(
             c,
             &bench_name,
-            |_cid, rid, _log, replica: &std::sync::Arc<Replica<NrHashMap>>, op, _batch_size| {
-                match op {
-                    Operation::ReadOperation(op) => {
-                        replica.exec_ro(*op, rid).unwrap();
-                    }
-                    Operation::WriteOperation(op) => {
-                        replica.exec(*op, rid).unwrap();
-                    }
+            |_cid, rid, _log, replica, op, _batch_size| match op {
+                Operation::ReadOperation(op) => {
+                    replica.exec_ro(*op, rid).unwrap();
+                }
+                Operation::WriteOperation(op) => {
+                    replica.exec(*op, rid).unwrap();
                 }
             },
         );
@@ -256,7 +249,7 @@ fn partitioned_hashmap_scale_out(c: &mut TestHarness, write_ratio: usize) {
     let ops = generate_operations(NOP, write_ratio, KEY_SPACE, UNIFORM);
     let bench_name = format!("partitioned-hashmap-scaleout-wr{}", write_ratio);
 
-    mkbench::ScaleBenchBuilder::<Partitioner<NrHashMap>, NrHashMap>::new(ops)
+    mkbench::ScaleBenchBuilder::<Partitioner<NrHashMap>>::new(ops)
         .thread_defaults()
         .replica_strategy(mkbench::ReplicaStrategy::PerThread)
         .update_batch(128)
@@ -264,14 +257,12 @@ fn partitioned_hashmap_scale_out(c: &mut TestHarness, write_ratio: usize) {
         .configure(
             c,
             &bench_name,
-            |_cid, rid, _log, replica: &std::sync::Arc<Partitioner<NrHashMap>>, op, _batch_size| {
-                match op {
-                    Operation::ReadOperation(op) => {
-                        replica.exec_ro(*op, rid).unwrap();
-                    }
-                    Operation::WriteOperation(op) => {
-                        replica.exec(*op, rid).unwrap();
-                    }
+            |_cid, rid, _log, replica, op, _batch_size| match op {
+                Operation::ReadOperation(op) => {
+                    replica.exec_ro(*op, rid).unwrap();
+                }
+                Operation::WriteOperation(op) => {
+                    replica.exec(*op, rid).unwrap();
                 }
             },
         );
@@ -282,14 +273,14 @@ where
     T: Dispatch<ReadOperation = OpConcurrent>,
     T: Dispatch<WriteOperation = ()>,
     T: 'static,
-    T: node_replication::Dispatch + Sync + Default + Send,
-    <T as node_replication::Dispatch>::Response: Send + Sync,
-    <T as node_replication::Dispatch>::ResponseError: Send + Sync + Debug,
+    T: Dispatch + Sync + Default + Send,
+    <T as Dispatch>::Response: Send + Sync,
+    <T as Dispatch>::ResponseError: Send + Sync + Debug,
 {
     let ops = generate_operations_concurrent(NOP, write_ratio, KEY_SPACE, UNIFORM);
     let bench_name = format!("{}-scaleout-wr{}", name, write_ratio);
 
-    mkbench::ScaleBenchBuilder::<ConcurrentDs<T>, T>::new(ops)
+    mkbench::ScaleBenchBuilder::<ConcurrentDs<T>>::new(ops)
         .thread_defaults()
         .replica_strategy(mkbench::ReplicaStrategy::One) // Can only be One
         .update_batch(128)
@@ -298,7 +289,7 @@ where
         .configure(
             c,
             &bench_name,
-            |_cid, rid, _log, replica: &std::sync::Arc<ConcurrentDs<T>>, op, _batch_size| match op {
+            |_cid, rid, _log, replica, op, _batch_size| match op {
                 Operation::ReadOperation(op) => {
                     replica.exec_ro(*op, rid).unwrap();
                 }
@@ -311,6 +302,8 @@ where
 
 fn main() {
     let _r = env_logger::try_init();
+    utils::disable_dvfs();
+
     let mut harness = Default::default();
     let write_ratios = vec![0, 10, 50, 75, 100];
     unsafe {

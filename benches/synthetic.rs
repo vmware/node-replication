@@ -10,8 +10,6 @@
 //! to measure the cache-impact.
 
 #![feature(test)]
-use std::sync::Arc;
-
 use crossbeam_utils::CachePadded;
 use rand::{thread_rng, Rng};
 
@@ -311,7 +309,7 @@ fn synthetic_single_threaded(c: &mut TestHarness) {
     const LOG_SIZE_BYTES: usize = 2 * 1024 * 1024;
 
     let ops = generate_operations(NOP, 0, false, false, true);
-    mkbench::baseline_comparison::<Replica<AbstractDataStructure>, AbstractDataStructure>(
+    mkbench::baseline_comparison::<Replica<AbstractDataStructure>>(
         c,
         "synthetic",
         ops,
@@ -326,21 +324,19 @@ fn synthetic_scale_out(c: &mut TestHarness) {
     // Operations to perform
     let ops = generate_operations(NOP, 0, false, false, true);
 
-    mkbench::ScaleBenchBuilder::<Replica<AbstractDataStructure>, AbstractDataStructure>::new(ops)
+    mkbench::ScaleBenchBuilder::<Replica<AbstractDataStructure>>::new(ops)
         .machine_defaults()
         .configure(
             c,
             "synthetic-scaleout",
-            |cid, rid, _log, replica: &Arc<Replica<AbstractDataStructure>>, op, _batch_size| {
-                match op {
-                    Operation::ReadOperation(mut o) => {
-                        o.set_tid(cid as usize);
-                        replica.execute_ro(o, rid).unwrap();
-                    }
-                    Operation::WriteOperation(mut o) => {
-                        o.set_tid(cid as usize);
-                        replica.execute(o, rid).unwrap();
-                    }
+            |cid, rid, _log, replica, op, _batch_size| match op {
+                Operation::ReadOperation(mut o) => {
+                    o.set_tid(cid as usize);
+                    replica.execute_ro(o, rid).unwrap();
+                }
+                Operation::WriteOperation(mut o) => {
+                    o.set_tid(cid as usize);
+                    replica.execute(o, rid).unwrap();
                 }
             },
         );

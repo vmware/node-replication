@@ -14,7 +14,6 @@ use std::sync::Arc;
 use urcu_sys;
 
 use node_replication::log::Log;
-
 use node_replication::Dispatch;
 
 use crate::mkbench::ReplicaTrait;
@@ -24,20 +23,24 @@ use super::{OpConcurrent, INITIAL_CAPACITY};
 /// It looks like a Replica but it's really a fully partitioned data-structure.
 ///
 /// This only makes sense to run with `ReplicaStrategy::PerThread`.
-pub struct Partitioner<T: node_replication::Dispatch> {
+pub struct Partitioner<T: Dispatch> {
     registered: AtomicUsize,
     data_structure: UnsafeCell<T>,
 }
 
 // Ok because if more than one thread tries to register we would fail.
 // This implies we have to run with `ReplicaStrategy::PerThread`.
-unsafe impl<T> Sync for Partitioner<T> where T: node_replication::Dispatch + Default + Sync {}
+unsafe impl<T> Sync for Partitioner<T> where T: Dispatch + Default + Sync {}
 
-impl<T> ReplicaTrait<T> for Partitioner<T>
+impl<T> ReplicaTrait for Partitioner<T>
 where
-    T: node_replication::Dispatch + Default + Sync,
+    T: Dispatch + Default + Sync,
 {
-    fn new_arc(_log: &Arc<Log<'static, <T as Dispatch>::WriteOperation>>) -> std::sync::Arc<Self> {
+    type D = T;
+
+    fn new_arc(
+        _log: &Arc<Log<'static, <Self::D as Dispatch>::WriteOperation>>,
+    ) -> std::sync::Arc<Self> {
         Arc::new(Partitioner {
             registered: AtomicUsize::new(0),
             data_structure: UnsafeCell::new(T::default()),
@@ -54,15 +57,15 @@ where
         }
     }
 
-    fn sync_me<F: FnMut(<T as Dispatch>::WriteOperation, usize)>(&self, _d: F) {
+    fn sync_me<F: FnMut(<Self::D as Dispatch>::WriteOperation, usize)>(&self, _d: F) {
         /* NOP */
     }
 
     fn exec(
         &self,
-        op: <T as Dispatch>::WriteOperation,
+        op: <Self::D as Dispatch>::WriteOperation,
         idx: usize,
-    ) -> Result<<T as Dispatch>::Response, <T as Dispatch>::ResponseError> {
+    ) -> Result<<Self::D as Dispatch>::Response, <Self::D as Dispatch>::ResponseError> {
         debug_assert_eq!(idx, 0);
         unsafe { (&mut *self.data_structure.get()).dispatch_mut(op) }
     }
@@ -83,18 +86,22 @@ where
 /// Useful to compare against the competition.
 ///
 /// Obviously this makes the most sense when run with `ReplicaStrategy::One`.
-pub struct ConcurrentDs<T: node_replication::Dispatch + std::marker::Sync> {
+pub struct ConcurrentDs<T: Dispatch + Sync> {
     registered: AtomicUsize,
     data_structure: T,
 }
 
-unsafe impl<T> Sync for ConcurrentDs<T> where T: node_replication::Dispatch + Default + Sync {}
+unsafe impl<T> Sync for ConcurrentDs<T> where T: Dispatch + Default + Sync {}
 
-impl<T> ReplicaTrait<T> for ConcurrentDs<T>
+impl<T> ReplicaTrait for ConcurrentDs<T>
 where
-    T: node_replication::Dispatch + Default + Sync,
+    T: Dispatch + Default + Sync,
 {
-    fn new_arc(_log: &Arc<Log<'static, <T as Dispatch>::WriteOperation>>) -> std::sync::Arc<Self> {
+    type D = T;
+
+    fn new_arc(
+        _log: &Arc<Log<'static, <Self::D as Dispatch>::WriteOperation>>,
+    ) -> std::sync::Arc<Self> {
         Arc::new(ConcurrentDs {
             registered: AtomicUsize::new(0),
             data_structure: T::default(),
@@ -105,23 +112,23 @@ where
         Some(self.registered.fetch_add(1, Ordering::SeqCst))
     }
 
-    fn sync_me<F: FnMut(<T as Dispatch>::WriteOperation, usize)>(&self, _d: F) {
+    fn sync_me<F: FnMut(<Self::D as Dispatch>::WriteOperation, usize)>(&self, _d: F) {
         /* NOP */
     }
 
     fn exec(
         &self,
-        _op: <T as Dispatch>::WriteOperation,
+        _op: <Self::D as Dispatch>::WriteOperation,
         _idx: usize,
-    ) -> Result<<T as Dispatch>::Response, <T as Dispatch>::ResponseError> {
+    ) -> Result<<Self::D as Dispatch>::Response, <Self::D as Dispatch>::ResponseError> {
         unreachable!("All opertations must be read ops")
     }
 
     fn exec_ro(
         &self,
-        op: <T as Dispatch>::ReadOperation,
+        op: <Self::D as Dispatch>::ReadOperation,
         _idx: usize,
-    ) -> Result<<T as Dispatch>::Response, <T as Dispatch>::ResponseError> {
+    ) -> Result<<Self::D as Dispatch>::Response, <Self::D as Dispatch>::ResponseError> {
         self.data_structure.dispatch(op)
     }
 }

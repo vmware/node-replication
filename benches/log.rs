@@ -68,7 +68,7 @@ fn log_scale_bench(c: &mut TestHarness) {
         operations.push(Operation::WriteOperation(e));
     }
 
-    mkbench::ScaleBenchBuilder::<Replica<Nop>, Nop>::new(operations)
+    mkbench::ScaleBenchBuilder::<Replica<Nop>>::new(operations)
         .machine_defaults()
         .log_size(LOG_SIZE_BYTES)
         .add_batch(8)
@@ -77,21 +77,9 @@ fn log_scale_bench(c: &mut TestHarness) {
         .configure(
             c,
             "log-append",
-            |_cid,
-             rid,
-             log: &Arc<Log<<Nop as Dispatch>::WriteOperation>>,
-             _replica: &Arc<Replica<Nop>>,
-             op: &utils::Operation<
-                <Nop as Dispatch>::ReadOperation,
-                <Nop as Dispatch>::WriteOperation,
-            >,
-             batch_size| match op {
+            |_cid, rid, log, _replica, op, batch_size| match op {
                 Operation::WriteOperation(o) => {
-                    let _r = log.append(
-                        &vec![*o],
-                        rid,
-                        |_o: <Nop as Dispatch>::WriteOperation, _i: usize| {},
-                    );
+                    let _r = log.append(&vec![*o], rid, |_o, _i| {});
                 }
                 _ => unreachable!(),
             },

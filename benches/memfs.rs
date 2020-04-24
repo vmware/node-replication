@@ -348,12 +348,7 @@ fn memfs_single_threaded(c: &mut TestHarness) {
     const WRITE_RATIO: usize = 10; //% out of 100
 
     let ops = generate_fs_operations(NOP, WRITE_RATIO);
-    mkbench::baseline_comparison::<Replica<NrMemFilesystem>, NrMemFilesystem>(
-        c,
-        "memfs",
-        ops,
-        LOG_SIZE_BYTES,
-    );
+    mkbench::baseline_comparison::<Replica<NrMemFilesystem>>(c, "memfs", ops, LOG_SIZE_BYTES);
 }
 
 /// Compare scale-out behaviour of memfs.
@@ -363,7 +358,7 @@ fn memfs_scale_out(c: &mut TestHarness) {
 
     let ops = generate_fs_operations(NOP, WRITE_RATIO);
 
-    mkbench::ScaleBenchBuilder::<Replica<NrMemFilesystem>, NrMemFilesystem>::new(ops)
+    mkbench::ScaleBenchBuilder::<Replica<NrMemFilesystem>>::new(ops)
         .machine_defaults()
         // The only benchmark that actually seems to slightly
         // regress with 2 MiB logsize, set to 16 MiB
@@ -371,7 +366,7 @@ fn memfs_scale_out(c: &mut TestHarness) {
         .configure(
             c,
             "memfs-scaleout",
-            |_cid, rid, _log, replica: &Arc<Replica<NrMemFilesystem>>, op, _batch_size| match op {
+            |_cid, rid, _log, replica, op, _batch_size| match op {
                 Operation::ReadOperation(o) => {
                     replica.execute_ro(*o, rid).unwrap();
                 }
