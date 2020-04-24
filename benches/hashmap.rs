@@ -197,6 +197,7 @@ fn partitioned_hashmap_scale_out(c: &mut TestHarness, write_ratio: usize) {
         .machine_defaults()
         .update_batch(128)
         .thread_mapping(ThreadMapping::Interleave)
+        .update_replica_strategy(mkbench::ReplicaStrategy::Partition)
         .configure(
             c,
             &bench_name,
