@@ -25,8 +25,8 @@ $ cargo build
 
 As a dependency in your Cargo.toml:
 
-```
-node-replication = "0.0.1"
+```bash
+node-replication = "0.0.7"
 ```
 
 ### Compile benchmark and tests
@@ -44,20 +44,28 @@ system.
 
 #### Install Benchmark/Test dependencies Ubuntu
 
-```
+```bash
 $ apt-get install libhwloc-dev gnuplot pkg-config libfuse-dev liburcu-dev liburcu6 clang r-base r-cran-plyr r-cran-ggplot2
+```
+
+If you are on Ubuntu 19.04 or older you need to get a newer version of URCU:
+
+```bash
+wget http://mirrors.kernel.org/ubuntu/pool/main/libu/liburcu/liburcu6_0.11.1-2_amd64.deb
+wget http://mirrors.kernel.org/ubuntu/pool/main/libu/liburcu/liburcu-dev_0.11.1-2_amd64.deb
+dpkg -i liburcu-dev_0.11.1-2_amd64.deb liburcu6_0.11.1-2_amd64.deb
 ```
 
 #### Install Benchmark/Test dependencies on MacOS
 
-```
+```bash
 $ brew install gnuplot hwloc
 ```
 
 hashbench compares against URCU (user-space RCU). For MacOS the easiest
 way is to install it from the sources:
 
-```
+```bash
 $ git clone git://git.liburcu.org/userspace-rcu.git
 $ userspace-rcu
 $ git checkout v.0.11.0
