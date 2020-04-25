@@ -263,7 +263,6 @@ fn partitioned_hashmap_scale_out(c: &mut TestHarness, name: &str, write_ratio: u
         .thread_defaults()
         .replica_strategy(mkbench::ReplicaStrategy::PerThread)
         .update_batch(128)
-        .thread_mapping(ThreadMapping::Interleave)
         .configure(
             c,
             &bench_name,
@@ -315,7 +314,7 @@ fn main() {
     utils::disable_dvfs();
 
     let mut harness = Default::default();
-    let write_ratios = vec![0, 10, 50, 75, 100];
+    let write_ratios = vec![0, 10, 50, 100];
     unsafe {
         urcu_sys::rcu_init();
     }

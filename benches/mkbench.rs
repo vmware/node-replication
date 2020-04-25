@@ -545,15 +545,24 @@ where
     }
 
     fn alloc_replicas(&mut self, replicas: &mut Vec<Arc<R>>) {
+        let mut handles = Vec::with_capacity(self.rm.len());
         for (rid, cores) in self.rm.clone().into_iter() {
-            let core0 = cores[0];
-
-            // Pinning the thread to the replica' cores forces the memory
-            // allocation to be local to the where a replica will be used later
-            utils::pin_thread(core0);
-
             let log = self.log.clone();
-            replicas.push(ReplicaTrait::new_arc(&log));
+            // Parallelize the creation of the replicas as this can take
+            // quite some time if you run e.g, PerThread or L1 strategies
+            // on big machine
+            handles.push(thread::spawn(move || {
+                let core0 = cores[0];
+                // Pinning the thread to the replica' cores forces the memory
+                // allocation to be local to the where a replica will be used later
+                utils::pin_thread(core0);
+
+                ReplicaTrait::new_arc(&log)
+            }));
+        }
+
+        for handle in handles {
+            replicas.push(handle.join().unwrap());
         }
     }
 
