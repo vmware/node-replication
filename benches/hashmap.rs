@@ -316,7 +316,7 @@ fn main() {
         urcu_sys::rcu_init();
     }
 
-    hashmap_single_threaded(&mut harness);
+    //hashmap_single_threaded(&mut harness);
     for write_ratio in write_ratios.into_iter() {
         hashmap_scale_out::<Replica<NrHashMap>>(&mut harness, "hashmap", write_ratio);
         //partitioned_hashmap_scale_out(&mut harness, "partitioned-hashmap", write_ratio);

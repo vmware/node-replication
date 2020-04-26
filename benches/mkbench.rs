@@ -351,7 +351,7 @@ where
     rm: HashMap<usize, Vec<Cpu>>,
     /// An Arc reference to operations executed on the log.
     operations:
-        Vec<Operation<<R::D as Dispatch>::ReadOperation, <R::D as Dispatch>::WriteOperation>>,
+        Arc<Vec<Operation<<R::D as Dispatch>::ReadOperation, <R::D as Dispatch>::WriteOperation>>>,
     /// An Arc reference to the log.
     log: Arc<Log<'static, <R::D as Dispatch>::WriteOperation>>,
     /// Results of the benchmark we map the #iteration to a list of per-thread results
@@ -378,10 +378,8 @@ where
 
 impl<R: 'static> ScaleBenchmark<R>
 where
-    <R::D as Dispatch>::WriteOperation: Send,
-    <R::D as Dispatch>::WriteOperation: Sync,
-    <R::D as Dispatch>::ReadOperation: Sync,
-    <R::D as Dispatch>::ReadOperation: Send,
+    <R::D as Dispatch>::WriteOperation: Send + Sync + Copy,
+    <R::D as Dispatch>::ReadOperation: Send + Sync + Copy,
     <R::D as Dispatch>::Response: Send,
     <R::D as Dispatch>::ResponseError: Send,
     R::D: 'static + Sync + Dispatch + Default + Send,
@@ -413,7 +411,7 @@ where
             rm: ScaleBenchmark::<R>::replica_core_allocation(topology, rs, tm, ts),
             log,
             results: Default::default(),
-            operations,
+            operations: Arc::new(operations),
             batch_size,
             sync,
             f,
@@ -598,8 +596,6 @@ where
                 let b = barrier.clone();
                 let log: Arc<_> = self.log.clone();
                 let replica = replicas[rid].clone();
-                let mut operations = self.operations.clone();
-                operations.shuffle(&mut rand::thread_rng());
                 let f = self.f.clone();
                 let batch_size = self.batch_size;
                 let replica_token = replica
@@ -615,11 +611,16 @@ where
                 let nre = replicas.len();
                 let rmc = self.rm.clone();
                 let log_period = Duration::from_secs(1);
-
                 let name = self.name.clone();
+                // Clone the Arc<>
+                let operations = self.operations.clone();
 
                 self.handles.push(thread::spawn(move || {
                     utils::pin_thread(core_id);
+                    // Copy the actual Vec<Operations> data within the thread
+                    let mut operations = (*operations).clone();
+                    operations.shuffle(&mut rand::rngs::SmallRng::from_entropy());
+
                     if name.starts_with("urcu") {
                         unsafe {
                             urcu_sys::rcu_register_thread();
@@ -1029,8 +1030,8 @@ where
     pub(crate) fn configure(&self, c: &mut TestHarness, name: &str, f: BenchFn<R>)
     where
         R: ReplicaTrait + Sync + Send,
-        <R::D as Dispatch>::WriteOperation: Send + Sync,
-        <R::D as Dispatch>::ReadOperation: Send + Sync,
+        <R::D as Dispatch>::WriteOperation: Send + Sync + Copy,
+        <R::D as Dispatch>::ReadOperation: Send + Sync + Copy,
         <R::D as Dispatch>::Response: Send + Sync,
         <R::D as Dispatch>::ResponseError: Send + Sync,
         R::D: 'static + Send + Sync,
