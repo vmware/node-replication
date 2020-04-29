@@ -551,18 +551,23 @@ where
             // Parallelize the creation of the replicas as this can take
             // quite some time if you run e.g, PerThread or L1 strategies
             // on big machine
-            handles.push(thread::spawn(move || {
-                let core0 = cores[0];
-                // Pinning the thread to the replica' cores forces the memory
-                // allocation to be local to the where a replica will be used later
-                utils::pin_thread(core0);
+            handles.push(
+                thread::spawn(move || {
+                    let core0 = cores[0];
+                    // Pinning the thread to the replica' cores forces the memory
+                    // allocation to be local to the where a replica will be used later
+                    utils::pin_thread(core0);
 
-                ReplicaTrait::new_arc(&log)
-            }));
+                    (rid, ReplicaTrait::new_arc(&log))
+                })
+                .join()
+                .unwrap(),
+            );
         }
+        handles.sort_by(|a, b| b.0.cmp(&a.0));
 
         for handle in handles {
-            replicas.push(handle.join().unwrap());
+            replicas.push(handle.1);
         }
     }
 
