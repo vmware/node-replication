@@ -25,11 +25,6 @@ use utils::benchmark::*;
 use utils::topology::ThreadMapping;
 use utils::Operation;
 
-extern crate jemallocator;
-
-#[global_allocator]
-static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
-
 /// The initial amount of entries all Hashmaps are initialized with
 pub const INITIAL_CAPACITY: usize = 5_000_000;
 

@@ -21,11 +21,6 @@ use node_replication::Dispatch;
 use utils::benchmark::*;
 use utils::Operation;
 
-extern crate jemallocator;
-
-#[global_allocator]
-static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
-
 /// All FS operations we can perform through the log.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum OperationWr {

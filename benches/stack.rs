@@ -17,11 +17,6 @@ mod utils;
 use utils::benchmark::*;
 use utils::Operation;
 
-extern crate jemallocator;
-
-#[global_allocator]
-static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
-
 /// Operations we can perform on the stack.
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
 pub enum OpWr {

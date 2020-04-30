@@ -8,11 +8,6 @@ use node_replication::log::Log;
 use node_replication::replica::Replica;
 use node_replication::Dispatch;
 
-extern crate jemallocator;
-
-#[global_allocator]
-static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
-
 /// We support push and pop operations on the stack.
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
 enum OpWr {

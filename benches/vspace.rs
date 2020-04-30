@@ -22,11 +22,6 @@ mod utils;
 use utils::benchmark::*;
 use utils::Operation;
 
-extern crate jemallocator;
-
-#[global_allocator]
-static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
-
 fn kernel_vaddr_to_paddr(v: VAddr) -> PAddr {
     let vaddr_val: usize = v.into();
     PAddr::from(vaddr_val as u64 - 0x0)

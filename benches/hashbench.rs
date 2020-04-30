@@ -25,11 +25,6 @@ use urcu_sys;
 
 mod utils;
 
-extern crate jemallocator;
-
-#[global_allocator]
-static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
-
 fn main() {
     let args = std::env::args().filter(|e| e != "--bench");
     let matches = App::new("Concurrent HashMap Benchmarker")
