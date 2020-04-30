@@ -564,7 +564,9 @@ where
                 .unwrap(),
             );
         }
-        handles.sort_by(|a, b| b.0.cmp(&a.0));
+        // Sort replicas in ascending order; (0,1,2,..). And this way, mappings won't be affect by
+        // how (rid,cores) are stored in self.rm as rid and index in replica-vector will be same.
+        handles.sort_by(|a, b| a.0.cmp(&b.0));
 
         for handle in handles {
             replicas.push(handle.1);
