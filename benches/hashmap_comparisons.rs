@@ -316,6 +316,39 @@ impl Default for RcuHashMap {
     }
 }
 
+impl Drop for RcuHashMap {
+    fn drop(&mut self) {
+        // Welcome to C land:
+        unsafe {
+            // Deallocate all entries in HT
+            urcu_sys::rcu_read_lock();
+            for key in 0..crate::KEY_SPACE {
+                let mut iter: urcu_sys::cds_lfht_iter =
+                    mem::MaybeUninit::zeroed().assume_init();
+                urcu_sys::cds_lfht_lookup(
+                    self.test_ht,
+                    key as u64,
+                    Some(test_match),
+                    key as u64 as *const c_void,
+                    &mut iter as *mut urcu_sys::cds_lfht_iter,
+                );
+                let found_node: *mut urcu_sys::cds_lfht_node =
+                    urcu_sys::cds_lfht_iter_get_node(&mut iter);
+
+                if found_node != ptr::null_mut() {
+                    let r = urcu_sys::cds_lfht_del(self.test_ht, found_node);
+                    std::alloc::dealloc(found_node as *mut u8, std::alloc::Layout::new::<lfht_test_node>());
+                    assert_eq!(r, 0);
+                };
+            }
+            urcu_sys::rcu_read_unlock();
+            // Deallocate the HT itself
+            let r = urcu_sys::cds_lfht_destroy(self.test_ht, ptr::null_mut());
+            assert_eq!(r, 0);
+        }
+    }
+}
+
 #[repr(C)]
 struct lfht_test_node {
     node: urcu_sys::cds_lfht_node,
