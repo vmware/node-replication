@@ -323,8 +323,7 @@ impl Drop for RcuHashMap {
             // Deallocate all entries in HT
             urcu_sys::rcu_read_lock();
             for key in 0..crate::KEY_SPACE {
-                let mut iter: urcu_sys::cds_lfht_iter =
-                    mem::MaybeUninit::zeroed().assume_init();
+                let mut iter: urcu_sys::cds_lfht_iter = mem::MaybeUninit::zeroed().assume_init();
                 urcu_sys::cds_lfht_lookup(
                     self.test_ht,
                     key as u64,
@@ -337,7 +336,10 @@ impl Drop for RcuHashMap {
 
                 if found_node != ptr::null_mut() {
                     let r = urcu_sys::cds_lfht_del(self.test_ht, found_node);
-                    std::alloc::dealloc(found_node as *mut u8, std::alloc::Layout::new::<lfht_test_node>());
+                    std::alloc::dealloc(
+                        found_node as *mut u8,
+                        std::alloc::Layout::new::<lfht_test_node>(),
+                    );
                     assert_eq!(r, 0);
                 };
             }
