@@ -296,16 +296,22 @@ unsafe impl Send for RcuHashMap {}
 impl Default for RcuHashMap {
     fn default() -> Self {
         unsafe {
-            // Not quite using 5M entries since cds_lfht needs power-of-twos
             let test_ht: *mut urcu_sys::cds_lfht = urcu_sys::cds_lfht_new(
-                1 << 22, // initial hash-buckes  2^22
-                1 << 22, // minimal hash-buckets 2^22
-                1 << 24, // maximum hash-buckets 2^23
+                crate::INITIAL_CAPACITY as u64, // initial hash-buckes
+                crate::INITIAL_CAPACITY as u64, // minimal hash-buckets
+                crate::INITIAL_CAPACITY as u64, // maximum hash-buckets
                 urcu_sys::CDS_LFHT_AUTO_RESIZE as i32,
                 ptr::null_mut(),
             );
+
             assert_ne!(test_ht, ptr::null_mut());
-            RcuHashMap { test_ht }
+            let ht = RcuHashMap { test_ht };
+            for i in 0..crate::INITIAL_CAPACITY {
+                ht.dispatch(OpConcurrent::Put(i as u64, (i + 1) as u64))
+                    .expect("Can't fill RCU map");
+            }
+
+            ht
         }
     }
 }

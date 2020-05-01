@@ -40,6 +40,8 @@ mv baseline_comparison.csv ${SCALEBENCH_DEPLOY}
 mv scaleout_benchmarks.csv ${SCALEBENCH_DEPLOY}
 mv per_thread_times.* ${SCALEBENCH_DEPLOY}
 mv throughput-*-*.* ${SCALEBENCH_DEPLOY}
+gzip ${SCALEBENCH_DEPLOY}/baseline_comparison.csv
+gzip ${SCALEBENCH_DEPLOY}/scaleout_benchmarks.csv
 
 # Copy hashbench results
 HASHBENCH_DEPLOY="gh-pages/hashbench/${CI_MACHINE_TYPE}/${GIT_REV_CURRENT}"

@@ -26,16 +26,16 @@ use utils::topology::ThreadMapping;
 use utils::Operation;
 
 /// The initial amount of entries all Hashmaps are initialized with
-pub const INITIAL_CAPACITY: usize = 5_000_000;
+pub const INITIAL_CAPACITY: usize = 1 << 26; // ~ 67M
 
 // Biggest key in the hash-map
-pub const KEY_SPACE: usize = 5_000_000;
+pub const KEY_SPACE: usize = 50_000_000;
 
 // Key distribution for all hash-maps [uniform|skewed]
 pub const UNIFORM: &'static str = "uniform";
 
 // Number of operation for test-harness.
-pub const NOP: usize = 515_000;
+pub const NOP: usize = 50_000_000;
 
 /// Operations we can perform on the stack.
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
@@ -232,8 +232,10 @@ where
     let bench_name = format!("{}-scaleout-wr{}", name, write_ratio);
 
     mkbench::ScaleBenchBuilder::<R>::new(ops)
-        .machine_defaults()
+        .thread_defaults()
         .update_batch(128)
+        .replica_strategy(mkbench::ReplicaStrategy::One)
+        .replica_strategy(mkbench::ReplicaStrategy::Socket)
         .thread_mapping(ThreadMapping::Interleave)
         .configure(
             c,
@@ -257,6 +259,7 @@ fn partitioned_hashmap_scale_out(c: &mut TestHarness, name: &str, write_ratio: u
     mkbench::ScaleBenchBuilder::<Partitioner<NrHashMap>>::new(ops)
         .thread_defaults()
         .replica_strategy(mkbench::ReplicaStrategy::PerThread)
+        .thread_mapping(ThreadMapping::Interleave)
         .update_batch(128)
         .configure(
             c,
@@ -289,7 +292,6 @@ where
         .replica_strategy(mkbench::ReplicaStrategy::One) // Can only be One
         .update_batch(128)
         .thread_mapping(ThreadMapping::Interleave)
-        .thread_mapping(ThreadMapping::Sequential)
         .configure(
             c,
             &bench_name,
@@ -309,7 +311,7 @@ fn main() {
     utils::disable_dvfs();
 
     let mut harness = Default::default();
-    let write_ratios = vec![0, 10, 50, 100];
+    let write_ratios = vec![0, 10, 20, 40, 60, 80, 100];
     unsafe {
         urcu_sys::rcu_init();
     }
