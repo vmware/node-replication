@@ -35,7 +35,7 @@ pub const KEY_SPACE: usize = 50_000_000;
 pub const UNIFORM: &'static str = "uniform";
 
 // Number of operation for test-harness.
-pub const NOP: usize = 50_000_000;
+pub const NOP: usize = 25_000_000;
 
 /// Operations we can perform on the stack.
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
@@ -311,19 +311,19 @@ fn main() {
     utils::disable_dvfs();
 
     let mut harness = Default::default();
-    let write_ratios = vec![0, 10, 20, 40, 60, 80, 100];
+    let write_ratios = vec![10];
     unsafe {
         urcu_sys::rcu_init();
     }
 
     //hashmap_single_threaded(&mut harness);
     for write_ratio in write_ratios.into_iter() {
-        hashmap_scale_out::<Replica<NrHashMap>>(&mut harness, "hashmap", write_ratio);
+        //hashmap_scale_out::<Replica<NrHashMap>>(&mut harness, "hashmap", write_ratio);
         //partitioned_hashmap_scale_out(&mut harness, "partitioned-hashmap", write_ratio);
-        concurrent_ds_scale_out::<CHashMapWrapper>(&mut harness, "chashmap", write_ratio);
-        concurrent_ds_scale_out::<StdWrapper>(&mut harness, "std", write_ratio);
-        concurrent_ds_scale_out::<FlurryWrapper>(&mut harness, "flurry", write_ratio);
+        //concurrent_ds_scale_out::<CHashMapWrapper>(&mut harness, "chashmap", write_ratio);
+        //concurrent_ds_scale_out::<StdWrapper>(&mut harness, "std", write_ratio);
+        //concurrent_ds_scale_out::<FlurryWrapper>(&mut harness, "flurry", write_ratio);
         concurrent_ds_scale_out::<RcuHashMap>(&mut harness, "urcu", write_ratio);
-        concurrent_ds_scale_out::<DashWrapper>(&mut harness, "dashmap", write_ratio);
+        //concurrent_ds_scale_out::<DashWrapper>(&mut harness, "dashmap", write_ratio);
     }
 }

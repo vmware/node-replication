@@ -306,7 +306,7 @@ impl Default for RcuHashMap {
 
             assert_ne!(test_ht, ptr::null_mut());
             let ht = RcuHashMap { test_ht };
-            for i in 0..crate::INITIAL_CAPACITY {
+            for i in 0..crate::KEY_SPACE {
                 ht.dispatch(OpConcurrent::Put(i as u64, (i + 1) as u64))
                     .expect("Can't fill RCU map");
             }
