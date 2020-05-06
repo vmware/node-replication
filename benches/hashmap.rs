@@ -26,15 +26,24 @@ use utils::topology::ThreadMapping;
 use utils::Operation;
 
 /// The initial amount of entries all Hashmaps are initialized with
+#[cfg(feature = "smokebench")]
+pub const INITIAL_CAPACITY: usize = 1 << 22; // ~ 4M
+#[cfg(not(feature = "smokebench"))]
 pub const INITIAL_CAPACITY: usize = 1 << 26; // ~ 67M
 
 // Biggest key in the hash-map
+#[cfg(feature = "smokebench")]
+pub const KEY_SPACE: usize = 5_000_000;
+#[cfg(not(feature = "smokebench"))]
 pub const KEY_SPACE: usize = 50_000_000;
 
 // Key distribution for all hash-maps [uniform|skewed]
 pub const UNIFORM: &'static str = "uniform";
 
 // Number of operation for test-harness.
+#[cfg(feature = "smokebench")]
+pub const NOP: usize = 2_500_000;
+#[cfg(not(feature = "smokebench"))]
 pub const NOP: usize = 25_000_000;
 
 /// Operations we can perform on the stack.
@@ -308,10 +317,15 @@ where
 
 fn main() {
     let _r = env_logger::try_init();
+    if cfg!(feature = "smokebench") {
+        log::warn!("Running with feature 'smokebench' may not get the desired results");
+    }
+
     utils::disable_dvfs();
 
     let mut harness = Default::default();
     let write_ratios = vec![0, 10, 20, 40, 60, 80, 100];
+
     unsafe {
         urcu_sys::rcu_init();
     }

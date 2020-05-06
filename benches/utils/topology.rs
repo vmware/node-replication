@@ -183,8 +183,23 @@ impl MachineTopology {
         match strategy {
             ThreadMapping::None => v,
             ThreadMapping::Interleave => {
-                cpus.sort_by_key(|c| c.cpu);
-                let c = cpus.iter().take(how_many).map(|c| *c).collect();
+                let mut ht1 = cpus.clone();
+                // Get cores first, remove HT
+                ht1.sort_by_key(|c| c.core);
+                ht1.dedup_by(|a, b| a.core == b.core);
+
+                // Add the HTs removed by dedup at the end
+                let mut ht2 = vec![];
+                for cpu in cpus {
+                    if !ht1.contains(&cpu) {
+                        ht2.push(cpu);
+                    }
+                }
+                ht2.sort_by_key(|c| c.core);
+                ht1.extend(ht2);
+
+                //cpus.dedup_by(|a, b| a.core == b.core);
+                let c = ht1.iter().take(how_many).map(|c| *c).collect();
                 c
             }
             ThreadMapping::Sequential => {

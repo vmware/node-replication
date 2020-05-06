@@ -77,3 +77,6 @@ clap = { version = "2", features = ["yaml"] }
 rand = { version = "0.7", features = ["small_rng"] }
 dashmap = "3.11.1"
 lazy_static = "1.4"
+
+[features]
+smokebench = []
