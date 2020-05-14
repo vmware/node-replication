@@ -373,7 +373,7 @@ where
             // from the beginning of this loop.
             if self
                 .tail
-                .compare_and_swap(tail, tail + nops, Ordering::SeqCst)
+                .compare_and_swap(tail, tail + nops, Ordering::Acquire)
                 != tail
             {
                 continue;

@@ -487,7 +487,7 @@ where
         // then try to acquire the combiner lock. If there is, then just return.
         for _i in 0..4 {
             if unsafe {
-                *(&self.combiner
+                core::ptr::read_volatile(&self.combiner
                     as *const crossbeam_utils::CachePadded<core::sync::atomic::AtomicUsize>
                     as *const usize)
             } != 0
