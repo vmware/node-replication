@@ -142,15 +142,17 @@ where
         loop {
             // First, wait until the write lock is free. This is the small
             // optimization spoken of earlier.
-            while *ptr {
+            unsafe{
+              while core::ptr::read_volatile(ptr) {
                 spin_loop_hint();
+              }
             }
 
             // Next, acquire this thread's read lock and actually check if the write lock
             // is free. If it is, then we're good to go because any new writers will now
             // see this acquired read lock and block. If it isn't free, then we got unlucky;
             // release the read lock and retry.
-            self.rlock[tid].fetch_add(1, Ordering::SeqCst);
+            self.rlock[tid].fetch_add(1, Ordering::Acquire);
             if !self.wlock.load(Ordering::Relaxed) {
                 break;
             }
@@ -163,9 +165,10 @@ where
 
     /// Unlocks the write lock; invoked by the drop() method.
     pub(in crate::rwlock) unsafe fn write_unlock(&self) {
-        if !self.wlock.compare_and_swap(true, false, Ordering::Acquire) {
+        if !self.wlock.load(Ordering::Relaxed) {
             panic!("write_unlock() called without acquiring the write lock");
         }
+        self.wlock.store(false, Ordering::Release); 
     }
 
     /// Unlocks the read lock; called by the drop() method.
