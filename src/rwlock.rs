@@ -142,10 +142,10 @@ where
         loop {
             // First, wait until the write lock is free. This is the small
             // optimization spoken of earlier.
-            unsafe{
-              while core::ptr::read_volatile(ptr) {
-                spin_loop_hint();
-              }
+            unsafe {
+                while core::ptr::read_volatile(ptr) {
+                    spin_loop_hint();
+                }
             }
 
             // Next, acquire this thread's read lock and actually check if the write lock
@@ -168,7 +168,7 @@ where
         if !self.wlock.load(Ordering::Relaxed) {
             panic!("write_unlock() called without acquiring the write lock");
         }
-        self.wlock.store(false, Ordering::Release); 
+        self.wlock.store(false, Ordering::Release);
     }
 
     /// Unlocks the read lock; called by the drop() method.
