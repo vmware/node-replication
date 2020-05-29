@@ -84,8 +84,14 @@ As an example, the following benchmark uses Rust's single-threaded hash table
 from `std` with node-replication and compares it against concurrent hash table
 implementations from crates.io.
 
-![Throughput of node-replication](/benches/graphs/skylake4x-throughput-vs-cores.png?raw=true "Throughput with increasing cores")
-![Write ratios with max-cores](/benches/graphs/skylake4x-throughput-vs-wr.png?raw=true "Different write ratios with 196 threads")
+<p float="left">
+<a href="/benches/graphs/skylake4x-throughput-vs-cores.png?raw=true">
+    <img src="/benches/graphs/skylake4x-throughput-vs-cores.png?raw=true" alt="Throughput of node-replicated HT" width="40%"/>
+</a>
+<a href="/benches/graphs/skylake4x-throughput-vs-cores.png?raw=true">
+    <img src="/benches/graphs/skylake4x-throughput-vs-wr.png?raw=true" alt="Different write ratios with 196 threads" width="50%"/>
+</a>
+</p>
 
 The figures show a benchmark using hash tables pre-filled with 67M entires (8
 byte keys and values) and uses a uniform key distribution for operations. On the
