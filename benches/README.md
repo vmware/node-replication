@@ -48,7 +48,7 @@ The `memfs` benchmarks depends on btfs which uses FUSE. The easiest way to
 install FUSE for MacOS is through downloading the packages on
 [osxfuse](https://osxfuse.github.io/).
 
-## Log append [[benchmark](benches/log.rs)]
+## Log append [[benchmark](log.rs)]
 
 A benchmark that evaluates the append performance (in terms of throughput ops/s)
 of the log by varying the batch size and the amount of threads contending on the
@@ -58,7 +58,7 @@ log. This gives you the maximum of operations that are theoretically possible
 To run these benchmarks execute:
 `RUST_TEST_THREADS=1 cargo bench --bench log`
 
-## Stack [[benchmark](benches/stack.rs)]
+## Stack [[benchmark](stack.rs)]
 
 One benchmark that evaluates the COST (overhead of added synchronization) by
 comparing a node-replicated stack against a single-threaded stack (without a
@@ -68,7 +68,7 @@ running with increasing amounts of threads.
 To run these benchmarks execute:
 `RUST_TEST_THREADS=1 cargo bench --bench stack`
 
-## Hash-map [[benchmark](benches/hashmap.rs)]
+## Hash-map [[benchmark](hashmap.rs)]
 
 A benchmark that evaluates the COST (overhead of added synchronization) by
 comparing a node-replicated hash-map against a single-threaded hash-map (without
@@ -78,7 +78,7 @@ by running with increasing amounts of threads.
 To run these benchmarks execute:
 `RUST_TEST_THREADS=1 cargo bench --bench hashmap`
 
-## Synthetic data-structure [[benchmark](benches/synthetic.rs)]
+## Synthetic data-structure [[benchmark](synthetic.rs)]
 
 A benchmark to evaluates the performance of the NR library by using a
 configurable cache-model and access-pattern for an abstract data-structure that
@@ -91,7 +91,7 @@ data-structure. All benchmarks report throughput in ops/s.
 To run these benchmarks execute:
 `RUST_TEST_THREADS=1 cargo bench --bench synthetic`
 
-## VSpace [[benchmark](benches/vspace.rs)]
+## VSpace [[benchmark](vspace.rs)]
 
 A benchmark to evaluate the performance of the NR library for address-space
 replication (using an x86-64 4-level address space layout).
@@ -99,7 +99,7 @@ replication (using an x86-64 4-level address space layout).
 To run these benchmarks execute:
 `RUST_TEST_THREADS=1 cargo bench --bench vspace`
 
-## MemFS [[benchmark](benches/memfs.rs)]
+## MemFS [[benchmark](memfs.rs)]
 
 A benchmark to evaluate the performance of the NR library for file-system like
 operations, by using a very simple in-memory file-system
@@ -108,7 +108,7 @@ operations, by using a very simple in-memory file-system
 To run these benchmarks execute:
 `RUST_TEST_THREADS=1 cargo bench --bench memfs`
 
-## Hashbench [[benchmark](benches/hashbench.rs)]
+## Hashbench [[benchmark](hashbench.rs)]
 
 A benchmark to compare various concurrent Hashtables (originally
 from [evmap](https://github.com/jonhoo/rust-evmap)).
@@ -116,7 +116,7 @@ from [evmap](https://github.com/jonhoo/rust-evmap)).
 Use `RUST_TEST_THREADS=1 cargo bench --bench hashbench -- --help` to see an
 overview of supported configuration or check the `hashbench_run.sh` script.
 
-## RWLock bench [[benchmark](benches/rwlockbench.rs)]
+## RWLock bench [[benchmark](rwlockbench.rs)]
 
 A benchmark to measure the performance of the readers-writer lock
 implementation.
