@@ -12,7 +12,7 @@ two techniques: operation logging and flat combining.
 
 To replicate a single-threaded data structure, one needs to implement `Dispatch`
 (from node-replication). The full example (using `Vec` as the underlying
-data-structure) can be found here: [[src](examples/stack.rs)]. To run, execute:
+data-structure) can be found [here](examples/stack.rs). To run, execute:
 `cargo run --example stack`
 
 ```rust
@@ -81,8 +81,8 @@ It works especially well if
   memory foot-print is multiplied with the amount of NUMA nodes in the system).
 
 As an example, the following benchmark uses Rust's single-threaded hash table
-from `std` with node-replication and compares it against concurrent hash table
-implementations from crates.io.
+from `std` with node-replication (`nr`) and compares it against concurrent hash table
+implementations from crates.io and [urcu](https://liburcu.org/).
 
 <table>
   <tr>
@@ -97,7 +97,7 @@ implementations from crates.io.
 The figures show a benchmark using hash tables pre-filled with 67M entires (8
 byte keys and values) and uses a uniform key distribution for operations. On the
 first graph, the write ratios 0%, 10% and 80% are shown, and the second graph
-shows different write ratios (x-axis) with 196 threads. The system has 4 NUMA
+shows different write ratios (x-axis) with 192 threads. The system has 4 NUMA
 nodes, so it uses 4 replicas (at `x=96`, a replica gets added every 24 cores).
 After `x=96` hyper-threads are used.
 
@@ -126,7 +126,7 @@ platforms (other platforms will require some changes and are untested).
 ## Testing
 
 There are a series of unit tests as part of the implementation and a few
-[integration tests](./tests) that verify the correctness of the implementation
+[integration tests](./tests) that check various aspects of the implementation
 using a stack.
 
 You can run the tests by executing: `cargo test`
@@ -134,4 +134,4 @@ You can run the tests by executing: `cargo test`
 ## Benchmarks
 
 The benchmarks (and how to execute them) are explained in more detail in the
-[[benches](benches/README.md)] folder.
+[benches](benches/README.md) folder.
