@@ -1053,6 +1053,36 @@ mod tests {
         assert_eq!(Arc::strong_count(&o2[0]), 3);
     }
 
+    // Tests that operations are cloned when added to the log, and that
+    // they are correctly dropped once overwritten after the GC.
+    #[test]
+    fn test_log_refcount_change_with_gc() {
+        let entry_size = 64;
+        let total_entries = 16384;
+
+        assert_eq!(Log::<Arc<Operation>>::entry_size(), entry_size);
+        let size: usize = total_entries * entry_size;
+        let l = Log::<Arc<Operation>>::new(size);
+        let o1 = [Arc::new(Operation::Read)];
+        let o2 = [Arc::new(Operation::Read)];
+        assert_eq!(Arc::strong_count(&o1[0]), 1);
+        assert_eq!(Arc::strong_count(&o2[0]), 1);
+
+        for i in 1..(total_entries + 1) {
+            l.append(&o1[..], 1, |_o: Arc<Operation>, _i: usize| {});
+            assert_eq!(Arc::strong_count(&o1[0]), i + 1);
+        }
+        assert_eq!(Arc::strong_count(&o1[0]), total_entries + 1);
+
+        for i in 1..(total_entries + 1) {
+            l.append(&o2[..], 1, |_o: Arc<Operation>, _i: usize| {});
+            assert_eq!(Arc::strong_count(&o1[0]), (total_entries + 1) - i);
+            assert_eq!(Arc::strong_count(&o2[0]), i + 1);
+        }
+        assert_eq!(Arc::strong_count(&o1[0]), 1);
+        assert_eq!(Arc::strong_count(&o2[0]), total_entries + 1);
+    }
+
     // Tests that is_replica_synced_for_read() works correctly; it returns
     // false when a replica is not synced up and true when it is.
     #[test]
