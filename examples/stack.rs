@@ -1,39 +1,37 @@
-// Copyright © 2019 VMware, Inc. All Rights Reserved.
+// Copyright © VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! A minimal example to implement a replicated stack (single-thread).
+//! A minimal example that implements a replicated stack
 use std::sync::Arc;
 
 use node_replication::log::Log;
 use node_replication::replica::Replica;
 use node_replication::Dispatch;
 
-/// We support push and pop operations on the stack.
-#[derive(Debug, Eq, PartialEq, Clone, Copy)]
-enum OpWr {
+/// We support mutable push and pop operations on the stack.
+#[derive(Debug, PartialEq, Clone)]
+enum Modify {
     Push(u32),
     Pop,
 }
 
-/// The actual stack, it's represented by a vector underneath.
+/// We support an immutable read operation to peek the stack.
+#[derive(Debug, Clone, PartialEq)]
+enum Access {
+    Peek,
+}
+
+/// The actual stack, it uses a single-threaded Vec.
 struct Stack {
     storage: Vec<u32>,
 }
 
-impl Stack {
-    /// Push adds an element from the underlying storage.
-    pub fn push(&mut self, data: u32) {
-        self.storage.push(data);
-    }
-
-    /// Pop removes an element from the underlying storage.
-    pub fn pop(&mut self) -> Option<u32> {
-        self.storage.pop()
-    }
-}
-
-/// The stack needs a Default implementation, here we add some initial elements.
 impl Default for Stack {
+    /// The stack Default implementation, as it is
+    /// executed for every Replica.
+    ///
+    /// This should be deterministic as it is used to create multiple instances
+    /// of a Stack for every replica.
     fn default() -> Stack {
         const DEFAULT_STACK_SIZE: u32 = 1_000u32;
 
@@ -42,51 +40,85 @@ impl Default for Stack {
         };
 
         for e in 0..DEFAULT_STACK_SIZE {
-            s.push(e);
+            s.storage.push(e);
         }
 
         s
     }
 }
 
+/// The Dispatch traits executes `ReadOperation` (our Access enum)
+/// and `WriteOperation` (our `Modify` enum) against the replicated
+/// data-structure.
 impl Dispatch for Stack {
-    type ReadOperation = ();
-    type WriteOperation = OpWr;
-    type Response = Option<u32>;
-    type ResponseError = Option<()>;
+    type ReadOperation = Access;
+    type WriteOperation = Modify;
+    type Response = u32;
+    type ResponseError = ();
 
-    fn dispatch(&self, _op: Self::ReadOperation) -> Result<Self::Response, Self::ResponseError> {
-        Err(None)
+    /// The `dispatch` function applies the immutable operations.
+    fn dispatch(&self, op: Self::ReadOperation) -> Result<Self::Response, Self::ResponseError> {
+        match op {
+            Access::Peek => self.storage.last().cloned().ok_or(()),
+        }
     }
-    /// The dispatch traint defines how operations coming from the log
-    /// are execute against our local stack within a replica.
+
+    /// The `dispatch_mut` function applies the mutable operations.
     fn dispatch_mut(
         &mut self,
         op: Self::WriteOperation,
     ) -> Result<Self::Response, Self::ResponseError> {
         match op {
-            OpWr::Push(v) => {
-                self.push(v);
-                return Ok(None);
+            Modify::Push(v) => {
+                self.storage.push(v);
+                return Ok(v);
             }
-            OpWr::Pop => return Ok(self.pop()),
+            Modify::Pop => return self.storage.pop().ok_or(()),
         }
     }
 }
 
-/// We initialize a log, a replica for a stack, register with the reploca and
-/// then execute operations on the replica.
+/// We initialize a log, and two replicas for a stack, register with the replica
+/// and then execute operations.
 fn main() {
-    const ONE_MIB: usize = 1 * 1024 * 1024;
-    let log = Arc::new(Log::<<Stack as Dispatch>::WriteOperation>::new(ONE_MIB));
-    let replica = Replica::<Stack>::new(&log);
-    let ridx = replica.register().expect("Couldn't register with replica");
+    // The operation log for storing `WriteOperation`, it has a size of 2 MiB:
+    let log = Arc::new(Log::<<Stack as Dispatch>::WriteOperation>::new(
+        2 * 1024 * 1024,
+    ));
 
-    for i in 0..1024 {
-        match i % 2 {
-            0 => replica.execute(OpWr::Push(i as u32), ridx).unwrap(),
-            1 => replica.execute(OpWr::Pop, ridx).unwrap(),
-            _ => unreachable!(),
-        };
-    }
+    // Next, we create two replicas of the stack
+    let replica1 = Replica::<Stack>::new(&log);
+    let replica2 = Replica::<Stack>::new(&log);
+
+    // The replica executes a Modify or Access operations by calling
+    // `execute` and `execute_ro`. Eventually they end up in the `Dispatch` trait.
+    let thread_loop = |replica: &Arc<Replica<Stack>>, ridx| {
+        for i in 0..2048 {
+            let _r = match i % 3 {
+                0 => replica.execute(Modify::Push(i as u32), ridx),
+                1 => replica.execute(Modify::Pop, ridx),
+                2 => replica.execute_ro(Access::Peek, ridx),
+                _ => unreachable!(),
+            };
+        }
+    };
+
+    // Finally, we spawn three threads that issue operations, thread 1 and 2
+    // will use replica1 and thread 3 will use replica 2:
+    let replica11 = replica1.clone();
+    std::thread::spawn(move || {
+        let ridx = replica11.register().expect("Unable to register with log");
+        thread_loop(&replica11, ridx);
+    });
+
+    let replica12 = replica1.clone();
+    std::thread::spawn(move || {
+        let ridx = replica12.register().expect("Unable to register with log");
+        thread_loop(&replica12, ridx);
+    });
+
+    std::thread::spawn(move || {
+        let ridx = replica2.register().expect("Unable to register with log");
+        thread_loop(&replica2, ridx);
+    });
 }
