@@ -165,10 +165,9 @@ where
 
     /// Unlocks the write lock; invoked by the drop() method.
     pub(in crate::rwlock) unsafe fn write_unlock(&self) {
-        if !self.wlock.load(Ordering::Relaxed) {
+        if !self.wlock.compare_and_swap(true, false, Ordering::Acquire) {
             panic!("write_unlock() called without acquiring the write lock");
         }
-        self.wlock.store(false, Ordering::Release);
     }
 
     /// Unlocks the read lock; called by the drop() method.
