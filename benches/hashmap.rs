@@ -334,13 +334,11 @@ fn main() {
     hashmap_single_threaded(&mut harness);
     for write_ratio in write_ratios.into_iter() {
         hashmap_scale_out::<Replica<NrHashMap>>(&mut harness, "hashmap", write_ratio);
-        /*
         //partitioned_hashmap_scale_out(&mut harness, "partitioned-hashmap", write_ratio);
         concurrent_ds_scale_out::<CHashMapWrapper>(&mut harness, "chashmap", write_ratio);
         concurrent_ds_scale_out::<StdWrapper>(&mut harness, "std", write_ratio);
         concurrent_ds_scale_out::<FlurryWrapper>(&mut harness, "flurry", write_ratio);
         concurrent_ds_scale_out::<RcuHashMap>(&mut harness, "urcu", write_ratio);
         concurrent_ds_scale_out::<DashWrapper>(&mut harness, "dashmap", write_ratio);
-        */
     }
 }
