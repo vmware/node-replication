@@ -1,4 +1,4 @@
-// Copyright © 2019 VMware, Inc. All Rights Reserved.
+// Copyright © VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Defines a stack data-structure that can be replicated.
@@ -7,8 +7,8 @@
 
 use std::cell::RefCell;
 
-use node_replication::replica::Replica;
 use node_replication::Dispatch;
+use node_replication::Replica;
 use rand::{thread_rng, Rng};
 
 mod mkbench;
@@ -128,7 +128,7 @@ fn stack_scale_out(c: &mut TestHarness) {
             "stack-scaleout",
             |_cid, rid, _log, replica, op, _batch_size| {
                 match op {
-                    Operation::WriteOperation(op) => replica.execute(*op, rid).unwrap(),
+                    Operation::WriteOperation(op) => replica.execute_mut(*op, rid).unwrap(),
                     Operation::ReadOperation(op) => unreachable!(),
                     _ => unreachable!(),
                 };

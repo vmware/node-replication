@@ -1,4 +1,4 @@
-// Copyright © 2019 VMware, Inc. All Rights Reserved.
+// Copyright © VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use core::cell::RefCell;
@@ -27,16 +27,17 @@ const_assert!(
     MAX_THREADS_PER_REPLICA >= 1 && (MAX_THREADS_PER_REPLICA & (MAX_THREADS_PER_REPLICA - 1) == 0)
 );
 
-/// An instance of a replicated data structure. Uses a shared log to scale operations on
-/// the data structure across cores and processors.
+/// An instance of a replicated data structure. Uses a shared log to scale
+/// operations on the data structure across cores and processors.
 ///
-/// Takes in one type argument: `D` represents the replicated data structure against which
-/// said operations will be run. `D` must implement the `Dispatch` trait.
+/// Takes in one type argument: `D` represents the underlying sequential data
+/// structure `D` must implement the `Dispatch` trait.
 ///
-/// A thread can be registered against the replica by calling `register()`. An operation can
-/// be issued by calling `execute()`. This operation will be eventually executed against the
-/// replica along with those that were received on other replicas that share the same
-/// underlying log.
+/// A thread can be registered against the replica by calling `register()`. A
+/// mutable operation can be issued by calling `execute_mut()` (immutable uses
+/// `execute`). A mutable operation will be eventually executed against the replica
+/// along with any operations that were received on other replicas that share
+/// the same underlying log.
 pub struct Replica<'a, D>
 where
     D: Sized + Default + Dispatch + Sync,
@@ -107,19 +108,17 @@ where
 {
     /// Constructs an instance of a replicated data structure.
     ///
-    /// Takes in a reference to the shared log as an argument. The Log is assumed to
+    /// Takes a reference to the shared log as an argument. The Log is assumed to
     /// outlive the replica. The replica is bound to the log's lifetime.
     ///
     /// # Example
     ///
     /// ```
-    /// extern crate alloc;
-    ///
     /// use node_replication::Dispatch;
-    /// use node_replication::log::Log;
-    /// use node_replication::replica::Replica;
+    /// use node_replication::Log;
+    /// use node_replication::Replica;
     ///
-    /// use alloc::sync::Arc;
+    /// use std::sync::Arc;
     ///
     /// // The data structure we want replicated.
     /// #[derive(Default)]
@@ -210,13 +209,11 @@ where
     /// # Example
     ///
     /// ```
-    /// extern crate alloc;
-    ///
     /// use node_replication::Dispatch;
-    /// use node_replication::log::Log;
-    /// use node_replication::replica::Replica;
+    /// use node_replication::Log;
+    /// use node_replication::Replica;
     ///
-    /// use alloc::sync::Arc;
+    /// use std::sync::Arc;
     ///
     /// #[derive(Default)]
     /// struct Data {
@@ -275,13 +272,11 @@ where
     /// # Example
     ///
     /// ```
-    /// extern crate alloc;
-    ///
     /// use node_replication::Dispatch;
-    /// use node_replication::log::Log;
-    /// use node_replication::replica::Replica;
+    /// use node_replication::Log;
+    /// use node_replication::Replica;
     ///
-    /// use alloc::sync::Arc;
+    /// use std::sync::Arc;
     ///
     /// #[derive(Default)]
     /// struct Data {
@@ -314,10 +309,10 @@ where
     /// let replica = Replica::<Data>::new(&log);
     /// let idx = replica.register().expect("Failed to register with replica.");
     ///
-    /// // execute() can be used to write to the replicated data structure.
-    /// let res = replica.execute(100, idx);
+    /// // execute_mut() can be used to write to the replicated data structure.
+    /// let res = replica.execute_mut(100, idx);
     /// assert_eq!(Ok(None), res);
-    pub fn execute(
+    pub fn execute_mut(
         &self,
         op: <D as Dispatch>::WriteOperation,
         idx: usize,
@@ -336,13 +331,11 @@ where
     /// # Example
     ///
     /// ```
-    /// extern crate alloc;
-    ///
     /// use node_replication::Dispatch;
-    /// use node_replication::log::Log;
-    /// use node_replication::replica::Replica;
+    /// use node_replication::Log;
+    /// use node_replication::Replica;
     ///
-    /// use alloc::sync::Arc;
+    /// use std::sync::Arc;
     ///
     /// #[derive(Default)]
     /// struct Data {
@@ -374,12 +367,12 @@ where
     /// let log = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
     /// let replica = Replica::<Data>::new(&log);
     /// let idx = replica.register().expect("Failed to register with replica.");
-    /// let _wr = replica.execute(100, idx);
+    /// let _wr = replica.execute_mut(100, idx);
     ///
-    /// // execute_ro() can be used to read from the replicated data structure.
-    /// let res = replica.execute_ro((), idx);
+    /// // execute() can be used to read from the replicated data structure.
+    /// let res = replica.execute((), idx);
     /// assert_eq!(Ok(Some(100)), res);
-    pub fn execute_ro(
+    pub fn execute(
         &self,
         op: <D as Dispatch>::ReadOperation,
         idx: usize,
@@ -414,8 +407,13 @@ where
     }
 
     /// Executes a passed in closure against the replica's underlying data
-    /// structure. Useful for unit testing; can be used to verify certain properties
-    /// of the data structure after issuing a bunch of operations against it.
+    /// structure. Useful for unit testing; can be used to verify certain
+    /// properties of the data structure after issuing a bunch of operations
+    /// against it.
+    ///
+    /// # Note
+    /// There is probably no need for a regular client to ever call this function.
+    #[doc(hidden)]
     pub fn verify<F: FnMut(&D)>(&self, mut v: F) {
         // Acquire the combiner lock before attempting anything on the data structure.
         // Use an idx greater than the maximum that can be allocated.
@@ -441,6 +439,7 @@ where
 
     /// Syncs up the replica against the underlying log and executes a passed in
     /// closure against all consumed operations.
+    #[doc(hidden)]
     pub fn sync<F: FnMut(<D as Dispatch>::WriteOperation, usize)>(&self, mut d: F) {
         // Acquire the combiner lock before attempting anything on the data structure.
         // Use an idx greater than the maximum that can be allocated.
@@ -715,14 +714,14 @@ mod test {
         assert_eq!(repl.contexts[0].res(), None);
     }
 
-    // Tests whether we can execute an operation against the log using execute().
+    // Tests whether we can execute an operation against the log using execute_mut().
     #[test]
     fn test_replica_execute_combine() {
         let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
         let repl = Replica::<Data>::new(&slog);
         let _idx = repl.register();
 
-        assert_eq!(Ok(107), repl.execute(121, 1));
+        assert_eq!(Ok(107), repl.execute_mut(121, 1));
         assert_eq!(1, repl.data.read(0).junk);
     }
 
@@ -741,19 +740,19 @@ mod test {
 
     // Tests whether we can issue a read-only operation against the replica.
     #[test]
-    fn test_replica_execute_ro() {
+    fn test_replica_execute() {
         let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
         let repl = Replica::<Data>::new(&slog);
         let idx = repl.register().expect("Failed to register with replica.");
 
-        assert_eq!(Ok(107), repl.execute(121, idx));
-        assert_eq!(Ok(1), repl.execute_ro(11, idx));
+        assert_eq!(Ok(107), repl.execute_mut(121, idx));
+        assert_eq!(Ok(1), repl.execute(11, idx));
     }
 
-    // Tests that execute_ro() syncs up the replica with the log before
+    // Tests that execute() syncs up the replica with the log before
     // executing the read against the data structure.
     #[test]
-    fn test_replica_execute_ro_not_synced() {
+    fn test_replica_execute_not_synced() {
         let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
         let repl = Replica::<Data>::new(&slog);
 
@@ -763,6 +762,6 @@ mod test {
         slog.exec(2, &mut |_o: u64, _i: usize| {});
 
         let t1 = repl.register().expect("Failed to register with replica.");
-        assert_eq!(Ok(2), repl.execute_ro(11, t1));
+        assert_eq!(Ok(2), repl.execute(11, t1));
     }
 }

@@ -1,4 +1,4 @@
-// Copyright © 2019 VMware, Inc. All Rights Reserved.
+// Copyright © VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! A in-memory FS benchmark.
@@ -15,8 +15,8 @@ use rand::{thread_rng, Rng};
 mod mkbench;
 mod utils;
 
-use node_replication::replica::Replica;
 use node_replication::Dispatch;
+use node_replication::Replica;
 
 use utils::benchmark::*;
 use utils::Operation;
@@ -363,10 +363,10 @@ fn memfs_scale_out(c: &mut TestHarness) {
             "memfs-scaleout",
             |_cid, rid, _log, replica, op, _batch_size| match op {
                 Operation::ReadOperation(o) => {
-                    replica.execute_ro(*o, rid).unwrap();
+                    replica.execute(*o, rid).unwrap();
                 }
                 Operation::WriteOperation(o) => {
-                    replica.execute(*o, rid).unwrap();
+                    replica.execute_mut(*o, rid).unwrap();
                 }
             },
         );

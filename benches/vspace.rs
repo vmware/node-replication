@@ -1,4 +1,4 @@
-// Copyright © 2019 VMware, Inc. All Rights Reserved.
+// Copyright © VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Evaluates a virtual address space implementation using node-replication.
@@ -14,8 +14,8 @@ use log::{debug, trace};
 use rand::{thread_rng, Rng};
 use x86::bits64::paging::*;
 
-use node_replication::replica::Replica;
 use node_replication::Dispatch;
+use node_replication::Replica;
 
 mod mkbench;
 mod utils;
@@ -579,10 +579,10 @@ fn vspace_scale_out(c: &mut TestHarness) {
             "vspace-scaleout",
             |_cid, rid, _log, replica, op, _batch_size| match op {
                 Operation::ReadOperation(o) => {
-                    let _r = replica.execute_ro(*o, rid);
+                    let _r = replica.execute(*o, rid);
                 }
                 Operation::WriteOperation(o) => {
-                    let _r = replica.execute(*o, rid);
+                    let _r = replica.execute_mut(*o, rid);
                 }
             },
         );

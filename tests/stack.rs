@@ -1,4 +1,4 @@
-// Copyright © 2019 VMware, Inc. All Rights Reserved.
+// Copyright © VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 extern crate rand;
@@ -9,9 +9,9 @@ use std::sync::{Arc, Barrier, RwLock};
 use std::thread;
 use std::usize;
 
-use node_replication::log::Log;
-use node_replication::replica::Replica;
 use node_replication::Dispatch;
+use node_replication::Log;
+use node_replication::Replica;
 
 use rand::{thread_rng, Rng};
 
@@ -119,7 +119,7 @@ fn sequential_test() {
     // Populate with some initial data
     for _i in 0..50 {
         let element = orng.gen();
-        r.execute(OpWr::Push(element), idx).unwrap();
+        r.execute_mut(OpWr::Push(element), idx).unwrap();
         correct_stack.push(element);
     }
 
@@ -127,7 +127,7 @@ fn sequential_test() {
         let op: usize = orng.gen();
         match op % 3usize {
             0usize => {
-                let o = r.execute(OpWr::Pop, idx);
+                let o = r.execute_mut(OpWr::Pop, idx);
                 let popped = correct_stack.pop();
 
                 match o {
@@ -138,14 +138,14 @@ fn sequential_test() {
             }
             1usize => {
                 let element = orng.gen();
-                match r.execute(OpWr::Push(element), idx) {
+                match r.execute_mut(OpWr::Push(element), idx) {
                     Ok(ele) => assert_eq!(Some(element), ele),
                     Err(_) => {}
                 }
                 correct_stack.push(element);
             }
             2usize => {
-                let o = r.execute_ro(OpRd::Peek, idx);
+                let o = r.execute(OpRd::Peek, idx);
                 let mut ele = None;
                 let len = correct_stack.len();
                 if len > 0 {
@@ -328,7 +328,7 @@ fn parallel_push_sequential_pop_test() {
                 b.wait();
                 for i in 0..nop {
                     replica
-                        .execute(OpWr::Push((i as u32) << 16 | tid), idx)
+                        .execute_mut(OpWr::Push((i as u32) << 16 | tid), idx)
                         .unwrap();
                 }
             });
@@ -349,8 +349,8 @@ fn parallel_push_sequential_pop_test() {
         let replica = replicas[i].clone();
         for _j in 0..t {
             for _z in 0..nop {
-                replica.execute_ro(OpRd::Peek, i + 1).unwrap();
-                replica.execute(OpWr::Pop, i + 1).unwrap();
+                replica.execute(OpRd::Peek, i + 1).unwrap();
+                replica.execute_mut(OpWr::Pop, i + 1).unwrap();
             }
         }
     }
@@ -393,15 +393,15 @@ fn parallel_push_and_pop_test() {
                 b.wait();
                 for i in 0..nop {
                     replica
-                        .execute(OpWr::Push((i as u32) << 16 | tid), idx)
+                        .execute_mut(OpWr::Push((i as u32) << 16 | tid), idx)
                         .unwrap();
                 }
 
                 // 2. Dequeue phase, verification
                 b.wait();
                 for _i in 0..nop {
-                    replica.execute_ro(OpRd::Peek, idx).unwrap();
-                    replica.execute(OpWr::Pop, idx).unwrap();
+                    replica.execute(OpRd::Peek, idx).unwrap();
+                    replica.execute_mut(OpWr::Pop, idx).unwrap();
                 }
             });
             threads.push(child);
@@ -435,7 +435,7 @@ fn bench(r: Arc<Replica<Stack>>, nop: usize, barrier: Arc<Barrier>) -> (u64, u64
     barrier.wait();
 
     for i in 0..nop {
-        r.execute(ops[i], idx).unwrap();
+        r.execute_mut(ops[i], idx).unwrap();
     }
 
     barrier.wait();

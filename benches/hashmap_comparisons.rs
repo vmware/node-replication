@@ -1,4 +1,4 @@
-// Copyright © 2019 VMware, Inc. All Rights Reserved.
+// Copyright © VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Implements ReplicaTrait for a bunch of different concurrent hashmap implementations.
@@ -13,8 +13,8 @@ use std::sync::Arc;
 
 use urcu_sys;
 
-use node_replication::log::Log;
 use node_replication::Dispatch;
+use node_replication::Log;
 
 use crate::mkbench::ReplicaTrait;
 

@@ -1,4 +1,4 @@
-// Copyright © 2019 VMware, Inc. All Rights Reserved.
+// Copyright © VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Defines a synthethic data-structure that can be replicated.
@@ -13,8 +13,8 @@
 use crossbeam_utils::CachePadded;
 use rand::{thread_rng, Rng};
 
-use node_replication::replica::Replica;
 use node_replication::Dispatch;
+use node_replication::Replica;
 
 mod mkbench;
 mod utils;
@@ -327,11 +327,11 @@ fn synthetic_scale_out(c: &mut TestHarness) {
             |cid, rid, _log, replica, op, _batch_size| match op {
                 Operation::ReadOperation(mut o) => {
                     o.set_tid(cid as usize);
-                    replica.execute_ro(o, rid).unwrap();
+                    replica.execute(o, rid).unwrap();
                 }
                 Operation::WriteOperation(mut o) => {
                     o.set_tid(cid as usize);
-                    replica.execute(o, rid).unwrap();
+                    replica.execute_mut(o, rid).unwrap();
                 }
             },
         );

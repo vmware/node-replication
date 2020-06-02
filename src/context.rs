@@ -1,4 +1,4 @@
-// Copyright © 2019 VMware, Inc. All Rights Reserved.
+// Copyright © VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use alloc::vec::Vec;
@@ -9,7 +9,7 @@ use crossbeam_utils::CachePadded;
 
 /// The maximum number of operations that can be batched inside this context.
 /// NOTE: This constant must be a power of two for index() to work.
-pub const MAX_PENDING_OPS: usize = 32;
+pub(crate) const MAX_PENDING_OPS: usize = 32;
 const_assert!(MAX_PENDING_OPS >= 1 && (MAX_PENDING_OPS & (MAX_PENDING_OPS - 1) == 0));
 
 /// A pending operation is a combination of the its op-code (T),
@@ -33,7 +33,7 @@ type PendingOperation<T, R, E> = Cell<(Option<T>, Option<Result<R, E>>)>;
 /// `E` is a type parameter required by the struct. It is the type on the error obtained if
 /// an operation was unsuccessfully executed against the replica.
 #[repr(align(64))]
-pub struct Context<T, R, E>
+pub(crate) struct Context<T, R, E>
 where
     T: Sized + Clone,
     R: Sized + Clone,
@@ -91,7 +91,7 @@ where
     ///
     /// Returns true if the operation was successfully enqueued. False otherwise.
     #[inline(always)]
-    pub fn enqueue(&self, op: T) -> bool {
+    pub(crate) fn enqueue(&self, op: T) -> bool {
         let t = self.tail.get();
         let h = self.head.get();
 
@@ -115,7 +115,7 @@ where
     /// after it has executed operations (obtained through a call to ops()) against the
     /// replica this thread is registered against.
     #[inline(always)]
-    pub fn enqueue_resps(&self, responses: &[Result<R, E>]) {
+    pub(crate) fn enqueue_resps(&self, responses: &[Result<R, E>]) {
         let h = self.comb.get();
         let n = responses.len();
 
@@ -139,7 +139,7 @@ where
     /// Adds any pending operations on this context to a passed in buffer. Returns the
     /// the number of such operations that were added in.
     #[inline(always)]
-    pub fn ops(&self, buffer: &mut Vec<T>) -> usize {
+    pub(crate) fn ops(&self, buffer: &mut Vec<T>) -> usize {
         let mut h = self.comb.get();
         let t = self.tail.get();
 
@@ -182,7 +182,7 @@ where
 
     /// Returns a single response if available. Otherwise, returns None.
     #[inline(always)]
-    pub fn res(&self) -> Option<Result<R, E>> {
+    pub(crate) fn res(&self) -> Option<Result<R, E>> {
         let s = self.head.get();
         let f = self.comb.get();
 
@@ -201,7 +201,7 @@ where
 
     /// Returns the maximum number of operations that will go pending on this context.
     #[inline(always)]
-    pub fn batch_size() -> usize {
+    pub(crate) fn batch_size() -> usize {
         MAX_PENDING_OPS
     }
 

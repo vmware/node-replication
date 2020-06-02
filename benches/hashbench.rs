@@ -1,5 +1,5 @@
 // Copyright © 2017-2019 Jon Gjengset <jon@thesquareplanet.com>.
-// Copyright © 2019 VMware, Inc. All Rights Reserved.
+// Copyright © VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Integration of the rust-evmap benchmarks (https://github.com/jonhoo/rust-evmap/)
@@ -17,9 +17,9 @@ use std::sync;
 use std::thread;
 use std::time;
 
-use node_replication::log::Log;
-use node_replication::replica::Replica;
 use node_replication::Dispatch;
+use node_replication::Log;
+use node_replication::Replica;
 
 use urcu_sys;
 
@@ -444,7 +444,7 @@ impl<'a> ReplicaAndToken<'a> {
 
 impl<'a> Backend for ReplicaAndToken<'a> {
     fn b_get(&mut self, key: u64) -> u64 {
-        match self.replica.execute_ro(OpRd::Get(key), self.token) {
+        match self.replica.execute(OpRd::Get(key), self.token) {
             Ok(res) => return res,
             Err(_) => unreachable!(),
         }
@@ -452,7 +452,7 @@ impl<'a> Backend for ReplicaAndToken<'a> {
 
     fn b_put(&mut self, key: u64, value: u64) {
         self.replica
-            .execute(OpWr::Put(key, value), self.token)
+            .execute_mut(OpWr::Put(key, value), self.token)
             .unwrap();
     }
 }

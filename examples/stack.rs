@@ -4,9 +4,9 @@
 //! A minimal example that implements a replicated stack
 use std::sync::Arc;
 
-use node_replication::log::Log;
-use node_replication::replica::Replica;
 use node_replication::Dispatch;
+use node_replication::Log;
+use node_replication::Replica;
 
 /// We support mutable push and pop operations on the stack.
 #[derive(Debug, PartialEq, Clone)]
@@ -91,13 +91,13 @@ fn main() {
     let replica2 = Replica::<Stack>::new(&log);
 
     // The replica executes a Modify or Access operations by calling
-    // `execute` and `execute_ro`. Eventually they end up in the `Dispatch` trait.
+    // `execute_mut` and `execute`. Eventually they end up in the `Dispatch` trait.
     let thread_loop = |replica: &Arc<Replica<Stack>>, ridx| {
         for i in 0..2048 {
             let _r = match i % 3 {
-                0 => replica.execute(Modify::Push(i as u32), ridx),
-                1 => replica.execute(Modify::Pop, ridx),
-                2 => replica.execute_ro(Access::Peek, ridx),
+                0 => replica.execute_mut(Modify::Push(i as u32), ridx),
+                1 => replica.execute_mut(Modify::Pop, ridx),
+                2 => replica.execute(Access::Peek, ridx),
                 _ => unreachable!(),
             };
         }

@@ -1,4 +1,4 @@
-// Copyright © 2019 VMware, Inc. All Rights Reserved.
+// Copyright © VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Helper functions to instantiate and configure benchmarks.
@@ -99,7 +99,7 @@ impl<'a, T: Dispatch + Sync + Default> ReplicaTrait for node_replication::replic
         op: <Self::D as Dispatch>::WriteOperation,
         idx: usize,
     ) -> Result<<Self::D as Dispatch>::Response, <Self::D as Dispatch>::ResponseError> {
-        self.execute(op, idx)
+        self.execute_mut(op, idx)
     }
 
     fn exec_ro(
@@ -107,7 +107,7 @@ impl<'a, T: Dispatch + Sync + Default> ReplicaTrait for node_replication::replic
         op: <Self::D as Dispatch>::ReadOperation,
         idx: usize,
     ) -> Result<<Self::D as Dispatch>::Response, <Self::D as Dispatch>::ResponseError> {
-        self.execute_ro(op, idx)
+        self.execute(op, idx)
     }
 }
 
@@ -496,7 +496,7 @@ where
     /// then waits to receive the respective duration from the workers
     /// finally it returns the minimal Duration over all threads
     /// after ensuring the run was fair.
-    fn execute(&self, duration: Duration, reset_log: bool) -> usize {
+    fn execute_mut(&self, duration: Duration, reset_log: bool) -> usize {
         if reset_log {
             unsafe {
                 self.log.reset();
@@ -1067,7 +1067,9 @@ where
                             BenchmarkId::new(name, *ts),
                             &runner,
                             |cb, runner| {
-                                cb.iter_custom(|duration| runner.execute(duration, self.reset_log))
+                                cb.iter_custom(|duration| {
+                                    runner.execute_mut(duration, self.reset_log)
+                                })
                             },
                         );
 

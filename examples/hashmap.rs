@@ -5,9 +5,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use node_replication::log::Log;
-use node_replication::replica::Replica;
 use node_replication::Dispatch;
+use node_replication::Log;
+use node_replication::Replica;
 
 /// The node-replicated hashmap uses a std hashmap internally.
 #[derive(Default)]
@@ -67,13 +67,13 @@ fn main() {
     let replica2 = Replica::<NrHashMap>::new(&log);
 
     // The replica executes a Modify or Access operations by calling
-    // `execute` and `execute_ro`. Eventually they end up in the `Dispatch` trait.
+    // `execute_mut` and `execute`. Eventually they end up in the `Dispatch` trait.
     let thread_loop = |replica: &Arc<Replica<NrHashMap>>, ridx| {
         for i in 0..2048 {
             let _r = match i % 2 {
-                0 => replica.execute(Modify::Put(i, i + 1), ridx),
+                0 => replica.execute_mut(Modify::Put(i, i + 1), ridx),
                 1 => {
-                    let response = replica.execute_ro(Access::Get(i - 1), ridx);
+                    let response = replica.execute(Access::Get(i - 1), ridx);
                     assert_eq!(response, Ok(Some(i)));
                     response
                 }

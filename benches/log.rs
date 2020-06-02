@@ -1,4 +1,4 @@
-// Copyright © 2019 VMware, Inc. All Rights Reserved.
+// Copyright © VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Defines all default criterion benchmarks we run.
@@ -11,9 +11,9 @@ extern crate zipf;
 
 use std::sync::Arc;
 
-use node_replication::log::Log;
-use node_replication::replica::Replica;
 use node_replication::Dispatch;
+use node_replication::Log;
+use node_replication::Replica;
 use rand::distributions::Distribution;
 use rand::{Rng, RngCore};
 

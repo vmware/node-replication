@@ -1,5 +1,11 @@
-// Copyright © 2019 VMware, Inc. All Rights Reserved.
+// Copyright © VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
+
+//! The distributed readers-writer lock used by the replica.
+//!
+//! This module is only public since it needs to be exposed to the benchmarking
+//! code. For clients there is no need to rely on this directly, as the RwLock
+//! is embedded inside the Replica.
 
 use core::cell::UnsafeCell;
 use core::default::Default;
