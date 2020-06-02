@@ -11,9 +11,8 @@ three techniques: readers-writer locks, operation logging and flat combining.
 ## How does it work
 
 To replicate a single-threaded data structure, one needs to implement `Dispatch`
-(from node-replication). The full example (using `HashMap` as the underlying
-data-structure) can be found [here](examples/hashmap.rs). To run, execute:
-`cargo run --example hashmap`
+(from node-replication). As an example, we implement `Dispatch` for the
+single-threaded HashMap from `std`.
 
 ```rust
 /// The node-replicated hashmap uses just a single-threaded std HashMap.
@@ -62,6 +61,9 @@ impl Dispatch for NrHashMap {
 }
 ```
 
+The full example (using `HashMap` as the underlying data-structure) can be found
+[here](examples/hashmap.rs). To run, execute: `cargo run --example hashmap`
+
 ## How does it perform
 
 The library often makes your single-threaded implementation work better than, or
@@ -78,9 +80,10 @@ It works especially well if
   typically best to use one replica per-NUMA node which means your original
   memory foot-print is multiplied with the amount of NUMA nodes in the system).
 
-As an example, the following benchmark uses Rust's single-threaded hash table
-from `std` with node-replication (`nr`) and compares it against concurrent hash
-table implementations from [crates.io](https://crates.io) and
+As an example, the following benchmark uses Rust' the hash-table with the
+`Dispatch` implementation from above (`nr`), and compares it against concurrent
+hash table implementations from [crates.io](https://crates.io) (chashmap,
+dashmap, flurry), a HashMap protected by an `RwLock` (`std`), and
 [urcu](https://liburcu.org/).
 
 <table>
