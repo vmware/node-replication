@@ -101,20 +101,16 @@ impl Default for NrHashMap {
 impl Dispatch for NrHashMap {
     type ReadOperation = OpRd;
     type WriteOperation = OpWr;
-    type Response = Option<u64>;
-    type ResponseError = ();
+    type Response = Result<Option<u64>, ()>;
 
-    fn dispatch(&self, op: Self::ReadOperation) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
         match op {
             OpRd::Get(key) => return Ok(self.get(key)),
         }
     }
 
     /// Implements how we execute operation from the log against our local stack
-    fn dispatch_mut(
-        &mut self,
-        op: Self::WriteOperation,
-    ) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch_mut(&mut self, op: Self::WriteOperation) -> Self::Response {
         match op {
             OpWr::Put(key, val) => {
                 self.put(key, val);
@@ -234,8 +230,7 @@ where
     R::D: Dispatch<WriteOperation = OpWr>,
     <R::D as Dispatch>::WriteOperation: Send + Sync,
     <R::D as Dispatch>::ReadOperation: Send + Sync,
-    <R::D as Dispatch>::Response: Sync + Send,
-    <R::D as Dispatch>::ResponseError: Sync + Send + Debug,
+    <R::D as Dispatch>::Response: Sync + Send + Debug,
 {
     let ops = generate_operations(NOP, write_ratio, KEY_SPACE, UNIFORM);
     let bench_name = format!("{}-scaleout-wr{}", name, write_ratio);
@@ -252,10 +247,10 @@ where
             &bench_name,
             |_cid, rid, _log, replica, op, _batch_size| match op {
                 Operation::ReadOperation(op) => {
-                    replica.exec_ro(*op, rid).unwrap();
+                    replica.exec_ro(*op, rid);
                 }
                 Operation::WriteOperation(op) => {
-                    replica.exec(*op, rid).unwrap();
+                    replica.exec(*op, rid);
                 }
             },
         );
@@ -291,8 +286,7 @@ where
     T: Dispatch<WriteOperation = ()>,
     T: 'static,
     T: Dispatch + Sync + Default + Send,
-    <T as Dispatch>::Response: Send + Sync,
-    <T as Dispatch>::ResponseError: Send + Sync + Debug,
+    <T as Dispatch>::Response: Send + Sync + Debug,
 {
     let ops = generate_operations_concurrent(NOP, write_ratio, KEY_SPACE, UNIFORM);
     let bench_name = format!("{}-scaleout-wr{}", name, write_ratio);
@@ -307,10 +301,10 @@ where
             &bench_name,
             |_cid, rid, _log, replica, op, _batch_size| match op {
                 Operation::ReadOperation(op) => {
-                    replica.exec_ro(*op, rid).unwrap();
+                    replica.exec_ro(*op, rid);
                 }
                 Operation::WriteOperation(op) => {
-                    replica.exec(*op, rid).unwrap();
+                    replica.exec(*op, rid);
                 }
             },
         );

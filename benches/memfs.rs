@@ -103,18 +103,6 @@ impl Default for Response {
     }
 }
 
-/// Potential errors from the file-system
-#[derive(Copy, Clone, Debug)]
-pub enum ResponseError {
-    Err(Error),
-}
-
-impl Default for ResponseError {
-    fn default() -> ResponseError {
-        ResponseError::Err(Error::NoEntry)
-    }
-}
-
 struct NrMemFilesystem(MemFilesystem);
 
 impl Default for NrMemFilesystem {
@@ -206,26 +194,22 @@ impl NrMemFilesystem {
 impl Dispatch for NrMemFilesystem {
     type ReadOperation = ();
     type WriteOperation = OperationWr;
-    type Response = Response;
-    type ResponseError = ResponseError;
+    type Response = Result<Response, Error>;
 
-    fn dispatch(&self, _op: Self::ReadOperation) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch(&self, _op: Self::ReadOperation) -> Self::Response {
         unreachable!()
     }
 
     /// Implements how we execute operation from the log against our local stack
-    fn dispatch_mut(
-        &mut self,
-        op: Self::WriteOperation,
-    ) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch_mut(&mut self, op: Self::WriteOperation) -> Self::Response {
         match op {
             OperationWr::GetAttr { ino } => match self.getattr(ino) {
                 Ok(attr) => Ok(Response::Attr(*attr)),
-                Err(e) => Err(ResponseError::Err(e)),
+                Err(e) => Err(e),
             },
             OperationWr::SetAttr { ino, new_attrs } => match self.setattr(ino, new_attrs) {
                 Ok(fattr) => Ok(Response::Attr(*fattr)),
-                Err(e) => Err(ResponseError::Err(e)),
+                Err(e) => Err(e),
             },
             OperationWr::ReadDir { ino, fh, offset } => {
                 match self.readdir(ino, fh) {
@@ -238,20 +222,20 @@ impl Dispatch for NrMemFilesystem {
                             entries.into_iter().skip(to_skip).collect();
                         Ok(Response::Directory)
                     }
-                    Err(e) => Err(ResponseError::Err(e)),
+                    Err(e) => Err(e),
                 }
             }
             OperationWr::Lookup { parent, name } => match self.lookup(parent, name) {
                 Ok(attr) => Ok(Response::Attr(*attr)),
-                Err(e) => Err(ResponseError::Err(e)),
+                Err(e) => Err(e),
             },
             OperationWr::RmDir { parent, name } => match self.rmdir(parent, name) {
                 Ok(()) => Ok(Response::Empty),
-                Err(e) => Err(ResponseError::Err(e)),
+                Err(e) => Err(e),
             },
             OperationWr::MkDir { parent, name, mode } => match self.mkdir(parent, name, mode) {
                 Ok(attr) => Ok(Response::Attr(*attr)),
-                Err(e) => Err(ResponseError::Err(e)),
+                Err(e) => Err(e),
             },
             OperationWr::Open { ino, flags } => {
                 warn!("Don't do `open` for now... {} {}", ino, flags);
@@ -259,7 +243,7 @@ impl Dispatch for NrMemFilesystem {
             }
             OperationWr::Unlink { parent, name } => match self.unlink(parent, name) {
                 Ok(_attr) => Ok(Response::Empty),
-                Err(e) => Err(ResponseError::Err(e)),
+                Err(e) => Err(e),
             },
             OperationWr::Create {
                 parent,
@@ -268,7 +252,7 @@ impl Dispatch for NrMemFilesystem {
                 flags,
             } => match self.create(parent, name, mode, flags) {
                 Ok(_attr) => Ok(Response::Empty),
-                Err(e) => Err(ResponseError::Err(e)),
+                Err(e) => Err(e),
             },
             OperationWr::Write {
                 ino,
@@ -278,7 +262,7 @@ impl Dispatch for NrMemFilesystem {
                 flags,
             } => match self.write(ino, fh, offset, data, flags) {
                 Ok(written) => Ok(Response::Written(written)),
-                Err(e) => Err(ResponseError::Err(e)),
+                Err(e) => Err(e),
             },
             OperationWr::Read {
                 ino,
@@ -292,7 +276,7 @@ impl Dispatch for NrMemFilesystem {
                     let bytes_as_vec = Arc::new(slice.to_vec());
                     Ok(Response::Data(bytes_as_vec))
                 }
-                Err(e) => Err(ResponseError::Err(e)),
+                Err(e) => Err(e),
             },
             OperationWr::Rename {
                 parent,
@@ -301,7 +285,7 @@ impl Dispatch for NrMemFilesystem {
                 newname,
             } => match self.rename(parent, name, newparent, newname) {
                 Ok(()) => Ok(Response::Empty),
-                Err(e) => Err(ResponseError::Err(e)),
+                Err(e) => Err(e),
             },
         }
     }

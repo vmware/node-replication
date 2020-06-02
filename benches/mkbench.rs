@@ -70,13 +70,13 @@ pub trait ReplicaTrait {
         &self,
         op: <Self::D as Dispatch>::WriteOperation,
         idx: usize,
-    ) -> Result<<Self::D as Dispatch>::Response, <Self::D as Dispatch>::ResponseError>;
+    ) -> <Self::D as Dispatch>::Response;
 
     fn exec_ro(
         &self,
         op: <Self::D as Dispatch>::ReadOperation,
         idx: usize,
-    ) -> Result<<Self::D as Dispatch>::Response, <Self::D as Dispatch>::ResponseError>;
+    ) -> <Self::D as Dispatch>::Response;
 }
 
 impl<'a, T: Dispatch + Sync + Default> ReplicaTrait for Replica<'a, T> {
@@ -98,7 +98,7 @@ impl<'a, T: Dispatch + Sync + Default> ReplicaTrait for Replica<'a, T> {
         &self,
         op: <Self::D as Dispatch>::WriteOperation,
         idx: usize,
-    ) -> Result<<Self::D as Dispatch>::Response, <Self::D as Dispatch>::ResponseError> {
+    ) -> <Self::D as Dispatch>::Response {
         self.execute_mut(op, idx)
     }
 
@@ -106,7 +106,7 @@ impl<'a, T: Dispatch + Sync + Default> ReplicaTrait for Replica<'a, T> {
         &self,
         op: <Self::D as Dispatch>::ReadOperation,
         idx: usize,
-    ) -> Result<<Self::D as Dispatch>::Response, <Self::D as Dispatch>::ResponseError> {
+    ) -> <Self::D as Dispatch>::Response {
         self.execute(op, idx)
     }
 }
@@ -171,7 +171,6 @@ pub(crate) fn baseline_comparison<R: ReplicaTrait>(
     <R::D as Dispatch>::ReadOperation: Sync,
     <R::D as Dispatch>::ReadOperation: Send,
     <R::D as Dispatch>::Response: Send,
-    <R::D as Dispatch>::ResponseError: Send,
 {
     utils::disable_dvfs();
     let mut s: R::D = Default::default();
@@ -381,7 +380,6 @@ where
     <R::D as Dispatch>::WriteOperation: Send + Sync + Copy,
     <R::D as Dispatch>::ReadOperation: Send + Sync + Copy,
     <R::D as Dispatch>::Response: Send,
-    <R::D as Dispatch>::ResponseError: Send,
     R::D: 'static + Sync + Dispatch + Default + Send,
     R: ReplicaTrait + Sync + Send,
 {
@@ -889,7 +887,6 @@ where
     <R::D as Dispatch>::ReadOperation: Sync,
     <R::D as Dispatch>::ReadOperation: Send,
     <R::D as Dispatch>::Response: Send,
-    <R::D as Dispatch>::ResponseError: Send,
 {
     /// Initialize an "empty" ScaleBenchBuilder with a  MiB log.
     ///
@@ -1033,7 +1030,6 @@ where
         <R::D as Dispatch>::WriteOperation: Send + Sync + Copy,
         <R::D as Dispatch>::ReadOperation: Send + Sync + Copy,
         <R::D as Dispatch>::Response: Send + Sync,
-        <R::D as Dispatch>::ResponseError: Send + Sync,
         R::D: 'static + Send + Sync,
     {
         let topology = MachineTopology::new();

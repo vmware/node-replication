@@ -65,16 +65,12 @@ where
         &self,
         op: <Self::D as Dispatch>::WriteOperation,
         idx: usize,
-    ) -> Result<<Self::D as Dispatch>::Response, <Self::D as Dispatch>::ResponseError> {
+    ) -> <Self::D as Dispatch>::Response {
         debug_assert_eq!(idx, 0);
         unsafe { (&mut *self.data_structure.get()).dispatch_mut(op) }
     }
 
-    fn exec_ro(
-        &self,
-        op: <T as Dispatch>::ReadOperation,
-        idx: usize,
-    ) -> Result<<T as Dispatch>::Response, <T as Dispatch>::ResponseError> {
+    fn exec_ro(&self, op: <T as Dispatch>::ReadOperation, idx: usize) -> <T as Dispatch>::Response {
         debug_assert_eq!(idx, 0);
         unsafe { (&*self.data_structure.get()).dispatch(op) }
     }
@@ -120,7 +116,7 @@ where
         &self,
         _op: <Self::D as Dispatch>::WriteOperation,
         _idx: usize,
-    ) -> Result<<Self::D as Dispatch>::Response, <Self::D as Dispatch>::ResponseError> {
+    ) -> <Self::D as Dispatch>::Response {
         unreachable!("All opertations must be read ops")
     }
 
@@ -128,7 +124,7 @@ where
         &self,
         op: <Self::D as Dispatch>::ReadOperation,
         _idx: usize,
-    ) -> Result<<Self::D as Dispatch>::Response, <Self::D as Dispatch>::ResponseError> {
+    ) -> <Self::D as Dispatch>::Response {
         self.data_structure.dispatch(op)
     }
 }
@@ -149,10 +145,9 @@ impl Default for CHashMapWrapper {
 impl Dispatch for CHashMapWrapper {
     type ReadOperation = OpConcurrent;
     type WriteOperation = ();
-    type Response = Option<u64>;
-    type ResponseError = ();
+    type Response = Result<Option<u64>, ()>;
 
-    fn dispatch(&self, op: Self::ReadOperation) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
         match op {
             OpConcurrent::Get(key) => Ok(self.0.get(&key).map(|v| *v)),
             OpConcurrent::Put(key, val) => {
@@ -163,10 +158,7 @@ impl Dispatch for CHashMapWrapper {
     }
 
     /// Implements how we execute operation from the log against our local stack
-    fn dispatch_mut(
-        &mut self,
-        _op: Self::WriteOperation,
-    ) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch_mut(&mut self, _op: Self::WriteOperation) -> Self::Response {
         unreachable!("dispatch_mut should not be called here")
     }
 }
@@ -187,10 +179,9 @@ impl Default for StdWrapper {
 impl Dispatch for StdWrapper {
     type ReadOperation = OpConcurrent;
     type WriteOperation = ();
-    type Response = Option<u64>;
-    type ResponseError = ();
+    type Response = Result<Option<u64>, ()>;
 
-    fn dispatch(&self, op: Self::ReadOperation) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
         match op {
             OpConcurrent::Get(key) => Ok(self.0.read().get(&key).map(|&v| v)),
             OpConcurrent::Put(key, val) => {
@@ -201,10 +192,7 @@ impl Dispatch for StdWrapper {
     }
 
     /// Implements how we execute operation from the log against our local stack
-    fn dispatch_mut(
-        &mut self,
-        _op: Self::WriteOperation,
-    ) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch_mut(&mut self, _op: Self::WriteOperation) -> Self::Response {
         unreachable!("dispatch_mut should not be called here")
     }
 }
@@ -225,10 +213,9 @@ impl Default for FlurryWrapper {
 impl Dispatch for FlurryWrapper {
     type ReadOperation = OpConcurrent;
     type WriteOperation = ();
-    type Response = Option<u64>;
-    type ResponseError = ();
+    type Response = Result<Option<u64>, ()>;
 
-    fn dispatch(&self, op: Self::ReadOperation) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
         match op {
             OpConcurrent::Get(key) => Ok(self.0.pin().get(&key).map(|v| *v)),
             OpConcurrent::Put(key, val) => {
@@ -239,10 +226,7 @@ impl Dispatch for FlurryWrapper {
     }
 
     /// Implements how we execute operation from the log against our local stack
-    fn dispatch_mut(
-        &mut self,
-        _op: Self::WriteOperation,
-    ) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch_mut(&mut self, _op: Self::WriteOperation) -> Self::Response {
         unreachable!("dispatch_mut should not be called here")
     }
 }
@@ -263,10 +247,9 @@ impl Default for DashWrapper {
 impl Dispatch for DashWrapper {
     type ReadOperation = OpConcurrent;
     type WriteOperation = ();
-    type Response = Option<u64>;
-    type ResponseError = ();
+    type Response = Result<Option<u64>, ()>;
 
-    fn dispatch(&self, op: Self::ReadOperation) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
         match op {
             OpConcurrent::Get(key) => Ok(self.0.get(&key).map(|v| *v)),
             OpConcurrent::Put(key, val) => {
@@ -277,10 +260,7 @@ impl Dispatch for DashWrapper {
     }
 
     /// Implements how we execute operation from the log against our local stack
-    fn dispatch_mut(
-        &mut self,
-        _op: Self::WriteOperation,
-    ) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch_mut(&mut self, _op: Self::WriteOperation) -> Self::Response {
         unreachable!("dispatch_mut should not be called here")
     }
 }
@@ -373,10 +353,9 @@ unsafe fn to_test_node(node: *mut urcu_sys::cds_lfht_node) -> *mut lfht_test_nod
 impl Dispatch for RcuHashMap {
     type ReadOperation = OpConcurrent;
     type WriteOperation = ();
-    type Response = Option<u64>;
-    type ResponseError = ();
+    type Response = Result<Option<u64>, ()>;
 
-    fn dispatch(&self, op: Self::ReadOperation) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
         unsafe {
             match op {
                 OpConcurrent::Get(key) => {
@@ -438,10 +417,7 @@ impl Dispatch for RcuHashMap {
     }
 
     /// Implements how we execute operation from the log against our local stack
-    fn dispatch_mut(
-        &mut self,
-        _op: Self::WriteOperation,
-    ) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch_mut(&mut self, _op: Self::WriteOperation) -> Self::Response {
         unreachable!("dispatch_mut should not be called here")
     }
 }

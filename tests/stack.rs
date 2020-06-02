@@ -1,6 +1,8 @@
 // Copyright © VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+//! Various tests for node-replication with the help of a stack.
+
 extern crate rand;
 extern crate std;
 
@@ -75,24 +77,20 @@ impl Dispatch for Stack {
     type ReadOperation = OpRd;
     type WriteOperation = OpWr;
     type Response = Option<u32>;
-    type ResponseError = ();
 
-    fn dispatch(&self, op: Self::ReadOperation) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
         match op {
-            OpRd::Peek => return Ok(self.peek()),
-        };
+            OpRd::Peek => self.peek(),
+        }
     }
 
-    fn dispatch_mut(
-        &mut self,
-        op: Self::WriteOperation,
-    ) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch_mut(&mut self, op: Self::WriteOperation) -> Self::Response {
         match op {
             OpWr::Push(v) => {
                 self.push(v);
-                return Ok(Some(v));
+                Some(v)
             }
-            OpWr::Pop => return Ok(self.pop()),
+            OpWr::Pop => self.pop(),
         }
     }
 }
@@ -129,19 +127,13 @@ fn sequential_test() {
             0usize => {
                 let o = r.execute_mut(OpWr::Pop, idx);
                 let popped = correct_stack.pop();
-
-                match o {
-                    Ok(element) => assert_eq!(popped, element),
-                    Err(_) => {}
-                }
+                assert_eq!(popped, o);
                 correct_popped.push(popped);
             }
             1usize => {
                 let element = orng.gen();
-                match r.execute_mut(OpWr::Push(element), idx) {
-                    Ok(ele) => assert_eq!(Some(element), ele),
-                    Err(_) => {}
-                }
+                let pushed = r.execute_mut(OpWr::Push(element), idx);
+                assert_eq!(pushed, Some(element));
                 correct_stack.push(element);
             }
             2usize => {
@@ -151,10 +143,7 @@ fn sequential_test() {
                 if len > 0 {
                     ele = Some(correct_stack[len - 1]);
                 }
-                match o {
-                    Ok(element) => assert_eq!(ele, element),
-                    Err(_) => {}
-                }
+                assert_eq!(ele, o);
                 correct_peeked.push(ele);
             }
             _ => unreachable!(),
@@ -214,9 +203,8 @@ impl Dispatch for VerifyStack {
     type ReadOperation = OpRd;
     type WriteOperation = OpWr;
     type Response = Option<u32>;
-    type ResponseError = Option<()>;
 
-    fn dispatch(&self, op: Self::ReadOperation) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
         match op {
             OpRd::Peek => {
                 let ele: u32 = self.peek();
@@ -240,22 +228,19 @@ impl Dispatch for VerifyStack {
                     *last_popped > val,
                     "Elements that came from a given thread are monotonically decreasing"
                 );
-                return Ok(Some(ele));
+                Some(ele)
             }
         }
     }
 
-    fn dispatch_mut(
-        &mut self,
-        op: Self::WriteOperation,
-    ) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch_mut(&mut self, op: Self::WriteOperation) -> Self::Response {
         match op {
             OpWr::Push(v) => {
                 let _tid = (v & 0xffff) as u16;
                 let _val = ((v >> 16) & 0xffff) as u16;
                 //println!("Push tid {} val {}", tid, val);
                 self.push(v);
-                return Ok(Some(v));
+                Some(v)
             }
             OpWr::Pop => {
                 let ele: u32 = self.pop();
@@ -286,7 +271,7 @@ impl Dispatch for VerifyStack {
                     // println!("per_replica_counter ={:?}", per_replica_counter);
                     assert_eq!(self.per_replica_counter.len(), 8, "Popped a final element from a thread before seeing elements from every thread.");
                 }
-                return Ok(Some(ele));
+                Some(ele)
             }
         }
     }
@@ -435,7 +420,7 @@ fn bench(r: Arc<Replica<Stack>>, nop: usize, barrier: Arc<Barrier>) -> (u64, u64
     barrier.wait();
 
     for i in 0..nop {
-        r.execute_mut(ops[i], idx).unwrap();
+        r.execute_mut(ops[i], idx);
     }
 
     barrier.wait();

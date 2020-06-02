@@ -44,12 +44,11 @@
 //!    type ReadOperation = Access;
 //!    type WriteOperation = Modify;
 //!    type Response = Option<u64>;
-//!    type ResponseError = ();
 //!
 //!    /// The `dispatch` function applies the immutable operations.
-//!    fn dispatch(&self, op: Self::ReadOperation) -> Result<Self::Response, Self::ResponseError> {
+//!    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
 //!        match op {
-//!            Access::Get(key) => Ok(self.storage.get(&key).map(|v| *v)),
+//!            Access::Get(key) => self.storage.get(&key).map(|v| *v),
 //!        }
 //!    }
 //!
@@ -57,9 +56,9 @@
 //!    fn dispatch_mut(
 //!        &mut self,
 //!        op: Self::WriteOperation,
-//!    ) -> Result<Self::Response, Self::ResponseError> {
+//!    ) -> Self::Response {
 //!        match op {
-//!            Modify::Put(key, value) => Ok(self.storage.insert(key, value)),
+//!            Modify::Put(key, value) => self.storage.insert(key, value),
 //!        }
 //!    }
 //! }
@@ -113,20 +112,13 @@ pub trait Dispatch {
 
     /// The type on the value returned by the data structure when a `ReadOperation` or a
     /// `WriteOperation` successfully executes against it.
-    type Response: Sized + Clone + Default;
-
-    /// The type on the value returned by the data structure when a `ReadOperation` or a
-    /// `WriteOperation` unsuccessfully executes against it.
-    type ResponseError: Sized + Clone + Default;
+    type Response: Sized + Clone;
 
     /// Method on the data structure that allows a read-only operation to be
     /// executed against it.
-    fn dispatch(&self, op: Self::ReadOperation) -> Result<Self::Response, Self::ResponseError>;
+    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response;
 
     /// Method on the data structure that allows a write operation to be
     /// executed against it.
-    fn dispatch_mut(
-        &mut self,
-        op: Self::WriteOperation,
-    ) -> Result<Self::Response, Self::ResponseError>;
+    fn dispatch_mut(&mut self, op: Self::WriteOperation) -> Self::Response;
 }

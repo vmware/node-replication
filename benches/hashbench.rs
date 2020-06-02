@@ -407,20 +407,16 @@ impl Default for NrHashMap {
 impl Dispatch for NrHashMap {
     type ReadOperation = OpRd;
     type WriteOperation = OpWr;
-    type Response = u64;
-    type ResponseError = ();
+    type Response = Result<u64, ()>;
 
-    fn dispatch(&self, op: Self::ReadOperation) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
         match op {
             OpRd::Get(key) => return Ok(self.get(key)),
         }
     }
 
     /// Implements how we execute operation from the log against our local stack
-    fn dispatch_mut(
-        &mut self,
-        op: Self::WriteOperation,
-    ) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch_mut(&mut self, op: Self::WriteOperation) -> Self::Response {
         match op {
             OpWr::Put(key, val) => {
                 self.put(key, val);

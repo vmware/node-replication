@@ -66,23 +66,19 @@ impl Dispatch for Stack {
     type ReadOperation = OpRd;
     type WriteOperation = OpWr;
     type Response = Option<u32>;
-    type ResponseError = ();
 
-    fn dispatch(&self, _op: Self::ReadOperation) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch(&self, _op: Self::ReadOperation) -> Self::Response {
         unreachable!()
     }
 
     /// Implements how we execute operations from the log against our local stack
-    fn dispatch_mut(
-        &mut self,
-        op: Self::WriteOperation,
-    ) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch_mut(&mut self, op: Self::WriteOperation) -> Self::Response {
         match op {
             OpWr::Push(v) => {
                 self.push(v);
-                return Ok(None);
+                return None;
             }
-            OpWr::Pop => return Ok(self.pop()),
+            OpWr::Pop => return self.pop(),
         }
     }
 }

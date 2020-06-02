@@ -177,23 +177,19 @@ impl AbstractDataStructure {
 impl Dispatch for AbstractDataStructure {
     type ReadOperation = OpRd;
     type WriteOperation = OpWr;
-    type Response = usize;
-    type ResponseError = ();
+    type Response = Result<usize, ()>;
 
-    fn dispatch(&self, op: Self::ReadOperation) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
         match op {
-            OpRd::ReadOnly(a, b, c) => return Ok(self.read(a, b, c)),
+            OpRd::ReadOnly(a, b, c) => Ok(self.read(a, b, c)),
         }
     }
 
     /// Implements how we execute operation from the log against abstract DS
-    fn dispatch_mut(
-        &mut self,
-        op: Self::WriteOperation,
-    ) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch_mut(&mut self, op: Self::WriteOperation) -> Self::Response {
         match op {
-            OpWr::WriteOnly(a, b, c) => return Ok(self.write(a, b, c)),
-            OpWr::ReadWrite(a, b, c) => return Ok(self.read_write(a, b, c)),
+            OpWr::WriteOnly(a, b, c) => Ok(self.write(a, b, c)),
+            OpWr::ReadWrite(a, b, c) => Ok(self.read_write(a, b, c)),
         }
     }
 }

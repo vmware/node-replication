@@ -58,13 +58,7 @@ where
     /// cannot perform flat combining (because another thread might be doing so).
     ///
     /// The vector is initialized with `MAX_THREADS_PER_REPLICA` elements.
-    contexts: Vec<
-        Context<
-            <D as Dispatch>::WriteOperation,
-            <D as Dispatch>::Response,
-            <D as Dispatch>::ResponseError,
-        >,
-    >,
+    contexts: Vec<Context<<D as Dispatch>::WriteOperation, <D as Dispatch>::Response>>,
 
     /// A buffer of operations for flat combining. The combiner stages operations in
     /// here and then batch appends them into the shared log. This helps amortize
@@ -78,7 +72,7 @@ where
 
     /// A buffer of results collected after flat combining. With the help of `inflight`,
     /// the combiner enqueues these results into the appropriate thread context.
-    result: RefCell<Vec<Result<<D as Dispatch>::Response, <D as Dispatch>::ResponseError>>>,
+    result: RefCell<Vec<<D as Dispatch>::Response>>,
 
     /// Reference to the shared log that operations will be appended to and the
     /// data structure will be updated from.
@@ -131,23 +125,22 @@ where
     ///     type ReadOperation = ();
     ///     type WriteOperation = u64;
     ///     type Response = Option<u64>;
-    ///     type ResponseError = ();
     ///
     ///     // A read returns the underlying u64.
     ///     fn dispatch(
     ///         &self,
     ///         _op: Self::ReadOperation,
-    ///     ) -> Result<Self::Response, Self::ResponseError> {
-    ///         Ok(Some(self.junk))
+    ///     ) -> Self::Response {
+    ///         Some(self.junk)
     ///     }
     ///
     ///     // A write updates the underlying u64.
     ///     fn dispatch_mut(
     ///         &mut self,
     ///         op: Self::WriteOperation,
-    ///     ) -> Result<Self::Response, Self::ResponseError> {
+    ///     ) -> Self::Response {
     ///         self.junk = op;
-    ///         Ok(None)
+    ///         None
     ///     }
     /// }
     ///
@@ -169,23 +162,27 @@ where
                 combiner: CachePadded::new(AtomicUsize::new(0)),
                 next: CachePadded::new(AtomicUsize::new(1)),
                 contexts: Vec::with_capacity(MAX_THREADS_PER_REPLICA),
-                buffer: RefCell::new(Vec::with_capacity(
-                    MAX_THREADS_PER_REPLICA
-                        * Context::<
-                            <D as Dispatch>::WriteOperation,
-                            <D as Dispatch>::Response,
-                            <D as Dispatch>::ResponseError,
-                        >::batch_size(),
-                )),
+                buffer:
+                    RefCell::new(
+                        Vec::with_capacity(
+                            MAX_THREADS_PER_REPLICA
+                                * Context::<
+                                    <D as Dispatch>::WriteOperation,
+                                    <D as Dispatch>::Response,
+                                >::batch_size(),
+                        ),
+                    ),
                 inflight: RefCell::new(arr![Default::default(); 256]),
-                result: RefCell::new(Vec::with_capacity(
-                    MAX_THREADS_PER_REPLICA
-                        * Context::<
-                            <D as Dispatch>::WriteOperation,
-                            <D as Dispatch>::Response,
-                            <D as Dispatch>::ResponseError,
-                        >::batch_size(),
-                )),
+                result:
+                    RefCell::new(
+                        Vec::with_capacity(
+                            MAX_THREADS_PER_REPLICA
+                                * Context::<
+                                    <D as Dispatch>::WriteOperation,
+                                    <D as Dispatch>::Response,
+                                >::batch_size(),
+                        ),
+                    ),
                 slog: log.clone(),
                 data: CachePadded::new(RwLock::<D>::default()),
             });
@@ -224,21 +221,20 @@ where
     ///     type ReadOperation = ();
     ///     type WriteOperation = u64;
     ///     type Response = Option<u64>;
-    ///     type ResponseError = ();
     ///
     ///     fn dispatch(
     ///         &self,
     ///         _op: Self::ReadOperation,
-    ///     ) -> Result<Self::Response, Self::ResponseError> {
-    ///         Ok(Some(self.junk))
+    ///     ) -> Self::Response {
+    ///         Some(self.junk)
     ///     }
     ///
     ///     fn dispatch_mut(
     ///         &mut self,
     ///         op: Self::WriteOperation,
-    ///     ) -> Result<Self::Response, Self::ResponseError> {
+    ///     ) -> Self::Response {
     ///         self.junk = op;
-    ///         Ok(None)
+    ///         None
     ///     }
     /// }
     ///
@@ -287,21 +283,20 @@ where
     ///     type ReadOperation = ();
     ///     type WriteOperation = u64;
     ///     type Response = Option<u64>;
-    ///     type ResponseError = ();
     ///
     ///     fn dispatch(
     ///         &self,
     ///         _op: Self::ReadOperation,
-    ///     ) -> Result<Self::Response, Self::ResponseError> {
-    ///         Ok(Some(self.junk))
+    ///     ) -> Self::Response {
+    ///         Some(self.junk)
     ///     }
     ///
     ///     fn dispatch_mut(
     ///         &mut self,
     ///         op: Self::WriteOperation,
-    ///     ) -> Result<Self::Response, Self::ResponseError> {
+    ///     ) -> Self::Response {
     ///         self.junk = op;
-    ///         Ok(None)
+    ///         None
     ///     }
     /// }
     ///
@@ -311,12 +306,12 @@ where
     ///
     /// // execute_mut() can be used to write to the replicated data structure.
     /// let res = replica.execute_mut(100, idx);
-    /// assert_eq!(Ok(None), res);
+    /// assert_eq!(None, res);
     pub fn execute_mut(
         &self,
         op: <D as Dispatch>::WriteOperation,
         idx: usize,
-    ) -> Result<<D as Dispatch>::Response, <D as Dispatch>::ResponseError> {
+    ) -> <D as Dispatch>::Response {
         // Enqueue the operation onto the thread local batch and then try to flat combine.
         while !self.make_pending(op.clone(), idx) {}
         self.try_combine(idx);
@@ -346,21 +341,20 @@ where
     ///     type ReadOperation = ();
     ///     type WriteOperation = u64;
     ///     type Response = Option<u64>;
-    ///     type ResponseError = ();
     ///
     ///     fn dispatch(
     ///         &self,
     ///         _op: Self::ReadOperation,
-    ///     ) -> Result<Self::Response, Self::ResponseError> {
-    ///         Ok(Some(self.junk))
+    ///     ) -> Self::Response {
+    ///         Some(self.junk)
     ///     }
     ///
     ///     fn dispatch_mut(
     ///         &mut self,
     ///         op: Self::WriteOperation,
-    ///     ) -> Result<Self::Response, Self::ResponseError> {
+    ///     ) -> Self::Response {
     ///         self.junk = op;
-    ///         Ok(None)
+    ///         None
     ///     }
     /// }
     ///
@@ -371,21 +365,18 @@ where
     ///
     /// // execute() can be used to read from the replicated data structure.
     /// let res = replica.execute((), idx);
-    /// assert_eq!(Ok(Some(100)), res);
+    /// assert_eq!(Some(100), res);
     pub fn execute(
         &self,
         op: <D as Dispatch>::ReadOperation,
         idx: usize,
-    ) -> Result<<D as Dispatch>::Response, <D as Dispatch>::ResponseError> {
+    ) -> <D as Dispatch>::Response {
         self.read_only(op, idx)
     }
 
     /// Busy waits until a response is available within the thread's context.
     /// `idx` identifies this thread.
-    fn get_response(
-        &self,
-        idx: usize,
-    ) -> Result<<D as Dispatch>::Response, <D as Dispatch>::ResponseError> {
+    fn get_response(&self, idx: usize) -> <D as Dispatch>::Response {
         let mut iter = 0;
         let interval = 1 << 29;
 
@@ -425,9 +416,8 @@ where
 
         let mut data = self.data.write(self.next.load(Ordering::Relaxed));
 
-        let mut f = |o: <D as Dispatch>::WriteOperation, _i: usize| match data.dispatch_mut(o) {
-            Ok(_) => {}
-            Err(_) => error!("Error in operation dispatch"),
+        let mut f = |o: <D as Dispatch>::WriteOperation, _i: usize| {
+            data.dispatch_mut(o);
         };
 
         self.slog.exec(self.idx, &mut f);
@@ -460,7 +450,7 @@ where
         &self,
         op: <D as Dispatch>::ReadOperation,
         tid: usize,
-    ) -> Result<<D as Dispatch>::Response, <D as Dispatch>::ResponseError> {
+    ) -> <D as Dispatch>::Response {
         // We can perform the read only if our replica is synced up against
         // the shared log. If it isn't, then try to combine until it is synced up.
         let ctail = self.slog.get_ctail();
@@ -583,20 +573,13 @@ mod test {
     impl Dispatch for Data {
         type ReadOperation = u64;
         type WriteOperation = u64;
-        type Response = u64;
-        type ResponseError = ();
+        type Response = Result<u64, ()>;
 
-        fn dispatch(
-            &self,
-            _op: Self::ReadOperation,
-        ) -> Result<Self::Response, Self::ResponseError> {
+        fn dispatch(&self, _op: Self::ReadOperation) -> Self::Response {
             Ok(self.junk)
         }
 
-        fn dispatch_mut(
-            &mut self,
-            _op: Self::WriteOperation,
-        ) -> Result<Self::Response, Self::ResponseError> {
+        fn dispatch_mut(&mut self, _op: Self::WriteOperation) -> Self::Response {
             self.junk += 1;
             return Ok(107);
         }
@@ -613,12 +596,12 @@ mod test {
         assert_eq!(repl.contexts.len(), MAX_THREADS_PER_REPLICA);
         assert_eq!(
             repl.buffer.borrow().capacity(),
-            MAX_THREADS_PER_REPLICA * Context::<u64, u64, ()>::batch_size()
+            MAX_THREADS_PER_REPLICA * Context::<u64, Result<u64, ()>>::batch_size()
         );
         assert_eq!(repl.inflight.borrow().len(), MAX_THREADS_PER_REPLICA);
         assert_eq!(
             repl.result.borrow().capacity(),
-            MAX_THREADS_PER_REPLICA * Context::<u64, u64, ()>::batch_size()
+            MAX_THREADS_PER_REPLICA * Context::<u64, Result<u64, ()>>::batch_size()
         );
         assert_eq!(repl.data.read(0).junk, 0);
     }
@@ -663,7 +646,7 @@ mod test {
     fn test_replica_make_pending_false() {
         let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new(1024));
         let repl = Replica::<Data>::new(&slog);
-        for _i in 0..Context::<u64, u64, ()>::batch_size() {
+        for _i in 0..Context::<u64, Result<u64, ()>>::batch_size() {
             assert!(repl.make_pending(121, 1))
         }
 

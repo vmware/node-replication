@@ -9,14 +9,14 @@ use node_replication::Log;
 use node_replication::Replica;
 
 /// We support mutable push and pop operations on the stack.
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Clone, Debug, PartialEq)]
 enum Modify {
     Push(u32),
     Pop,
 }
 
 /// We support an immutable read operation to peek the stack.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 enum Access {
     Peek,
 }
@@ -53,27 +53,23 @@ impl Default for Stack {
 impl Dispatch for Stack {
     type ReadOperation = Access;
     type WriteOperation = Modify;
-    type Response = u32;
-    type ResponseError = ();
+    type Response = Option<u32>;
 
     /// The `dispatch` function applies the immutable operations.
-    fn dispatch(&self, op: Self::ReadOperation) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
         match op {
-            Access::Peek => self.storage.last().cloned().ok_or(()),
+            Access::Peek => self.storage.last().cloned(),
         }
     }
 
     /// The `dispatch_mut` function applies the mutable operations.
-    fn dispatch_mut(
-        &mut self,
-        op: Self::WriteOperation,
-    ) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch_mut(&mut self, op: Self::WriteOperation) -> Self::Response {
         match op {
             Modify::Push(v) => {
                 self.storage.push(v);
-                return Ok(v);
+                return None;
             }
-            Modify::Pop => return self.storage.pop().ok_or(()),
+            Modify::Pop => return self.storage.pop(),
         }
     }
 }
@@ -106,19 +102,26 @@ fn main() {
     // Finally, we spawn three threads that issue operations, thread 1 and 2
     // will use replica1 and thread 3 will use replica 2:
     let replica11 = replica1.clone();
-    std::thread::spawn(move || {
+
+    let mut threads = Vec::with_capacity(3);
+    threads.push(std::thread::spawn(move || {
         let ridx = replica11.register().expect("Unable to register with log");
         thread_loop(&replica11, ridx);
-    });
+    }));
 
     let replica12 = replica1.clone();
-    std::thread::spawn(move || {
+    threads.push(std::thread::spawn(move || {
         let ridx = replica12.register().expect("Unable to register with log");
         thread_loop(&replica12, ridx);
-    });
+    }));
 
-    std::thread::spawn(move || {
+    threads.push(std::thread::spawn(move || {
         let ridx = replica2.register().expect("Unable to register with log");
         thread_loop(&replica2, ridx);
-    });
+    }));
+
+    // Wait for all the threads to finish
+    for thread in threads {
+        thread.join().unwrap();
+    }
 }

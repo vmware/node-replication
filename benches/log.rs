@@ -34,16 +34,12 @@ impl Dispatch for Nop {
     type ReadOperation = ();
     type WriteOperation = usize;
     type Response = ();
-    type ResponseError = ();
 
-    fn dispatch(&self, _op: Self::ReadOperation) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch(&self, _op: Self::ReadOperation) -> Self::Response {
         unreachable!();
     }
 
-    fn dispatch_mut(
-        &mut self,
-        _op: Self::WriteOperation,
-    ) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch_mut(&mut self, _op: Self::WriteOperation) -> Self::Response {
         unreachable!();
     }
 }

@@ -16,13 +16,13 @@ struct NrHashMap {
 }
 
 /// We support mutable put operation on the hashmap.
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Clone, Debug, PartialEq)]
 enum Modify {
     Put(u64, u64),
 }
 
 /// We support an immutable read operation to lookup a key from the hashmap.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 enum Access {
     Get(u64),
 }
@@ -34,22 +34,18 @@ impl Dispatch for NrHashMap {
     type ReadOperation = Access;
     type WriteOperation = Modify;
     type Response = Option<u64>;
-    type ResponseError = ();
 
     /// The `dispatch` function applies the immutable operations.
-    fn dispatch(&self, op: Self::ReadOperation) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
         match op {
-            Access::Get(key) => Ok(self.storage.get(&key).map(|v| *v)),
+            Access::Get(key) => self.storage.get(&key).map(|v| *v),
         }
     }
 
     /// The `dispatch_mut` function applies the mutable operations.
-    fn dispatch_mut(
-        &mut self,
-        op: Self::WriteOperation,
-    ) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch_mut(&mut self, op: Self::WriteOperation) -> Self::Response {
         match op {
-            Modify::Put(key, value) => Ok(self.storage.insert(key, value)),
+            Modify::Put(key, value) => self.storage.insert(key, value),
         }
     }
 }
@@ -74,7 +70,7 @@ fn main() {
                 0 => replica.execute_mut(Modify::Put(i, i + 1), ridx),
                 1 => {
                     let response = replica.execute(Access::Get(i - 1), ridx);
-                    assert_eq!(response, Ok(Some(i)));
+                    assert_eq!(response, Some(i));
                     response
                 }
                 _ => unreachable!(),

@@ -499,10 +499,9 @@ struct VSpaceDispatcher {
 impl Dispatch for VSpaceDispatcher {
     type ReadOperation = OpcodeRd;
     type WriteOperation = OpcodeWr;
-    type Response = (u64, u64);
-    type ResponseError = VSpaceError;
+    type Response = Result<(u64, u64), VSpaceError>;
 
-    fn dispatch(&self, op: Self::ReadOperation) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
         match op {
             OpcodeRd::Identify(base) => {
                 let paddr = self.vspace.resolve_addr(VAddr::from(base));
@@ -511,10 +510,7 @@ impl Dispatch for VSpaceDispatcher {
         }
     }
 
-    fn dispatch_mut(
-        &mut self,
-        op: Self::WriteOperation,
-    ) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch_mut(&mut self, op: Self::WriteOperation) -> Self::Response {
         match op {
             OpcodeWr::Map(vbase, length, rights, pbase) => {
                 let (retaddr, len) = self.vspace.map_new(vbase, length, rights, pbase)?;
