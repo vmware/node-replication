@@ -25,7 +25,7 @@ use std::time::{Duration, Instant};
 
 use csv::WriterBuilder;
 use log::*;
-use node_replication::{log::Log, replica::Replica, Dispatch};
+use node_replication::{Dispatch, Log, Replica};
 use rand::seq::SliceRandom;
 use rand::{rngs::SmallRng, Rng, SeedableRng};
 use serde::Serialize;
