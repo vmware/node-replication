@@ -98,8 +98,8 @@ dashmap, flurry), a HashMap protected by an `RwLock` (`std`), and
 
 The figures show a benchmark using hash tables pre-filled with 67M entires (8
 byte keys and values) and uses a uniform key distribution for operations. On the
-left graphs, different write ratios (0%, 10% and 80%) are shown, and the right
-graph we vary the write ratio (x-axis) with 192 threads. The system has 4 NUMA
+left graphs, different write ratios (0%, 10% and 80%) are shown. On the right
+graph, we vary the write ratio (x-axis) with 192 threads. The system has 4 NUMA
 nodes, so it uses 4 replicas (at `x=96`, a replica gets added every 24 cores).
 After `x=96`, the remaining hyper-threads are used.
 
