@@ -67,8 +67,8 @@ The full example (using `HashMap` as the underlying data-structure) can be found
 ## How does it perform
 
 The library often makes your single-threaded implementation work better than, or
-is competitive with fine-grained locking or lock free implementations of the
-same data-structure.
+competitive with fine-grained locking or lock free implementations of the same
+data-structure.
 
 It works especially well if
 
