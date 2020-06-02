@@ -11,40 +11,42 @@ two techniques: operation logging and flat combining.
 ## How does it work
 
 To replicate a single-threaded data structure, one needs to implement `Dispatch`
-(from node-replication). The full example (using `Vec` as the underlying
-data-structure) can be found [here](examples/stack.rs). To run, execute:
-`cargo run --example stack`
+(from node-replication). The full example (using `HashMap` as the underlying
+data-structure) can be found [here](examples/hashmap.rs). To run, execute:
+`cargo run --example hashmap`
 
 ```rust
-/// The actual stack, it uses a single-threaded Vec.
-struct Stack {
-    storage: Vec<u32>,
+/// The node-replicated hashmap uses a std hashmap internally.
+#[derive(Default)]
+struct NrHashMap {
+    storage: HashMap<u64, u64>,
 }
 
-/// We support mutable push and pop operations on the stack.
+/// We support mutable put operation on the hashmap.
+#[derive(Debug, PartialEq, Clone)]
 enum Modify {
-    Push(u32),
-    Pop,
+    Put(u64, u64),
 }
 
-/// We support an immutable read operation to peek the stack.
+/// We support an immutable read operation to lookup a key from the hashmap.
+#[derive(Debug, Clone, PartialEq)]
 enum Access {
-    Peek,
+    Get(u64),
 }
 
 /// The Dispatch traits executes `ReadOperation` (our Access enum)
 /// and `WriteOperation` (our `Modify` enum) against the replicated
 /// data-structure.
-impl Dispatch for Stack {
+impl Dispatch for NrHashMap {
     type ReadOperation = Access;
     type WriteOperation = Modify;
-    type Response = u32;
+    type Response = Option<u64>;
     type ResponseError = ();
 
     /// The `dispatch` function applies the immutable operations.
     fn dispatch(&self, op: Self::ReadOperation) -> Result<Self::Response, Self::ResponseError> {
         match op {
-            Access::Peek => self.storage.last().cloned().ok_or(()),
+            Access::Get(key) => Ok(self.storage.get(&key).map(|v| *v)),
         }
     }
 
@@ -54,11 +56,7 @@ impl Dispatch for Stack {
         op: Self::WriteOperation,
     ) -> Result<Self::Response, Self::ResponseError> {
         match op {
-            Modify::Push(v) => {
-                self.storage.push(v);
-                return Ok(v);
-            }
-            Modify::Pop => return self.storage.pop().ok_or(()),
+            Modify::Put(key, value) => Ok(self.storage.insert(key, value)),
         }
     }
 }

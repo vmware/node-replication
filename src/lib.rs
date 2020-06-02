@@ -8,41 +8,42 @@
 //!
 //! # How does it work
 //! To replicate a single-threaded data structure, one needs to implement [Dispatch](trait.Dispatch.html) trait.
-//! The following example uses hashmap as an example.
+//! The following code uses hashmap as an example, and full working code can be found
+//! [here](https://github.com/vmware/node-replication/tree/master/examples/hashmap.rs).
 //! ```
 //! use node_replication::Dispatch;
 //! use std::collections::HashMap;
 //!
-//! /// The single-threaded NrHashMap which internally uses std HashMap.
+//! /// The node-replicated hashmap uses a std hashmap internally.
 //! pub struct NrHashMap {
 //!    storage: HashMap<u64, u64>,
 //! }
 //!
-//! /// We support mutable Put() operation on the NrHashMap.
-//! #[derive(Debug, Eq, PartialEq, Clone)]
-//! pub enum OpWr {
+//! /// We support mutable put operation on the hashmap.
+//! #[derive(Debug, PartialEq, Clone)]
+//! pub enum Modify {
 //!    Put(u64, u64),
 //! }
 //!
-//! /// We support immutable Get() operation on the NrHashMap.
-//! #[derive(Debug, Eq, PartialEq, Clone)]
-//! pub enum OpRd {
+//! /// We support an immutable read operation to lookup a key from the hashmap.
+//! #[derive(Debug, PartialEq, Clone)]
+//! pub enum Access {
 //!    Get(u64),
 //! }
 //!
-//! /// The Dispatch traits executes `ReadOperation` (our OpRd enum)
-//! /// and `WriteOperation` (our `OpWr` enum) against the replicated
+//! /// The Dispatch traits executes `ReadOperation` (our Access enum)
+//! /// and `WriteOperation` (our Modify enum) against the replicated
 //! /// data-structure.
 //! impl Dispatch for NrHashMap {
-//!    type ReadOperation = OpRd;
-//!    type WriteOperation = OpWr;
+//!    type ReadOperation = Access;
+//!    type WriteOperation = Modify;
 //!    type Response = Option<u64>;
 //!    type ResponseError = ();
 //!
 //!    /// The `dispatch` function applies the immutable operations.
 //!    fn dispatch(&self, op: Self::ReadOperation) -> Result<Self::Response, Self::ResponseError> {
 //!        match op {
-//!            OpRd::Get(key) => Ok(self.storage.get(&key).map(|v| *v)),
+//!            Access::Get(key) => Ok(self.storage.get(&key).map(|v| *v)),
 //!        }
 //!    }
 //!
@@ -52,7 +53,7 @@
 //!        op: Self::WriteOperation,
 //!    ) -> Result<Self::Response, Self::ResponseError> {
 //!        match op {
-//!            OpWr::Put(key, value) => Ok(self.storage.insert(key, value)),
+//!            Modify::Put(key, value) => Ok(self.storage.insert(key, value)),
 //!        }
 //!    }
 //! }
