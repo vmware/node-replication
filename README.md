@@ -6,7 +6,7 @@ Architectures](https://dl.acm.org/citation.cfm?id=3037721).
 This library can be used to implement a concurrent version of any single
 threaded data structure: It takes in a single threaded implementation of said
 data structure, and scales it out to multiple cores and NUMA nodes by combining
-two techniques: operation logging and flat combining.
+three techniques: readers-writer locks, operation logging and flat combining.
 
 ## How does it work
 
