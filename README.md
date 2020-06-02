@@ -16,13 +16,13 @@ data-structure) can be found [here](examples/hashmap.rs). To run, execute:
 `cargo run --example hashmap`
 
 ```rust
-/// The node-replicated hashmap uses a std hashmap internally.
+/// The node-replicated hashmap uses just a single-threaded std HashMap.
 #[derive(Default)]
 struct NrHashMap {
     storage: HashMap<u64, u64>,
 }
 
-/// We support mutable put operation on the hashmap.
+/// We support mutable put operations on the hashmap.
 #[derive(Debug, PartialEq, Clone)]
 enum Modify {
     Put(u64, u64),
@@ -65,8 +65,8 @@ impl Dispatch for NrHashMap {
 ## How does it perform
 
 The library often makes your single-threaded implementation work better than, or
-competitive with fine-grained locking or lock free implementations of the same
-data-structure.
+is competitive with fine-grained locking or lock free implementations of the
+same data-structure.
 
 It works especially well if
 
@@ -79,8 +79,9 @@ It works especially well if
   memory foot-print is multiplied with the amount of NUMA nodes in the system).
 
 As an example, the following benchmark uses Rust's single-threaded hash table
-from `std` with node-replication (`nr`) and compares it against concurrent hash table
-implementations from crates.io and [urcu](https://liburcu.org/).
+from `std` with node-replication (`nr`) and compares it against concurrent hash
+table implementations from [crates.io](https://crates.io) and
+[urcu](https://liburcu.org/).
 
 <table>
   <tr>
@@ -94,10 +95,10 @@ implementations from crates.io and [urcu](https://liburcu.org/).
 
 The figures show a benchmark using hash tables pre-filled with 67M entires (8
 byte keys and values) and uses a uniform key distribution for operations. On the
-first graph, the write ratios 0%, 10% and 80% are shown, and the second graph
-shows different write ratios (x-axis) with 192 threads. The system has 4 NUMA
+left graphs, different write ratios (0%, 10% and 80%) are shown, and the right
+graph we vary the write ratio (x-axis) with 192 threads. The system has 4 NUMA
 nodes, so it uses 4 replicas (at `x=96`, a replica gets added every 24 cores).
-After `x=96` hyper-threads are used.
+After `x=96`, the remaining hyper-threads are used.
 
 ## Compile the library
 
