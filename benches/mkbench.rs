@@ -79,7 +79,7 @@ pub trait ReplicaTrait {
     ) -> Result<<Self::D as Dispatch>::Response, <Self::D as Dispatch>::ResponseError>;
 }
 
-impl<'a, T: Dispatch + Sync + Default> ReplicaTrait for node_replication::replica::Replica<'a, T> {
+impl<'a, T: Dispatch + Sync + Default> ReplicaTrait for Replica<'a, T> {
     type D = T;
 
     fn new_arc(log: &Arc<Log<'static, <Self::D as Dispatch>::WriteOperation>>) -> Arc<Self> {
