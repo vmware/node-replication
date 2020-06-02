@@ -16,6 +16,31 @@ use super::log::Log;
 use super::rwlock::RwLock;
 use super::Dispatch;
 
+/// A token handed out to threads registered with replicas.
+///
+/// # Note
+/// Ideally this would be an affine type and returned again by
+/// `execute` and `execute_ro`. However it feels like this would
+/// hurt API ergonomics a lot.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct ReplicaToken(usize);
+
+/// To make it harder to use the same ReplicaToken on multiple threads.
+impl !Send for ReplicaToken {}
+
+impl ReplicaToken {
+    /// Creates a new ReplicaToken
+    ///
+    /// # Safety
+    /// This should only ever be used for the benchmark harness to create
+    /// additional fake replica implementations.
+    /// If we had a means to declare this not-pub we should do that instead.
+    #[doc(hidden)]
+    pub unsafe fn new(ident: usize) -> Self {
+        ReplicaToken(ident)
+    }
+}
+
 /// The maximum number of threads that can be registered with a replica. If more than
 /// this number of threads try to register, the register() function will return None.
 ///
@@ -245,7 +270,7 @@ where
     /// // operations against the replica.
     /// let idx = replica.register().expect("Failed to register with replica.");
     /// ```
-    pub fn register(&self) -> Option<usize> {
+    pub fn register(&self) -> Option<ReplicaToken> {
         // Loop until we either run out of identifiers or we manage to increment `next`.
         loop {
             let idx = self.next.load(Ordering::SeqCst);
@@ -258,7 +283,7 @@ where
                 continue;
             };
 
-            return Some(idx);
+            return Some(ReplicaToken(idx));
         }
     }
 
@@ -310,14 +335,14 @@ where
     pub fn execute_mut(
         &self,
         op: <D as Dispatch>::WriteOperation,
-        idx: usize,
+        idx: ReplicaToken,
     ) -> <D as Dispatch>::Response {
         // Enqueue the operation onto the thread local batch and then try to flat combine.
-        while !self.make_pending(op.clone(), idx) {}
-        self.try_combine(idx);
+        while !self.make_pending(op.clone(), idx.0) {}
+        self.try_combine(idx.0);
 
         // Return the response to the caller function.
-        self.get_response(idx)
+        self.get_response(idx.0)
     }
 
     /// Executes a read-only operation against this replica and returns a response.
@@ -369,9 +394,9 @@ where
     pub fn execute(
         &self,
         op: <D as Dispatch>::ReadOperation,
-        idx: usize,
+        idx: ReplicaToken,
     ) -> <D as Dispatch>::Response {
-        self.read_only(op, idx)
+        self.read_only(op, idx.0)
     }
 
     /// Busy waits until a response is available within the thread's context.
@@ -611,10 +636,10 @@ mod test {
     fn test_replica_register() {
         let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new(1024));
         let repl = Replica::<Data>::new(&slog);
-        assert_eq!(repl.register(), Some(1));
+        assert_eq!(repl.register(), Some(ReplicaToken(1)));
         assert_eq!(repl.next.load(Ordering::SeqCst), 2);
         repl.next.store(17, Ordering::SeqCst);
-        assert_eq!(repl.register(), Some(17));
+        assert_eq!(repl.register(), Some(ReplicaToken(17)));
         assert_eq!(repl.next.load(Ordering::SeqCst), 18);
     }
 
@@ -702,9 +727,9 @@ mod test {
     fn test_replica_execute_combine() {
         let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
         let repl = Replica::<Data>::new(&slog);
-        let _idx = repl.register();
+        let idx = repl.register().unwrap();
 
-        assert_eq!(Ok(107), repl.execute_mut(121, 1));
+        assert_eq!(Ok(107), repl.execute_mut(121, idx));
         assert_eq!(1, repl.data.read(0).junk);
     }
 

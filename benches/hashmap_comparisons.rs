@@ -13,8 +13,7 @@ use std::sync::Arc;
 
 use urcu_sys;
 
-use node_replication::Dispatch;
-use node_replication::Log;
+use node_replication::{Dispatch, Log, ReplicaToken};
 
 use crate::mkbench::ReplicaTrait;
 
@@ -47,10 +46,10 @@ where
         })
     }
 
-    fn register_me(&self) -> Option<usize> {
+    fn register_me(&self) -> Option<ReplicaToken> {
         let r = self.registered.compare_and_swap(0, 1, Ordering::SeqCst);
         if r == 0 {
-            Some(0)
+            Some(unsafe { ReplicaToken::new(0) })
         } else {
             // Can't register more than one thread on partitioned DS
             None
@@ -64,14 +63,16 @@ where
     fn exec(
         &self,
         op: <Self::D as Dispatch>::WriteOperation,
-        idx: usize,
+        idx: ReplicaToken,
     ) -> <Self::D as Dispatch>::Response {
-        debug_assert_eq!(idx, 0);
         unsafe { (&mut *self.data_structure.get()).dispatch_mut(op) }
     }
 
-    fn exec_ro(&self, op: <T as Dispatch>::ReadOperation, idx: usize) -> <T as Dispatch>::Response {
-        debug_assert_eq!(idx, 0);
+    fn exec_ro(
+        &self,
+        op: <T as Dispatch>::ReadOperation,
+        _idx: ReplicaToken,
+    ) -> <T as Dispatch>::Response {
         unsafe { (&*self.data_structure.get()).dispatch(op) }
     }
 }
@@ -104,8 +105,9 @@ where
         })
     }
 
-    fn register_me(&self) -> Option<usize> {
-        Some(self.registered.fetch_add(1, Ordering::SeqCst))
+    fn register_me(&self) -> Option<ReplicaToken> {
+        let rt = unsafe { ReplicaToken::new(self.registered.fetch_add(1, Ordering::SeqCst)) };
+        Some(rt)
     }
 
     fn sync_me<F: FnMut(<Self::D as Dispatch>::WriteOperation, usize)>(&self, _d: F) {
@@ -115,7 +117,7 @@ where
     fn exec(
         &self,
         _op: <Self::D as Dispatch>::WriteOperation,
-        _idx: usize,
+        _idx: ReplicaToken,
     ) -> <Self::D as Dispatch>::Response {
         unreachable!("All opertations must be read ops")
     }
@@ -123,7 +125,7 @@ where
     fn exec_ro(
         &self,
         op: <Self::D as Dispatch>::ReadOperation,
-        _idx: usize,
+        _idx: ReplicaToken,
     ) -> <Self::D as Dispatch>::Response {
         self.data_structure.dispatch(op)
     }

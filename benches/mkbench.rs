@@ -25,7 +25,7 @@ use std::time::{Duration, Instant};
 
 use csv::WriterBuilder;
 use log::*;
-use node_replication::{Dispatch, Log, Replica};
+use node_replication::{Dispatch, Log, Replica, ReplicaToken};
 use rand::seq::SliceRandom;
 use rand::{rngs::SmallRng, Rng, SeedableRng};
 use serde::Serialize;
@@ -47,7 +47,7 @@ pub const WARN_THRESHOLD: usize = 1 << 28;
 
 type BenchFn<R> = fn(
     crate::utils::ThreadId,
-    usize,
+    ReplicaToken,
     &Arc<Log<'static, <<R as ReplicaTrait>::D as Dispatch>::WriteOperation>>,
     &Arc<R>,
     &Operation<
@@ -62,20 +62,20 @@ pub trait ReplicaTrait {
 
     fn new_arc(log: &Arc<Log<'static, <Self::D as Dispatch>::WriteOperation>>) -> Arc<Self>;
 
-    fn register_me(&self) -> Option<usize>;
+    fn register_me(&self) -> Option<ReplicaToken>;
 
     fn sync_me<F: FnMut(<Self::D as Dispatch>::WriteOperation, usize)>(&self, d: F);
 
     fn exec(
         &self,
         op: <Self::D as Dispatch>::WriteOperation,
-        idx: usize,
+        idx: ReplicaToken,
     ) -> <Self::D as Dispatch>::Response;
 
     fn exec_ro(
         &self,
         op: <Self::D as Dispatch>::ReadOperation,
-        idx: usize,
+        idx: ReplicaToken,
     ) -> <Self::D as Dispatch>::Response;
 }
 
@@ -90,14 +90,14 @@ impl<'a, T: Dispatch + Sync + Default> ReplicaTrait for Replica<'a, T> {
         self.sync(d);
     }
 
-    fn register_me(&self) -> Option<usize> {
+    fn register_me(&self) -> Option<ReplicaToken> {
         self.register()
     }
 
     fn exec(
         &self,
         op: <Self::D as Dispatch>::WriteOperation,
-        idx: usize,
+        idx: ReplicaToken,
     ) -> <Self::D as Dispatch>::Response {
         self.execute_mut(op, idx)
     }
@@ -105,7 +105,7 @@ impl<'a, T: Dispatch + Sync + Default> ReplicaTrait for Replica<'a, T> {
     fn exec_ro(
         &self,
         op: <Self::D as Dispatch>::ReadOperation,
-        idx: usize,
+        idx: ReplicaToken,
     ) -> <Self::D as Dispatch>::Response {
         self.execute(op, idx)
     }
@@ -596,9 +596,6 @@ where
                 let replica = replicas[rid].clone();
                 let f = self.f.clone();
                 let batch_size = self.batch_size;
-                let replica_token = replica
-                    .register_me()
-                    .expect("Can't register replica, out of slots?");
 
                 let (duration_tx, duration_rx) = channel();
                 self.cmd_channels.push(duration_tx);
@@ -615,6 +612,9 @@ where
 
                 self.handles.push(thread::spawn(move || {
                     utils::pin_thread(core_id);
+                    let replica_token = replica
+                        .register_me()
+                        .expect("Can't register replica, out of slots?");
                     // Copy the actual Vec<Operations> data within the thread
                     let mut operations = (*operations).clone();
                     operations.shuffle(&mut rand::rngs::SmallRng::from_entropy());
@@ -635,7 +635,7 @@ where
                         }
 
                         debug!(
-                            "Running {:?} on core {} replica#{} rtoken#{} for {:?}",
+                            "Running {:?} on core {} replica#{} rtoken#{:?} for {:?}",
                             thread::current().id(),
                             core_id,
                             rid,
@@ -682,7 +682,7 @@ where
                         }
 
                         debug!(
-                            "Completed {:?} on core {} replica#{} rtoken#{} did {} ops in {:?}",
+                            "Completed {:?} on core {} replica#{} rtoken#{:?} did {} ops in {:?}",
                             thread::current().id(),
                             core_id,
                             rid,

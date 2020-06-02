@@ -67,6 +67,7 @@
 #![feature(atomic_min_max)]
 #![feature(new_uninit)]
 #![feature(get_mut_unchecked)]
+#![feature(negative_impls)]
 
 #[cfg(test)]
 extern crate std;
@@ -88,7 +89,7 @@ mod replica;
 pub mod rwlock;
 
 pub use crate::log::Log;
-pub use replica::{Replica, MAX_THREADS_PER_REPLICA};
+pub use replica::{Replica, ReplicaToken, MAX_THREADS_PER_REPLICA};
 
 use core::fmt::Debug;
 

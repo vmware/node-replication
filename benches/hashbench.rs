@@ -17,9 +17,7 @@ use std::sync;
 use std::thread;
 use std::time;
 
-use node_replication::Dispatch;
-use node_replication::Log;
-use node_replication::Replica;
+use node_replication::{Dispatch, Log, Replica, ReplicaToken};
 
 use urcu_sys;
 
@@ -223,15 +221,21 @@ fn main() {
         let start = time::Instant::now();
         let end = start + dur;
         join.extend((0..readers).into_iter().map(|_| {
-            let replica = ReplicaAndToken::new(replica.clone());
+            let replica = replica.clone();
             let dist = dist.to_owned();
-            thread::spawn(move || drive(replica, end, dist, false, span))
+            thread::spawn(move || {
+                let replica = ReplicaAndToken::new(replica);
+                drive(replica, end, dist, false, span)
+            })
         }));
         join.extend((0..writers).into_iter().map(|_| {
-            let replica = ReplicaAndToken::new(replica.clone());
+            let replica = replica.clone();
             let dist = dist.to_owned();
 
-            thread::spawn(move || drive(replica, end, dist, true, span))
+            thread::spawn(move || {
+                let replica = ReplicaAndToken::new(replica);
+                drive(replica, end, dist, true, span)
+            })
         }));
         let (wres, rres): (Vec<_>, _) = join
             .drain(..)
@@ -428,7 +432,7 @@ impl Dispatch for NrHashMap {
 
 struct ReplicaAndToken<'a> {
     replica: sync::Arc<Replica<'a, NrHashMap>>,
-    token: usize,
+    token: ReplicaToken,
 }
 
 impl<'a> ReplicaAndToken<'a> {

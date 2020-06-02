@@ -332,10 +332,11 @@ fn parallel_push_sequential_pop_test() {
     // Verify by popping everything off all replicas:
     for i in 0..r {
         let replica = replicas[i].clone();
+        let token = replica.register().unwrap();
         for _j in 0..t {
             for _z in 0..nop {
-                replica.execute(OpRd::Peek, i + 1).unwrap();
-                replica.execute_mut(OpWr::Pop, i + 1).unwrap();
+                replica.execute(OpRd::Peek, token).unwrap();
+                replica.execute_mut(OpWr::Pop, token).unwrap();
             }
         }
     }
