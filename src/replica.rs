@@ -21,7 +21,7 @@ use super::Dispatch;
 ///
 /// # Important
 /// If this number is adjusted due to the use of the `arr_macro::arr` macro we
-/// have to adjust the `128` literals in the `new` constructor of `Replica`.
+/// have to adjust the `256` literals in the `new` constructor of `Replica`.
 pub const MAX_THREADS_PER_REPLICA: usize = 256;
 const_assert!(
     MAX_THREADS_PER_REPLICA >= 1 && (MAX_THREADS_PER_REPLICA & (MAX_THREADS_PER_REPLICA - 1) == 0)
