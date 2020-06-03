@@ -64,7 +64,7 @@ pub trait ReplicaTrait {
 
     fn register_me(&self) -> Option<ReplicaToken>;
 
-    fn sync_me<F: FnMut(<Self::D as Dispatch>::WriteOperation, usize)>(&self, d: F);
+    fn sync_me(&self, idx: ReplicaToken);
 
     fn exec(
         &self,
@@ -86,8 +86,8 @@ impl<'a, T: Dispatch + Sync + Default> ReplicaTrait for Replica<'a, T> {
         Self::new(log)
     }
 
-    fn sync_me<F: FnMut(<Self::D as Dispatch>::WriteOperation, usize)>(&self, mut d: F) {
-        self.sync(d);
+    fn sync_me(&self, idx: ReplicaToken) {
+        self.sync(idx);
     }
 
     fn register_me(&self) -> Option<ReplicaToken> {
@@ -705,6 +705,7 @@ where
                         } else if com[rid].fetch_add(1, Ordering::Relaxed) == num - 1 {
                             // Periodically sync/advance all, and return once all
                             // replicas have completed.
+                            let sync_thread = rmc.get(&rid).unwrap()[0];
                             loop {
                                 let mut done = 0; // How many replicas are done with the operations
                                 for (r, c) in rmc.clone().into_iter() {
@@ -716,10 +717,11 @@ where
                                     break;
                                 }
 
-                                // Consume the log but we don't apply operations anymore
-                                replica.sync_me(
-                                    |_o: <R::D as Dispatch>::WriteOperation, _r: usize| {},
-                                );
+                                if core_id == sync_thread {
+                                    replica.sync_me(replica_token);
+                                } else {
+                                    break;
+                                }
                             }
                         }
 

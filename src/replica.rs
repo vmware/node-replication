@@ -452,21 +452,16 @@ where
         self.combiner.store(0, Ordering::Release);
     }
 
-    /// Syncs up the replica against the underlying log and executes a passed in
-    /// closure against all consumed operations.
-    #[doc(hidden)]
-    pub fn sync<F: FnMut(<D as Dispatch>::WriteOperation, usize)>(&self, mut d: F) {
-        // Acquire the combiner lock before attempting anything on the data structure.
-        // Use an idx greater than the maximum that can be allocated.
-        while self
-            .combiner
-            .compare_and_swap(0, MAX_THREADS_PER_REPLICA + 2, Ordering::Acquire)
-            != 0
-        {}
-
-        self.slog.exec(self.idx, &mut d);
-
-        self.combiner.store(0, Ordering::Release);
+    /// This method is useful when a replica stops making progress and some threads
+    /// on another replica are still active. The active replica will use all the entries
+    /// in the log and won't be able perform garbage collection because of the inactive
+    /// replica. So, this method syncs up the replica against the underlying log.
+    pub fn sync(&self, idx: ReplicaToken) {
+        let ctail = self.slog.get_ctail();
+        while !self.slog.is_replica_synced_for_reads(self.idx, ctail) {
+            self.try_combine(idx.0);
+            spin_loop_hint();
+        }
     }
 
     /// Issues a read-only operation against the replica and returns a response.

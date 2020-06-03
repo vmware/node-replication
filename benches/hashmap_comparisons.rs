@@ -56,14 +56,14 @@ where
         }
     }
 
-    fn sync_me<F: FnMut(<Self::D as Dispatch>::WriteOperation, usize)>(&self, _d: F) {
+    fn sync_me(&self, _idx: ReplicaToken) {
         /* NOP */
     }
 
     fn exec(
         &self,
         op: <Self::D as Dispatch>::WriteOperation,
-        idx: ReplicaToken,
+        _idx: ReplicaToken,
     ) -> <Self::D as Dispatch>::Response {
         unsafe { (&mut *self.data_structure.get()).dispatch_mut(op) }
     }
@@ -110,7 +110,7 @@ where
         Some(rt)
     }
 
-    fn sync_me<F: FnMut(<Self::D as Dispatch>::WriteOperation, usize)>(&self, _d: F) {
+    fn sync_me(&self, _idx: ReplicaToken) {
         /* NOP */
     }
 
