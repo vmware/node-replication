@@ -102,8 +102,8 @@ After `x=96`, the remaining hyper-threads are used.
 ## Compile the library
 
 The library currently requires a nightly rust compiler (due to the use of
-`atomic_min_max`, `new_uninit`, and `get_mut_unchecked`, `negative_impls` API).
-The library works with `no_std`.
+`new_uninit`, and `get_mut_unchecked`, `negative_impls` API). The library works
+with `no_std`.
 
 ```bash
 rustup toolchain install nightly

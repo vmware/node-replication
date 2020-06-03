@@ -324,13 +324,18 @@ where
     /// l.append(&ops, idx, f);
     /// ```
     ///
-    /// If there isn't enough space
-    /// to perform the append, this method busy waits until the head is advanced.
-    /// Accepts a replica `idx`; all appended operations/entries will be marked
-    /// with this replica-identifier. Also accepts a closure `s`; when waiting for
-    /// GC, this closure is passed into exec() to ensure that this replica does'nt
-    /// cause a deadlock.
+    /// If there isn't enough space to perform the append, this method busy
+    /// waits until the head is advanced. Accepts a replica `idx`; all appended
+    /// operations/entries will be marked with this replica-identifier. Also
+    /// accepts a closure `s`; when waiting for GC, this closure is passed into
+    /// exec() to ensure that this replica does'nt cause a deadlock.
+    ///
+    /// # Note
+    /// Documentation for this function is hidden since `append` is currently not
+    /// intended as a public interface. It is marked as public due to being
+    /// used by the benchmarking code.
     #[inline(always)]
+    #[doc(hidden)]
     pub fn append<F: FnMut(T, usize)>(&self, ops: &[T], idx: usize, mut s: F) {
         let nops = ops.len();
         let mut iteration = 1;
@@ -459,7 +464,7 @@ where
     /// The passed in closure is expected to take in two arguments: The operation
     /// from the shared log to be executed and the replica that issued it.
     #[inline(always)]
-    pub fn exec<F: FnMut(T, usize)>(&self, idx: usize, d: &mut F) {
+    pub(crate) fn exec<F: FnMut(T, usize)>(&self, idx: usize, d: &mut F) {
         // Load the logical log offset from which we must execute operations.
         let l = self.ltails[idx - 1].load(Ordering::Relaxed);
 
@@ -657,13 +662,13 @@ where
     /// assert_eq!(true, l.is_replica_synced_for_reads(idx1, l.get_ctail()));
     /// ```
     #[inline(always)]
-    pub fn is_replica_synced_for_reads(&self, idx: usize, ctail: usize) -> bool {
+    pub(crate) fn is_replica_synced_for_reads(&self, idx: usize, ctail: usize) -> bool {
         self.ltails[idx - 1].load(Ordering::Relaxed) >= ctail
     }
 
     /// This method returns the current ctail value for the log.
     #[inline(always)]
-    pub fn get_ctail(&self) -> usize {
+    pub(crate) fn get_ctail(&self) -> usize {
         self.ctail.load(Ordering::Relaxed)
     }
 }
