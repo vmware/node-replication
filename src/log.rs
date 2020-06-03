@@ -269,7 +269,7 @@ where
     /// // to the log, and execute these operations.
     /// let idx = l.register().expect("Failed to register with the Log.");
     /// ```
-    pub fn register(&self) -> Option<usize> {
+    pub(crate) fn register(&self) -> Option<usize> {
         // Loop until we either run out of identifiers or we manage to increment `next`.
         loop {
             let n = self.next.load(Ordering::Relaxed);
