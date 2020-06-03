@@ -64,6 +64,7 @@
 //! }
 //! ```
 #![no_std]
+#![feature(atomic_min_max)]
 #![feature(new_uninit)]
 #![feature(get_mut_unchecked)]
 #![feature(negative_impls)]
