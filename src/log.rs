@@ -251,7 +251,7 @@ where
     ///
     /// # Example
     ///
-    /// ```
+    /// ```no-run
     /// use node_replication::Log;
     ///
     /// // Operation type that will go onto the log.
@@ -291,7 +291,7 @@ where
     ///
     /// # Example
     ///
-    /// ```
+    /// ```no-run
     /// use node_replication::Log;
     ///
     /// // Operation type that will go onto the log.
@@ -426,7 +426,7 @@ where
     ///
     /// # Example
     ///
-    /// ```
+    /// ```no-run
     /// use node_replication::Log;
     ///
     /// // Operation type that will go onto the log.
@@ -610,7 +610,7 @@ where
     ///
     /// # Example
     ///
-    /// ```
+    /// ```no-run
     /// use node_replication::Log;
     ///
     /// // Operation type that will go onto the log.
