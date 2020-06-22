@@ -109,7 +109,7 @@ pub trait Dispatch {
     /// A write operation. When executed against the data structure, an operation of
     /// this type is allowed to mutate state. The library ensures that this is done so
     /// in a thread-safe manner.
-    type WriteOperation: Sized + Clone + PartialEq + Debug + Send;
+    type WriteOperation: Sized + Clone + PartialEq + Debug + Send + Hash;
 
     /// The type on the value returned by the data structure when a `ReadOperation` or a
     /// `WriteOperation` successfully executes against it.
@@ -121,5 +121,5 @@ pub trait Dispatch {
 
     /// Method on the data structure that allows a write operation to be
     /// executed against it.
-    fn dispatch_mut(&mut self, op: Self::WriteOperation) -> Self::Response;
+    fn dispatch_mut(&self, op: Self::WriteOperation) -> Self::Response;
 }
