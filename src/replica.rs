@@ -524,6 +524,7 @@ where
     /// Performs one round of flat combining. Collects, appends and executes operations.
     #[inline(always)]
     fn combine(&self) {
+        //  TODO: may need to be in a per-log state context
         let mut buffer = self.buffer.borrow_mut();
         let mut operations = self.inflight.borrow_mut();
         let mut results = self.result.borrow_mut();
@@ -535,7 +536,8 @@ where
 
         // Collect operations from each thread registered with this replica.
         for i in 1..next {
-            operations[i - 1] = self.contexts[i - 1].ops(&mut buffer);
+            // pass hash of current op to contexts, only get ops from context that have the same hash/log id
+            operations[i - 1] = self.contexts[i - 1].ops(&mut buffer, hash);
         }
 
         // Append all collected operations into the shared log. We pass a closure
@@ -547,7 +549,7 @@ where
                     results.push(resp);
                 }
             };
-            self.slog.append(&buffer, self.idx, f);
+            self.slog[hash_idx].append(&buffer, self.idx, f);
         }
 
         // Execute any operations on the shared log against this replica.
@@ -559,11 +561,13 @@ where
                     results.push(resp)
                 };
             };
-            self.slog.exec(self.idx, &mut f);
+            self.slog[hashidx].exec(self.idx, &mut f);
         }
 
         // Return/Enqueue responses back into the appropriate thread context(s).
         let (mut s, mut f) = (0, 0);
+        // TODO: hashing makes this non-linear, need to take into account which operations
+        // belong to our current combiner round...
         for i in 1..next {
             if operations[i - 1] == 0 {
                 continue;
