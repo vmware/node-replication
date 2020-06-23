@@ -67,17 +67,32 @@ pub struct Replica<'a, D>
 where
     D: Sized + Default + Dispatch + Sync,
 {
+    /// Idx that will be handed out to the next thread that registers with the replica.
+    next: CachePadded<AtomicUsize>,
+    
+
+    /// Reference to the shared log that operations will be appended to and the
+    /// data structure will be updated from.
+    slog: Vec<Arc<Log<'a, <D as Dispatch>::WriteOperation>>>,
+
+    /// The underlying replicated data structure. Shared between threads registered
+    /// with this replica. Each replica maintains its own.
+    // TODO(nr2): Don't need RwLock anymore
+    data: CachePadded<RwLock<D>>,
+
+    
+    //
+    // Per-"ReplicaFlatCombiner":
+    //
+
     /// A replica-identifier received when the replica is registered against
     /// the shared-log. Required when consuming operations from the log.
     idx: usize,
-
+    
     /// Thread idx of the thread currently responsible for flat combining. Zero
     /// if there isn't any thread actively performing flat combining on the log.
     /// This also doubles up as the combiner lock.
     combiner: CachePadded<AtomicUsize>,
-
-    /// Idx that will be handed out to the next thread that registers with the replica.
-    next: CachePadded<AtomicUsize>,
 
     /// List of per-thread contexts. Threads buffer write operations in here when they
     /// cannot perform flat combining (because another thread might be doing so).
@@ -98,14 +113,6 @@ where
     /// A buffer of results collected after flat combining. With the help of `inflight`,
     /// the combiner enqueues these results into the appropriate thread context.
     result: RefCell<Vec<<D as Dispatch>::Response>>,
-
-    /// Reference to the shared log that operations will be appended to and the
-    /// data structure will be updated from.
-    slog: Arc<Log<'a, <D as Dispatch>::WriteOperation>>,
-
-    /// The underlying replicated data structure. Shared between threads registered
-    /// with this replica. Each replica maintains its own.
-    data: CachePadded<RwLock<D>>,
 }
 
 /// The Replica is Sync. Member variables are protected by a CAS on `combiner`.
@@ -175,7 +182,7 @@ where
     /// // Create a replica that uses the above log.
     /// let replica = Replica::<Data>::new(&log);
     /// ```
-    pub fn new<'b>(log: &Arc<Log<'b, <D as Dispatch>::WriteOperation>>) -> Arc<Replica<'b, D>> {
+    pub fn new<'b>(logs: Vec<Arc<Log<'b, <D as Dispatch>::WriteOperation>>>) -> Arc<Replica<'b, D>> {
         let mut uninit_replica: Arc<MaybeUninit<Replica<D>>> = Arc::new_zeroed();
 
         // This is the preferred but unsafe mode of initialization as it avoids
@@ -183,7 +190,7 @@ where
         unsafe {
             let uninit_ptr = Arc::get_mut_unchecked(&mut uninit_replica).as_mut_ptr();
             uninit_ptr.write(Replica {
-                idx: log.register().unwrap(),
+                idx: log.register().unwrap(), // TODO(nr2) register for all logs)
                 combiner: CachePadded::new(AtomicUsize::new(0)),
                 next: CachePadded::new(AtomicUsize::new(1)),
                 contexts: Vec::with_capacity(MAX_THREADS_PER_REPLICA),
@@ -445,7 +452,7 @@ where
             data.dispatch_mut(o);
         };
 
-        self.slog.exec(self.idx, &mut f);
+        self.slog[hashidx?].exec(self.idx, &mut f);
 
         v(&data);
 
