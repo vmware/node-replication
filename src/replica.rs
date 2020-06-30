@@ -179,7 +179,7 @@ where
     /// let log = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
     ///
     /// // Create a replica that uses the above log.
-    /// let replica = Replica::<Data>::new(&log);
+    /// let replica = Replica::<Data>::new(vec![log]);
     /// ```
     pub fn new<'b>(
         logs: Vec<Arc<Log<'b, <D as Dispatch>::WriteOperation>>>,
@@ -286,7 +286,7 @@ where
     /// }
     ///
     /// let log = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
-    /// let replica = Replica::<Data>::new(&log);
+    /// let replica = Replica::<Data>::new(vec![log]);
     ///
     /// // Calling register() returns an idx that can be used to execute
     /// // operations against the replica.
@@ -348,7 +348,7 @@ where
     /// }
     ///
     /// let log = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
-    /// let replica = Replica::<Data>::new(&log);
+    /// let replica = Replica::<Data>::new(vec![log]);
     /// let idx = replica.register().expect("Failed to register with replica.");
     ///
     /// // execute_mut() can be used to write to the replicated data structure.
@@ -370,7 +370,7 @@ where
         self.try_combine(idx.0, hash);
 
         // Return the response to the caller function.
-        self.get_response(idx.0)
+        self.get_response(idx.0, op)
     }
 
     /// Executes a read-only operation against this replica and returns a response.
@@ -412,7 +412,7 @@ where
     /// }
     ///
     /// let log = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
-    /// let replica = Replica::<Data>::new(&log);
+    /// let replica = Replica::<Data>::new(vec![log]);
     /// let idx = replica.register().expect("Failed to register with replica.");
     /// let _wr = replica.execute_mut(100, idx);
     ///
@@ -429,7 +429,11 @@ where
 
     /// Busy waits until a response is available within the thread's context.
     /// `idx` identifies this thread.
-    fn get_response(&self, idx: usize) -> <D as Dispatch>::Response {
+    fn get_response(
+        &self,
+        idx: usize,
+        op: <D as Dispatch>::WriteOperation,
+    ) -> <D as Dispatch>::Response {
         let mut iter = 0;
         let interval = 1 << 29;
 
@@ -444,7 +448,10 @@ where
             iter += 1;
 
             if iter == interval {
-                //self.try_combine(idx);
+                let mut hasher = DefaultHasher::new();
+                op.hash(&mut hasher);
+                let hash = hasher.finish() as usize;
+                self.try_combine(idx, hash);
                 iter = 0;
             }
         }
@@ -457,28 +464,27 @@ where
     ///
     /// # Note
     /// There is probably no need for a regular client to ever call this function.
+    /// TODO: find a way to pass hashidx here.
     #[doc(hidden)]
-    /*pub fn verify<F: FnMut(&D)>(&self, mut v: F) {
+    pub fn verify<F: FnMut(&D)>(&self, mut v: F) {
         // Acquire the combiner lock before attempting anything on the data structure.
         // Use an idx greater than the maximum that can be allocated.
-        while self
-            .combiner
-            .compare_and_swap(0, MAX_THREADS_PER_REPLICA + 2, Ordering::Acquire)
+        while self.combiners[0].compare_and_swap(0, MAX_THREADS_PER_REPLICA + 2, Ordering::Acquire)
             != 0
         {}
 
-        let mut data = self.data.write(self.next.load(Ordering::Relaxed));
+        let data = self.data.write(self.next.load(Ordering::Relaxed));
 
         let mut f = |o: <D as Dispatch>::WriteOperation, _i: usize| {
             data.dispatch_mut(o);
         };
 
-        self.slog[hashidx].exec(self.idx, &mut f);
+        self.slog[0].exec(self.idx[0], &mut f);
 
         v(&data);
 
-        self.combiner.store(0, Ordering::Release);
-    }*/
+        self.combiners[0].store(0, Ordering::Release);
+    }
 
     /// This method is useful when a replica stops making progress and some threads
     /// on another replica are still active. The active replica will use all the entries
@@ -627,20 +633,20 @@ mod test {
     // Really dumb data structure to test against the Replica and shared log.
     #[derive(Default)]
     struct Data {
-        junk: u64,
+        junk: AtomicUsize,
     }
 
     impl Dispatch for Data {
-        type ReadOperation = u64;
-        type WriteOperation = u64;
-        type Response = Result<u64, ()>;
+        type ReadOperation = usize;
+        type WriteOperation = usize;
+        type Response = Result<usize, ()>;
 
         fn dispatch(&self, _op: Self::ReadOperation) -> Self::Response {
-            Ok(self.junk)
+            Ok(self.junk.load(Ordering::Relaxed))
         }
 
-        fn dispatch_mut(&mut self, _op: Self::WriteOperation) -> Self::Response {
-            self.junk += 1;
+        fn dispatch_mut(&self, _op: Self::WriteOperation) -> Self::Response {
+            self.junk.fetch_add(1, Ordering::Relaxed);
             return Ok(107);
         }
     }
@@ -649,13 +655,13 @@ mod test {
     #[test]
     fn test_replica_create() {
         let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new(1024));
-        let repl = Replica::<Data>::new(&slog);
-        assert_eq!(repl.idx, 1);
-        assert_eq!(repl.combiner.load(Ordering::SeqCst), 0);
+        let repl = Replica::<Data>::new(vec![slog]);
+        assert_eq!(repl.idx[0], 1);
+        assert_eq!(repl.combiners[0].load(Ordering::SeqCst), 0);
         assert_eq!(repl.next.load(Ordering::SeqCst), 1);
         assert_eq!(repl.contexts.len(), MAX_THREADS_PER_REPLICA);
         assert_eq!(
-            repl.buffer.borrow().capacity(),
+            repl.buffer[0].borrow().capacity(),
             MAX_THREADS_PER_REPLICA * Context::<u64, Result<u64, ()>>::batch_size()
         );
         assert_eq!(repl.inflight.borrow().len(), MAX_THREADS_PER_REPLICA);
@@ -663,14 +669,14 @@ mod test {
             repl.result.borrow().capacity(),
             MAX_THREADS_PER_REPLICA * Context::<u64, Result<u64, ()>>::batch_size()
         );
-        assert_eq!(repl.data.read(0).junk, 0);
+        assert_eq!(repl.data.read(0).junk.load(Ordering::Relaxed), 0);
     }
 
     // Tests whether we can register with this replica and receive an idx.
     #[test]
     fn test_replica_register() {
         let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new(1024));
-        let repl = Replica::<Data>::new(&slog);
+        let repl = Replica::<Data>::new(vec![slog]);
         assert_eq!(repl.register(), Some(ReplicaToken(1)));
         assert_eq!(repl.next.load(Ordering::SeqCst), 2);
         repl.next.store(17, Ordering::SeqCst);
@@ -682,7 +688,7 @@ mod test {
     #[test]
     fn test_replica_register_none() {
         let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new(1024));
-        let repl = Replica::<Data>::new(&slog);
+        let repl = Replica::<Data>::new(vec![slog]);
         repl.next
             .store(MAX_THREADS_PER_REPLICA + 1, Ordering::SeqCst);
         assert!(repl.register().is_none());
@@ -692,11 +698,11 @@ mod test {
     #[test]
     fn test_replica_make_pending() {
         let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new(1024));
-        let repl = Replica::<Data>::new(&slog);
+        let repl = Replica::<Data>::new(vec![slog]);
         let mut o = vec![];
 
-        assert!(repl.make_pending(121, 8));
-        assert_eq!(repl.contexts[7].ops(&mut o), 1);
+        assert!(repl.make_pending(121, 8, 0));
+        assert_eq!(repl.contexts[7].ops(&mut o, 0), 1);
         assert_eq!(o.len(), 1);
         assert_eq!(o[0], 121);
     }
@@ -705,26 +711,26 @@ mod test {
     #[test]
     fn test_replica_make_pending_false() {
         let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new(1024));
-        let repl = Replica::<Data>::new(&slog);
+        let repl = Replica::<Data>::new(vec![slog]);
         for _i in 0..Context::<u64, Result<u64, ()>>::batch_size() {
-            assert!(repl.make_pending(121, 1))
+            assert!(repl.make_pending(121, 1, 0))
         }
 
-        assert!(!repl.make_pending(11, 1));
+        assert!(!repl.make_pending(11, 1, 0));
     }
 
     // Tests that we can append and execute operations using try_combine().
     #[test]
     fn test_replica_try_combine() {
         let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
-        let repl = Replica::<Data>::new(&slog);
+        let repl = Replica::<Data>::new(vec![slog]);
         let _idx = repl.register();
 
-        repl.make_pending(121, 1);
-        repl.try_combine(1);
+        repl.make_pending(121, 1, 0);
+        repl.try_combine(1, 0);
 
-        assert_eq!(repl.combiner.load(Ordering::SeqCst), 0);
-        assert_eq!(repl.data.read(0).junk, 1);
+        assert_eq!(repl.combiners[0].load(Ordering::SeqCst), 0);
+        assert_eq!(repl.data.read(0).junk.load(Ordering::Relaxed), 1);
         assert_eq!(repl.contexts[0].res(), Some(Ok(107)));
     }
 
@@ -732,13 +738,13 @@ mod test {
     #[test]
     fn test_replica_try_combine_pending() {
         let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
-        let repl = Replica::<Data>::new(&slog);
+        let repl = Replica::<Data>::new(vec![slog]);
 
         repl.next.store(9, Ordering::SeqCst);
-        repl.make_pending(121, 8);
-        repl.try_combine(1);
+        repl.make_pending(121, 8, 0);
+        repl.try_combine(1, 0);
 
-        assert_eq!(repl.data.read(0).junk, 1);
+        assert_eq!(repl.data.read(0).junk.load(Ordering::Relaxed), 1);
         assert_eq!(repl.contexts[7].res(), Some(Ok(107)));
     }
 
@@ -746,14 +752,14 @@ mod test {
     #[test]
     fn test_replica_try_combine_fail() {
         let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new(1024));
-        let repl = Replica::<Data>::new(&slog);
+        let repl = Replica::<Data>::new(vec![slog]);
 
         repl.next.store(9, Ordering::SeqCst);
-        repl.combiner.store(8, Ordering::SeqCst);
-        repl.make_pending(121, 1);
-        repl.try_combine(1);
+        repl.combiners[0].store(8, Ordering::SeqCst);
+        repl.make_pending(121, 1, 0);
+        repl.try_combine(1, 0);
 
-        assert_eq!(repl.data.read(0).junk, 0);
+        assert_eq!(repl.data.read(0).junk.load(Ordering::Relaxed), 0);
         assert_eq!(repl.contexts[0].res(), None);
     }
 
@@ -761,11 +767,11 @@ mod test {
     #[test]
     fn test_replica_execute_combine() {
         let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
-        let repl = Replica::<Data>::new(&slog);
+        let repl = Replica::<Data>::new(vec![slog]);
         let idx = repl.register().unwrap();
 
         assert_eq!(Ok(107), repl.execute_mut(121, idx));
-        assert_eq!(1, repl.data.read(0).junk);
+        assert_eq!(1, repl.data.read(0).junk.load(Ordering::Relaxed));
     }
 
     // Tests whether get_response() retrieves a response to an operation that was executed
@@ -773,19 +779,23 @@ mod test {
     #[test]
     fn test_replica_get_response() {
         let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
-        let repl = Replica::<Data>::new(&slog);
+        let repl = Replica::<Data>::new(vec![slog]);
         let _idx = repl.register();
 
-        repl.make_pending(121, 1);
+        let op = 121;
+        let mut hasher = DefaultHasher::new();
+        op.hash(&mut hasher);
+        let hash = hasher.finish() as usize;
+        repl.make_pending(op, 1, hash);
 
-        assert_eq!(repl.get_response(1), Ok(107));
+        assert_eq!(repl.get_response(1, op), Ok(107));
     }
 
     // Tests whether we can issue a read-only operation against the replica.
     #[test]
     fn test_replica_execute() {
         let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
-        let repl = Replica::<Data>::new(&slog);
+        let repl = Replica::<Data>::new(vec![slog]);
         let idx = repl.register().expect("Failed to register with replica.");
 
         assert_eq!(Ok(107), repl.execute_mut(121, idx));
@@ -797,12 +807,12 @@ mod test {
     #[test]
     fn test_replica_execute_not_synced() {
         let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
-        let repl = Replica::<Data>::new(&slog);
+        let repl = Replica::<Data>::new(vec![slog.clone()]);
 
         // Add in operations to the log off the side, not through the replica.
         let o = [121, 212];
-        slog.append(&o, 2, |_o: u64, _i: usize| {});
-        slog.exec(2, &mut |_o: u64, _i: usize| {});
+        slog.append(&o, 2, |_o: usize, _i: usize| {});
+        slog.exec(2, &mut |_o: usize, _i: usize| {});
 
         let t1 = repl.register().expect("Failed to register with replica.");
         assert_eq!(Ok(2), repl.execute(11, t1));
