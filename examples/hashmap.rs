@@ -16,13 +16,13 @@ struct NrHashMap {
 }
 
 /// We support mutable put operation on the hashmap.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Hash, Clone, Debug, PartialEq)]
 enum Modify {
     Put(u64, u64),
 }
 
 /// We support an immutable read operation to lookup a key from the hashmap.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Hash, Clone, Debug, PartialEq)]
 enum Access {
     Get(u64),
 }
@@ -43,7 +43,7 @@ impl Dispatch for NrHashMap {
     }
 
     /// The `dispatch_mut` function applies the mutable operations.
-    fn dispatch_mut(&mut self, op: Self::WriteOperation) -> Self::Response {
+    fn dispatch_mut(&self, op: Self::WriteOperation) -> Self::Response {
         match op {
             Modify::Put(key, value) => self.storage.insert(key, value),
         }
@@ -59,8 +59,8 @@ fn main() {
     ));
 
     // Next, we create two replicas of the hashmap
-    let replica1 = Replica::<NrHashMap>::new(&log);
-    let replica2 = Replica::<NrHashMap>::new(&log);
+    let replica1 = Replica::<NrHashMap>::new(vec![log.clone()]);
+    let replica2 = Replica::<NrHashMap>::new(vec![log.clone()]);
 
     // The replica executes a Modify or Access operations by calling
     // `execute_mut` and `execute`. Eventually they end up in the `Dispatch` trait.

@@ -14,7 +14,7 @@ const_assert!(MAX_PENDING_OPS >= 1 && (MAX_PENDING_OPS & (MAX_PENDING_OPS - 1) =
 
 /// A pending operation is a combination of the its op-code (T),
 /// and the corresponding result (R).
-type PendingOperation<T, R> = Cell<(Option<T>, Option<R>)>;
+type PendingOperation<T, R> = Cell<(Option<T>, Option<usize>, Option<R>)>;
 
 /// Contains all state local to a particular thread.
 ///
@@ -64,7 +64,7 @@ where
         let mut batch: [CachePadded<PendingOperation<T, R>>; MAX_PENDING_OPS] =
             unsafe { ::core::mem::MaybeUninit::zeroed().assume_init() };
         for elem in &mut batch[..] {
-            *elem = CachePadded::new(Cell::new((None, None)));
+            *elem = CachePadded::new(Cell::new((None, None, None)));
         }
 
         Context {
@@ -85,7 +85,7 @@ where
     ///
     /// Returns true if the operation was successfully enqueued. False otherwise.
     #[inline(always)]
-    pub(crate) fn enqueue(&self, op: T) -> bool {
+    pub(crate) fn enqueue(&self, op: T, hash: usize) -> bool {
         let t = self.tail.get();
         let h = self.head.get();
 
@@ -100,6 +100,7 @@ where
         // is updated only after the operation has been written in.
         let e = self.batch[self.index(t)].as_ptr();
         unsafe { (*e).0 = Some(op) };
+        unsafe { (*e).1 = Some(hash) };
 
         self.tail.set(t + 1);
         true
@@ -123,7 +124,7 @@ where
         for i in 0..n {
             let e = self.batch[self.index(h + i)].as_ptr();
             unsafe {
-                (*e).1 = Some(responses[i].clone());
+                (*e).2 = Some(responses[i].clone());
             }
         }
 
@@ -133,7 +134,7 @@ where
     /// Adds any pending operations on this context to a passed in buffer. Returns the
     /// the number of such operations that were added in.
     #[inline(always)]
-    pub(crate) fn ops(&self, buffer: &mut Vec<T>) -> usize {
+    pub(crate) fn ops(&self, buffer: &mut Vec<T>, hash: usize) -> usize {
         let mut h = self.comb.get();
         let t = self.tail.get();
 
@@ -157,18 +158,12 @@ where
             // By construction, we know that everything between `comb` and `tail` is a
             // valid operation ready for flat combining. Hence, calling unwrap() here
             // on the operation is safe.
-            unsafe {
-                buffer.push(
-                    (*self.batch[self.index(h)].as_ptr())
-                        .0
-                        .as_ref()
-                        .unwrap()
-                        .clone(),
-                );
+            let e = self.batch[self.index(t)].as_ptr();
+            if unsafe { (*e).1 } == Some(hash) {
+                buffer.push(unsafe { (*e).0.as_ref().unwrap().clone() });
+                h += 1;
+                n += 1;
             }
-
-            h += 1;
-            n += 1;
         }
 
         n
@@ -190,7 +185,7 @@ where
         }
 
         self.head.set(s + 1);
-        unsafe { (*self.batch[self.index(s)].as_ptr()).1.clone() }
+        unsafe { (*self.batch[self.index(s)].as_ptr()).2.clone() }
     }
 
     /// Returns the maximum number of operations that will go pending on this context.
@@ -258,10 +253,10 @@ mod test {
         assert_eq!(c.head.get(), 0);
         assert_eq!(c.comb.get(), 16);
 
-        assert_eq!(c.batch[12].get().1, Some(r[0]));
-        assert_eq!(c.batch[13].get().1, Some(r[1]));
-        assert_eq!(c.batch[14].get().1, Some(r[2]));
-        assert_eq!(c.batch[15].get().1, Some(r[3]));
+        assert_eq!(c.batch[12].get().2, Some(r[0]));
+        assert_eq!(c.batch[13].get().2, Some(r[1]));
+        assert_eq!(c.batch[14].get().2, Some(r[2]));
+        assert_eq!(c.batch[15].get().2, Some(r[3]));
     }
 
     // Tests that attempting to enqueue an empty batch of responses on the context
@@ -279,7 +274,7 @@ mod test {
         assert_eq!(c.head.get(), 0);
         assert_eq!(c.comb.get(), 12);
 
-        assert_eq!(c.batch[12].get().1, None);
+        assert_eq!(c.batch[12].get().2, None);
     }
 
     // Tests whether ops() can successfully retrieve operations enqueued on this context.

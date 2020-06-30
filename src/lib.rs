@@ -63,8 +63,7 @@
 //!    }
 //! }
 //! ```
-#![no_std]
-#![feature(atomic_min_max)]
+//#![no_std]
 #![feature(new_uninit)]
 #![feature(get_mut_unchecked)]
 #![feature(negative_impls)]
@@ -92,6 +91,7 @@ pub use crate::log::Log;
 pub use replica::{Replica, ReplicaToken, MAX_THREADS_PER_REPLICA};
 
 use core::fmt::Debug;
+use core::hash::Hash;
 
 /// Trait that a data structure must implement to be usable with this library.
 ///
@@ -104,7 +104,7 @@ pub trait Dispatch {
     /// A read-only operation. When executed against the data structure, an operation
     /// of this type must not mutate the data structure in anyway. Otherwise, the
     /// assumptions made by this library no longer hold.
-    type ReadOperation: Sized + Clone + PartialEq + Debug;
+    type ReadOperation: Sized + Clone + PartialEq + Debug + Hash;
 
     /// A write operation. When executed against the data structure, an operation of
     /// this type is allowed to mutate state. The library ensures that this is done so

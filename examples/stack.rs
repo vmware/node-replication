@@ -9,14 +9,14 @@ use node_replication::Log;
 use node_replication::Replica;
 
 /// We support mutable push and pop operations on the stack.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Hash, Clone, Debug, PartialEq)]
 enum Modify {
     Push(u32),
     Pop,
 }
 
 /// We support an immutable read operation to peek the stack.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Hash, Clone, Debug, PartialEq)]
 enum Access {
     Peek,
 }
@@ -63,7 +63,7 @@ impl Dispatch for Stack {
     }
 
     /// The `dispatch_mut` function applies the mutable operations.
-    fn dispatch_mut(&mut self, op: Self::WriteOperation) -> Self::Response {
+    fn dispatch_mut(&self, op: Self::WriteOperation) -> Self::Response {
         match op {
             Modify::Push(v) => {
                 self.storage.push(v);
@@ -83,8 +83,8 @@ fn main() {
     ));
 
     // Next, we create two replicas of the stack
-    let replica1 = Replica::<Stack>::new(&log);
-    let replica2 = Replica::<Stack>::new(&log);
+    let replica1 = Replica::<Stack>::new(vec![log.clone()]);
+    let replica2 = Replica::<Stack>::new(vec![log.clone()]);
 
     // The replica executes a Modify or Access operations by calling
     // `execute_mut` and `execute`. Eventually they end up in the `Dispatch` trait.
