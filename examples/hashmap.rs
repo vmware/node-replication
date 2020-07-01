@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! A minimal example that implements a replicated hashmap
-use std::collections::HashMap;
+use chashmap::CHashMap as HashMap;
 use std::sync::Arc;
 
 use node_replication::Dispatch;

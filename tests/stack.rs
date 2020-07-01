@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Various tests for node-replication with the help of a stack.
-
+/*
 extern crate rand;
 extern crate std;
 
@@ -487,3 +487,4 @@ fn replicas_are_equal() {
     assert_eq!(d0, d1, "Data-structures don't match.");
     assert_eq!(p0, p1, "Removed elements in each replica dont match.");
 }
+*/

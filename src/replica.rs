@@ -143,34 +143,35 @@ where
     /// use node_replication::Log;
     /// use node_replication::Replica;
     ///
+    /// use core::sync::atomic::{AtomicUsize, Ordering};
     /// use std::sync::Arc;
     ///
     /// // The data structure we want replicated.
     /// #[derive(Default)]
     /// struct Data {
-    ///     junk: u64,
+    ///     junk: AtomicUsize,
     /// }
     ///
     /// // This trait allows the `Data` to be used with node-replication.
     /// impl Dispatch for Data {
     ///     type ReadOperation = ();
-    ///     type WriteOperation = u64;
-    ///     type Response = Option<u64>;
+    ///     type WriteOperation = usize;
+    ///     type Response = Option<usize>;
     ///
     ///     // A read returns the underlying u64.
     ///     fn dispatch(
     ///         &self,
     ///         _op: Self::ReadOperation,
     ///     ) -> Self::Response {
-    ///         Some(self.junk)
+    ///         Some(self.junk.load(Ordering::Relaxed))
     ///     }
     ///
     ///     // A write updates the underlying u64.
     ///     fn dispatch_mut(
-    ///         &mut self,
+    ///         &self,
     ///         op: Self::WriteOperation,
     ///     ) -> Self::Response {
-    ///         self.junk = op;
+    ///         self.junk.store(op, Ordering::Relaxed);
     ///         None
     ///     }
     /// }
@@ -257,30 +258,31 @@ where
     /// use node_replication::Log;
     /// use node_replication::Replica;
     ///
+    /// use core::sync::atomic::{AtomicUsize, Ordering};
     /// use std::sync::Arc;
     ///
     /// #[derive(Default)]
     /// struct Data {
-    ///     junk: u64,
+    ///     junk: AtomicUsize,
     /// }
     ///
     /// impl Dispatch for Data {
     ///     type ReadOperation = ();
-    ///     type WriteOperation = u64;
-    ///     type Response = Option<u64>;
+    ///     type WriteOperation = usize;
+    ///     type Response = Option<usize>;
     ///
     ///     fn dispatch(
     ///         &self,
     ///         _op: Self::ReadOperation,
     ///     ) -> Self::Response {
-    ///         Some(self.junk)
+    ///         Some(self.junk.load(Ordering::Relaxed))
     ///     }
     ///
     ///     fn dispatch_mut(
-    ///         &mut self,
+    ///         &self,
     ///         op: Self::WriteOperation,
     ///     ) -> Self::Response {
-    ///         self.junk = op;
+    ///         self.junk.store(op, Ordering::Relaxed);
     ///         None
     ///     }
     /// }
@@ -319,30 +321,31 @@ where
     /// use node_replication::Log;
     /// use node_replication::Replica;
     ///
+    /// use core::sync::atomic::{AtomicUsize, Ordering};
     /// use std::sync::Arc;
     ///
     /// #[derive(Default)]
     /// struct Data {
-    ///     junk: u64,
+    ///     junk: AtomicUsize,
     /// }
     ///
     /// impl Dispatch for Data {
     ///     type ReadOperation = ();
-    ///     type WriteOperation = u64;
-    ///     type Response = Option<u64>;
+    ///     type WriteOperation = usize;
+    ///     type Response = Option<usize>;
     ///
     ///     fn dispatch(
     ///         &self,
     ///         _op: Self::ReadOperation,
     ///     ) -> Self::Response {
-    ///         Some(self.junk)
+    ///         Some(self.junk.load(Ordering::Relaxed))
     ///     }
     ///
     ///     fn dispatch_mut(
-    ///         &mut self,
+    ///         &self,
     ///         op: Self::WriteOperation,
     ///     ) -> Self::Response {
-    ///         self.junk = op;
+    ///         self.junk.store(op, Ordering::Relaxed);
     ///         None
     ///     }
     /// }
@@ -383,30 +386,31 @@ where
     /// use node_replication::Log;
     /// use node_replication::Replica;
     ///
+    /// use core::sync::atomic::{AtomicUsize, Ordering};
     /// use std::sync::Arc;
     ///
     /// #[derive(Default)]
     /// struct Data {
-    ///     junk: u64,
+    ///     junk: AtomicUsize,
     /// }
     ///
     /// impl Dispatch for Data {
     ///     type ReadOperation = ();
-    ///     type WriteOperation = u64;
-    ///     type Response = Option<u64>;
+    ///     type WriteOperation = usize;
+    ///     type Response = Option<usize>;
     ///
     ///     fn dispatch(
     ///         &self,
     ///         _op: Self::ReadOperation,
     ///     ) -> Self::Response {
-    ///         Some(self.junk)
+    ///         Some(self.junk.load(Ordering::Relaxed))
     ///     }
     ///
     ///     fn dispatch_mut(
-    ///         &mut self,
+    ///         &self,
     ///         op: Self::WriteOperation,
     ///     ) -> Self::Response {
-    ///         self.junk = op;
+    ///         self.junk.store(op, Ordering::Relaxed);
     ///         None
     ///     }
     /// }

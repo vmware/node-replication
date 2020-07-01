@@ -29,7 +29,7 @@ jobs:
       run: cargo build --release --verbose
     - name: Try to compile tests
       run: cargo test --release --no-run --verbose
-    - name: Try to compile benchmarks
-      run: cargo bench --no-run --verbose
+    #- name: Try to compile benchmarks
+    #  run: cargo bench --no-run --verbose
     - name: Try stack example
       run: RUST_BACKTRACE=1 RUST_LOG='trace' cargo run --release --example stack -- -t1,2 --nop 100000 -l 1 -m sequential

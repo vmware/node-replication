@@ -16,7 +16,7 @@
 //! [examples](https://github.com/vmware/node-replication/tree/master/examples/hashmap.rs)
 //! folder.
 //!
-//! ```
+//! ```no-run
 //! use node_replication::Dispatch;
 //! use std::collections::HashMap;
 //!
@@ -26,13 +26,13 @@
 //! }
 //!
 //! /// We support a mutable put operation on the hashmap.
-//! #[derive(Debug, PartialEq, Clone)]
+//! #[derive(Hash, Debug, PartialEq, Clone)]
 //! pub enum Modify {
 //!    Put(u64, u64),
 //! }
 //!
 //! /// We support an immutable read operation to lookup a key from the hashmap.
-//! #[derive(Debug, PartialEq, Clone)]
+//! #[derive(Hash, Debug, PartialEq, Clone)]
 //! pub enum Access {
 //!    Get(u64),
 //! }

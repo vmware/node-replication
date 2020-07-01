@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! A minimal example that implements a replicated stack
+use crossbeam::stack::TreiberStack;
 use std::sync::Arc;
 
 use node_replication::Dispatch;
@@ -23,7 +24,7 @@ enum Access {
 
 /// The actual stack, it uses a single-threaded Vec.
 struct Stack {
-    storage: Vec<u32>,
+    storage: TreiberStack<u32>,
 }
 
 impl Default for Stack {
@@ -35,7 +36,7 @@ impl Default for Stack {
     fn default() -> Stack {
         const DEFAULT_STACK_SIZE: u32 = 1_000u32;
 
-        let mut s = Stack {
+        let s = Stack {
             storage: Default::default(),
         };
 
@@ -58,7 +59,13 @@ impl Dispatch for Stack {
     /// The `dispatch` function applies the immutable operations.
     fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
         match op {
-            Access::Peek => self.storage.last().cloned(),
+            Access::Peek => {
+                if self.storage.is_empty() {
+                    None
+                } else {
+                    Some(0)
+                }
+            }
         }
     }
 
@@ -69,7 +76,7 @@ impl Dispatch for Stack {
                 self.storage.push(v);
                 return None;
             }
-            Modify::Pop => return self.storage.pop(),
+            Modify::Pop => return self.storage.try_pop(),
         }
     }
 }
