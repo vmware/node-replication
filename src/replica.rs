@@ -373,7 +373,7 @@ where
         self.try_combine(idx.0, hash);
 
         // Return the response to the caller function.
-        self.get_response(idx.0, op)
+        self.get_response(idx.0, hash)
     }
 
     /// Executes a read-only operation against this replica and returns a response.
@@ -433,11 +433,7 @@ where
 
     /// Busy waits until a response is available within the thread's context.
     /// `idx` identifies this thread.
-    fn get_response(
-        &self,
-        idx: usize,
-        op: <D as Dispatch>::WriteOperation,
-    ) -> <D as Dispatch>::Response {
+    fn get_response(&self, idx: usize, hash: usize) -> <D as Dispatch>::Response {
         let mut iter = 0;
         let interval = 1 << 29;
 
@@ -452,9 +448,6 @@ where
             iter += 1;
 
             if iter == interval {
-                let mut hasher = DefaultHasher::new();
-                op.hash(&mut hasher);
-                let hash = hasher.finish() as usize;
                 self.try_combine(idx, hash);
                 iter = 0;
             }
@@ -792,7 +785,7 @@ mod test {
         let hash = hasher.finish() as usize;
         repl.make_pending(op, 1, hash);
 
-        assert_eq!(repl.get_response(1, op), Ok(107));
+        assert_eq!(repl.get_response(1, hash), Ok(107));
     }
 
     // Tests whether we can issue a read-only operation against the replica.

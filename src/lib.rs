@@ -16,7 +16,7 @@
 //! [examples](https://github.com/vmware/node-replication/tree/master/examples/hashmap.rs)
 //! folder.
 //!
-//! ```no-run
+//! ```ignore
 //! use node_replication::Dispatch;
 //! use std::collections::HashMap;
 //!
