@@ -107,11 +107,11 @@ where
     /// Number of operations collected by the combiner from each thread at any
     /// given point of time. Index `i` holds the number of operations collected from
     /// thread with identifier `i + 1`.
-    inflight: RefCell<[usize; MAX_THREADS_PER_REPLICA]>,
+    inflight: Vec<RefCell<[usize; MAX_THREADS_PER_REPLICA]>>,
 
     /// A buffer of results collected after flat combining. With the help of `inflight`,
     /// the combiner enqueues these results into the appropriate thread context.
-    result: RefCell<Vec<<D as Dispatch>::Response>>,
+    result: Vec<RefCell<Vec<<D as Dispatch>::Response>>>,
 }
 
 /// The Replica is Sync. Member variables are protected by a CAS on `combiner`.
@@ -220,8 +220,8 @@ where
                     );
                     nlogs
                 ],
-                inflight: RefCell::new(arr![Default::default(); 256]),
-                result:
+                inflight: vec![RefCell::new(arr![Default::default(); 256]); nlogs],
+                result: vec![
                     RefCell::new(
                         Vec::with_capacity(
                             MAX_THREADS_PER_REPLICA
@@ -230,7 +230,9 @@ where
                                     <D as Dispatch>::Response,
                                 >::batch_size(),
                         ),
-                    ),
+                    );
+                    nlogs
+                ],
                 slog: logs.clone(),
                 data: CachePadded::new(RwLock::<D>::default()),
             });
@@ -565,8 +567,8 @@ where
 
         //  TODO: may need to be in a per-log state context
         let mut buffer = self.buffer[hashidx].borrow_mut();
-        let mut operations = self.inflight.borrow_mut();
-        let mut results = self.result.borrow_mut();
+        let mut operations = self.inflight[hashidx].borrow_mut();
+        let mut results = self.result[hashidx].borrow_mut();
 
         buffer.clear();
         results.clear();
@@ -661,9 +663,9 @@ mod test {
             repl.buffer[0].borrow().capacity(),
             MAX_THREADS_PER_REPLICA * Context::<u64, Result<u64, ()>>::batch_size()
         );
-        assert_eq!(repl.inflight.borrow().len(), MAX_THREADS_PER_REPLICA);
+        assert_eq!(repl.inflight[0].borrow().len(), MAX_THREADS_PER_REPLICA);
         assert_eq!(
-            repl.result.borrow().capacity(),
+            repl.result[0].borrow().capacity(),
             MAX_THREADS_PER_REPLICA * Context::<u64, Result<u64, ()>>::batch_size()
         );
         assert_eq!(repl.data.read(0).junk.load(Ordering::Relaxed), 0);

@@ -15,6 +15,10 @@ name = "hashbench"
 harness = false
 
 [[bench]]
+name = "chashbench"
+harness = false
+
+[[bench]]
 name = "rwlockbench"
 harness = false
 
