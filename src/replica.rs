@@ -624,6 +624,7 @@ mod test {
 
     use super::*;
     use std::vec;
+    use std::{thread, time};
 
     // Really dumb data structure to test against the Replica and shared log.
     #[derive(Default)]
@@ -811,5 +812,115 @@ mod test {
 
         let t1 = repl.register().expect("Failed to register with replica.");
         assert_eq!(Ok(2), repl.execute(11, t1));
+    }
+
+    // Tests if there are log number of combiners and all of
+    // them can acquire the combiner lock in parallel.
+    #[test]
+    fn test_multiple_combiner() {
+        let slog1 = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
+        let slog2 = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
+        let slog3 = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
+        let slog4 = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
+        let logs = vec![slog1, slog2, slog3, slog4];
+
+        let repl = Replica::<Data>::new(logs.clone());
+
+        for i in 0..logs.len() {
+            repl.combiners[i].store(i + 1, Ordering::Relaxed);
+        }
+
+        for i in 0..logs.len() {
+            assert_eq!(repl.combiners[i].load(Ordering::Relaxed), i + 1);
+        }
+    }
+
+    // Tests if there are log number of combiners and the test panic if we try
+    // to acquire more number of combiner than the number of logs.
+    #[test]
+    #[should_panic]
+    fn test_more_than_nlogs_combiner() {
+        let slog1 = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
+        let slog2 = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
+        let slog3 = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
+        let slog4 = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
+        let logs = vec![slog1, slog2, slog3, slog4];
+
+        let repl = Replica::<Data>::new(logs.clone());
+
+        for i in 0..logs.len() + 1 {
+            repl.combiners[i].store(i + 1, Ordering::Relaxed);
+        }
+
+        for i in 0..logs.len() {
+            assert_eq!(repl.combiners[i].load(Ordering::Relaxed), i + 1);
+        }
+    }
+
+    // Tests if there are log number of combiners and all of
+    // them can acquire the combiner lock in parallel.
+    #[test]
+    fn test_multiple_parallel_combiner() {
+        // Really dumb data structure to test against the Replica and shared log.
+        #[derive(Default)]
+        struct Block {
+            junk: AtomicUsize,
+        }
+
+        impl Dispatch for Block {
+            type ReadOperation = usize;
+            type WriteOperation = usize;
+            type Response = Result<usize, ()>;
+
+            fn dispatch(&self, _op: Self::ReadOperation) -> Self::Response {
+                Ok(self.junk.load(Ordering::Relaxed))
+            }
+
+            fn dispatch_mut(&self, _op: Self::WriteOperation) -> Self::Response {
+                // sleep for some time so that test thread can check the combiners status
+                thread::sleep(time::Duration::from_secs(2));
+                self.junk.fetch_add(1, Ordering::Relaxed);
+                return Ok(107);
+            }
+        }
+
+        let slog1 = Arc::new(Log::<<Block as Dispatch>::WriteOperation>::default());
+        let slog2 = Arc::new(Log::<<Block as Dispatch>::WriteOperation>::default());
+        let slog3 = Arc::new(Log::<<Block as Dispatch>::WriteOperation>::default());
+        let slog4 = Arc::new(Log::<<Block as Dispatch>::WriteOperation>::default());
+        let logs = vec![slog1, slog2, slog3, slog4];
+
+        let repl = Replica::<Block>::new(logs.clone());
+        let mut threads = Vec::with_capacity(logs.len());
+        let nlogs = logs.len();
+
+        for i in 0..nlogs {
+            let r = repl.clone();
+            threads.push(thread::spawn(move || {
+                let t = r.register().unwrap();
+                r.make_pending(i, t.0, t.0);
+
+                r.try_combine(t.0, t.0);
+            }));
+        }
+
+        // Test thread, sleep for some times and checks the combiner status
+        let r = repl.clone();
+        threads.push(thread::spawn(move || {
+            thread::sleep(time::Duration::from_secs(1));
+            for i in 0..nlogs {
+                let tid = if i > 0 { i } else { nlogs };
+                assert_eq!(r.combiners[i].load(Ordering::SeqCst), tid);
+            }
+        }));
+
+        for thread in threads.into_iter() {
+            thread.join().unwrap();
+        }
+
+        assert_eq!(repl.data.junk.load(Ordering::Relaxed), 4);
+        for i in 0..logs.len() {
+            assert_eq!(repl.contexts[i].res(), Some(Ok(107)));
+        }
     }
 }
