@@ -15,7 +15,6 @@ use crossbeam_utils::CachePadded;
 
 use super::context::Context;
 use super::log::Log;
-use super::rwlock::RwLock;
 use super::Dispatch;
 
 /// A token handed out to threads registered with replicas.
@@ -79,7 +78,7 @@ where
     /// The underlying replicated data structure. Shared between threads registered
     /// with this replica. Each replica maintains its own.
     // TODO(nr2): Don't need RwLock anymore
-    data: CachePadded<RwLock<D>>,
+    data: CachePadded<D>,
 
     //
     // Per-"ReplicaFlatCombiner":
@@ -234,7 +233,7 @@ where
                     nlogs
                 ],
                 slog: logs.clone(),
-                data: CachePadded::new(RwLock::<D>::default()),
+                data: CachePadded::new(D::default()),
             });
 
             let mut replica = uninit_replica.assume_init();
@@ -472,15 +471,13 @@ where
             != 0
         {}
 
-        let data = self.data.write(self.next.load(Ordering::Relaxed));
-
         let mut f = |o: <D as Dispatch>::WriteOperation, _i: usize| {
-            data.dispatch_mut(o);
+            self.data.dispatch_mut(o);
         };
 
         self.slog[0].exec(self.idx[0], &mut f);
 
-        v(&data);
+        v(&self.data);
 
         self.combiners[0].store(0, Ordering::Release);
     }
@@ -517,7 +514,7 @@ where
             spin_loop_hint();
         }
 
-        self.data.read(tid - 1).dispatch(op)
+        self.data.dispatch(op)
     }
 
     /// Enqueues an operation inside a thread local context. Returns a boolean
@@ -585,7 +582,7 @@ where
         // in here because operations on the log might need to be consumed for GC.
         {
             let f = |o: <D as Dispatch>::WriteOperation, i: usize| {
-                let resp = self.data.write(next).dispatch_mut(o);
+                let resp = self.data.dispatch_mut(o);
                 if i == self.idx[hashidx] {
                     results.push(resp);
                 }
@@ -595,9 +592,8 @@ where
 
         // Execute any operations on the shared log against this replica.
         {
-            let data = self.data.write(next);
             let mut f = |o: <D as Dispatch>::WriteOperation, i: usize| {
-                let resp = data.dispatch_mut(o);
+                let resp = self.data.dispatch_mut(o);
                 if i == self.idx[hashidx] {
                     results.push(resp)
                 };
@@ -668,7 +664,7 @@ mod test {
             repl.result[0].borrow().capacity(),
             MAX_THREADS_PER_REPLICA * Context::<u64, Result<u64, ()>>::batch_size()
         );
-        assert_eq!(repl.data.read(0).junk.load(Ordering::Relaxed), 0);
+        assert_eq!(repl.data.junk.load(Ordering::Relaxed), 0);
     }
 
     // Tests whether we can register with this replica and receive an idx.
@@ -729,7 +725,7 @@ mod test {
         repl.try_combine(1, 0);
 
         assert_eq!(repl.combiners[0].load(Ordering::SeqCst), 0);
-        assert_eq!(repl.data.read(0).junk.load(Ordering::Relaxed), 1);
+        assert_eq!(repl.data.junk.load(Ordering::Relaxed), 1);
         assert_eq!(repl.contexts[0].res(), Some(Ok(107)));
     }
 
@@ -743,7 +739,7 @@ mod test {
         repl.make_pending(121, 8, 0);
         repl.try_combine(1, 0);
 
-        assert_eq!(repl.data.read(0).junk.load(Ordering::Relaxed), 1);
+        assert_eq!(repl.data.junk.load(Ordering::Relaxed), 1);
         assert_eq!(repl.contexts[7].res(), Some(Ok(107)));
     }
 
@@ -758,7 +754,7 @@ mod test {
         repl.make_pending(121, 1, 0);
         repl.try_combine(1, 0);
 
-        assert_eq!(repl.data.read(0).junk.load(Ordering::Relaxed), 0);
+        assert_eq!(repl.data.junk.load(Ordering::Relaxed), 0);
         assert_eq!(repl.contexts[0].res(), None);
     }
 
@@ -770,7 +766,7 @@ mod test {
         let idx = repl.register().unwrap();
 
         assert_eq!(Ok(107), repl.execute_mut(121, idx));
-        assert_eq!(1, repl.data.read(0).junk.load(Ordering::Relaxed));
+        assert_eq!(1, repl.data.junk.load(Ordering::Relaxed));
     }
 
     // Tests whether get_response() retrieves a response to an operation that was executed
