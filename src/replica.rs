@@ -24,7 +24,7 @@ use super::Dispatch;
 /// `execute` and `execute_ro`. However it feels like this would
 /// hurt API ergonomics a lot.
 #[derive(Copy, Clone, Debug, PartialEq)]
-pub struct ReplicaToken(usize);
+pub struct ReplicaToken(pub usize);
 
 /// To make it harder to use the same ReplicaToken on multiple threads.
 impl !Send for ReplicaToken {}
@@ -96,21 +96,21 @@ where
     /// cannot perform flat combining (because another thread might be doing so).
     ///
     /// The vector is initialized with `MAX_THREADS_PER_REPLICA` elements.
-    contexts: Vec<Context<<D as Dispatch>::WriteOperation, <D as Dispatch>::Response>>,
+    contexts: Vec<CachePadded<Context<<D as Dispatch>::WriteOperation, <D as Dispatch>::Response>>>,
 
     /// A buffer of operations for flat combining. The combiner stages operations in
     /// here and then batch appends them into the shared log. This helps amortize
     /// the cost of the compare_and_swap() on the tail of the log.
-    buffer: Vec<RefCell<Vec<<D as Dispatch>::WriteOperation>>>,
+    buffer: Vec<CachePadded<RefCell<Vec<<D as Dispatch>::WriteOperation>>>>,
 
     /// Number of operations collected by the combiner from each thread at any
     /// given point of time. Index `i` holds the number of operations collected from
     /// thread with identifier `i + 1`.
-    inflight: Vec<RefCell<[usize; MAX_THREADS_PER_REPLICA]>>,
+    inflight: Vec<CachePadded<RefCell<[usize; MAX_THREADS_PER_REPLICA]>>>,
 
     /// A buffer of results collected after flat combining. With the help of `inflight`,
     /// the combiner enqueues these results into the appropriate thread context.
-    result: Vec<RefCell<Vec<<D as Dispatch>::Response>>>,
+    result: Vec<CachePadded<RefCell<Vec<<D as Dispatch>::Response>>>>,
 }
 
 /// The Replica is Sync. Member variables are protected by a CAS on `combiner`.
@@ -208,7 +208,7 @@ where
                 next: CachePadded::new(AtomicUsize::new(1)),
                 contexts: Vec::with_capacity(MAX_THREADS_PER_REPLICA),
                 buffer: vec![
-                    RefCell::new(
+                    CachePadded::new(RefCell::new(
                         Vec::with_capacity(
                             MAX_THREADS_PER_REPLICA
                                 * Context::<
@@ -216,12 +216,15 @@ where
                                     <D as Dispatch>::Response,
                                 >::batch_size(),
                         ),
-                    );
+                    ));
                     nlogs
                 ],
-                inflight: vec![RefCell::new(arr![Default::default(); 256]); nlogs],
+                inflight: vec![
+                    CachePadded::new(RefCell::new(arr![Default::default(); 256]));
+                    nlogs
+                ],
                 result: vec![
-                    RefCell::new(
+                    CachePadded::new(RefCell::new(
                         Vec::with_capacity(
                             MAX_THREADS_PER_REPLICA
                                 * Context::<
@@ -229,7 +232,7 @@ where
                                     <D as Dispatch>::Response,
                                 >::batch_size(),
                         ),
-                    );
+                    ));
                     nlogs
                 ],
                 slog: logs.clone(),
@@ -363,9 +366,10 @@ where
         op: <D as Dispatch>::WriteOperation,
         idx: ReplicaToken,
     ) -> <D as Dispatch>::Response {
-        let mut hasher = DefaultHasher::new();
-        op.hash(&mut hasher);
-        let hash = hasher.finish() as usize;
+        //let mut hasher = DefaultHasher::new();
+        //op.hash(&mut hasher);
+        //let hash = hasher.finish() as usize;
+        let hash = idx.0;
 
         // Enqueue the operation onto the thread local batch and then try to flat combine.
         while !self.make_pending(op.clone(), idx.0, hash) {}

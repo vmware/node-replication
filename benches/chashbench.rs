@@ -16,6 +16,7 @@ use std::time;
 use node_replication::{Dispatch, Log, Replica, ReplicaToken};
 
 mod utils;
+use utils::{pin_thread, topology::*};
 
 fn main() {
     let args = std::env::args().filter(|e| e != "--bench");
@@ -77,34 +78,43 @@ fn main() {
 
     let mut join = Vec::with_capacity(readers + writers);
     let versions: Vec<&str> = vec!["nr"];
+    let cpus = MachineTopology::new().allocate(ThreadMapping::Interleave, readers + writers, false);
 
     // then, benchmark sync::Arc<ReplicaAndToken>
     if versions.contains(&"nr") {
         const LOG_SIZE_BYTES: usize = 1024 * 1024 * 2;
-        let log1 = sync::Arc::new(Log::<<NrHashMap as Dispatch>::WriteOperation>::new(
-            LOG_SIZE_BYTES,
-        ));
-        let log2 = sync::Arc::new(Log::<<NrHashMap as Dispatch>::WriteOperation>::new(
-            LOG_SIZE_BYTES,
-        ));
-        let replica = Replica::<NrHashMap>::new(vec![log1, log2]);
+        let mut logs = Vec::with_capacity(writers);
+        for _i in 0..writers {
+            let log = sync::Arc::new(Log::<<NrHashMap as Dispatch>::WriteOperation>::new(
+                LOG_SIZE_BYTES,
+            ));
+            logs.push(log);
+        }
+        let replica = Replica::<NrHashMap>::new(logs);
 
         let start = time::Instant::now();
         let end = start + dur;
         join.extend((0..readers).into_iter().map(|_| {
             let replica = replica.clone();
             let dist = dist.to_owned();
+            let cpu = cpus.clone();
+
             thread::spawn(move || {
                 let replica = ReplicaAndToken::new(replica);
+                let tid = replica.token.0;
+                pin_thread(cpu[tid - 1].cpu);
                 drive(replica, end, dist, false, span)
             })
         }));
         join.extend((0..writers).into_iter().map(|_| {
             let replica = replica.clone();
             let dist = dist.to_owned();
+            let cpu = cpus.clone();
 
             thread::spawn(move || {
                 let replica = ReplicaAndToken::new(replica);
+                let tid = replica.token.0;
+                pin_thread(cpu[tid - 1].cpu);
                 drive(replica, end, dist, true, span)
             })
         }));
@@ -182,7 +192,7 @@ impl NrHashMap {
 impl Default for NrHashMap {
     /// Return a dummy hash-map with initial capacity of 50k elements.
     fn default() -> NrHashMap {
-        let mut storage = HashMap::with_capacity(5_000_000);
+        let storage = HashMap::with_capacity(5_000_000);
         for i in 0..5_000_000 {
             storage.insert(i as u64, (i + 1) as u64);
         }
@@ -205,7 +215,7 @@ impl Dispatch for NrHashMap {
     fn dispatch_mut(&self, op: Self::WriteOperation) -> Self::Response {
         match op {
             OpWr::Put(key, val) => {
-                self.put(key, val);
+                //self.put(key, val);
                 Ok(0)
             }
         }

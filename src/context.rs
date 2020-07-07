@@ -4,6 +4,7 @@
 use alloc::vec::Vec;
 use core::cell::Cell;
 use core::default::Default;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 use crossbeam_utils::CachePadded;
 
@@ -42,16 +43,16 @@ where
     /// Logical array index at which new operations will be enqueued into the batch.
     /// This variable is updated by the thread that owns this context, and is read by the
     /// combiner. We can avoid making it an atomic by assuming we're on x86.
-    pub tail: CachePadded<Cell<usize>>,
+    pub tail: CachePadded<AtomicUsize>,
 
     /// Logical array index from which any attempt to dequeue responses will be made.
     /// This variable is only accessed by the thread that owns this context.
-    pub head: CachePadded<Cell<usize>>,
+    pub head: CachePadded<AtomicUsize>,
 
     /// Logical array index from which the operations will be dequeued for flat combining.
     /// This variable is updated by the combiner, and is read by the thread that owns this context.
     /// We can avoid making it an atomic by assuming we're on x86.
-    pub comb: CachePadded<Cell<usize>>,
+    pub comb: CachePadded<AtomicUsize>,
 }
 
 impl<T, R> Default for Context<T, R>
@@ -69,9 +70,9 @@ where
 
         Context {
             batch,
-            tail: CachePadded::new(Cell::new(Default::default())),
-            head: CachePadded::new(Cell::new(Default::default())),
-            comb: CachePadded::new(Cell::new(Default::default())),
+            tail: CachePadded::new(AtomicUsize::new(0)),
+            head: CachePadded::new(AtomicUsize::new(0)),
+            comb: CachePadded::new(AtomicUsize::new(0)),
         }
     }
 }
@@ -86,8 +87,8 @@ where
     /// Returns true if the operation was successfully enqueued. False otherwise.
     #[inline(always)]
     pub(crate) fn enqueue(&self, op: T, hash: usize) -> bool {
-        let t = self.tail.get();
-        let h = self.head.get();
+        let t = self.tail.load(Ordering::Relaxed);
+        let h = self.head.load(Ordering::Relaxed);
 
         // Check if we have space in the batch to hold this operation. If we don't, then
         // return false to the caller thread.
@@ -102,7 +103,7 @@ where
         unsafe { (*e).0 = Some(op) };
         unsafe { (*e).1 = Some(hash) };
 
-        self.tail.set(t + 1);
+        self.tail.store(t + 1, Ordering::Relaxed);
         true
     }
 
@@ -111,7 +112,7 @@ where
     /// replica this thread is registered against.
     #[inline(always)]
     pub(crate) fn enqueue_resps(&self, responses: &[R]) {
-        let h = self.comb.get();
+        let h = self.comb.load(Ordering::Relaxed);
         let n = responses.len();
 
         // Empty slice passed in; no work to do, so simply return.
@@ -128,15 +129,15 @@ where
             }
         }
 
-        self.comb.set(h + n);
+        self.comb.store(h + n, Ordering::Relaxed);
     }
 
     /// Adds any pending operations on this context to a passed in buffer. Returns the
     /// the number of such operations that were added in.
     #[inline(always)]
     pub(crate) fn ops(&self, buffer: &mut Vec<T>, hash: usize) -> usize {
-        let mut h = self.comb.get();
-        let t = self.tail.get();
+        let mut h = self.comb.load(Ordering::Relaxed);
+        let t = self.tail.load(Ordering::Relaxed);
 
         // No operations on this thread; return to the caller indicating so.
         if h == t {
@@ -150,11 +151,11 @@ where
         // Iterate from `comb` to `tail`, adding pending operations into the
         // passed in buffer. Return the number of operations that were added.
         let mut n = 0;
-        for _i in h..t {
+        for i in h..t {
             // By construction, we know that everything between `comb` and `tail` is a
             // valid operation ready for flat combining. Hence, calling unwrap() here
             // on the operation is safe.
-            let e = self.batch[self.index(h)].as_ptr();
+            let e = self.batch[self.index(i)].as_ptr();
             if unsafe { (*e).1 } == Some(hash) {
                 buffer.push(unsafe { (*e).0.as_ref().unwrap().clone() });
                 n += 1;
@@ -168,8 +169,8 @@ where
     /// Returns a single response if available. Otherwise, returns None.
     #[inline(always)]
     pub(crate) fn res(&self) -> Option<R> {
-        let s = self.head.get();
-        let f = self.comb.get();
+        let s = self.head.load(Ordering::Relaxed);
+        let f = self.comb.load(Ordering::Relaxed);
 
         // No responses ready yet; return to the caller.
         if s == f {
@@ -177,10 +178,10 @@ where
         };
 
         if s > f {
-            panic!("Head of thread-local batch has advanced beyond combiner offset!");
+            panic!("Head of thread-local batch has advanced beyond combiner of.store!");
         }
 
-        self.head.set(s + 1);
+        self.head.store(s + 1, Ordering::Relaxed);
         unsafe { (*self.batch[self.index(s)].as_ptr()).2.clone() }
     }
 
@@ -207,9 +208,9 @@ mod test {
     fn test_context_create_default() {
         let c = Context::<u64, Result<u64, ()>>::default();
         assert_eq!(c.batch.len(), MAX_PENDING_OPS);
-        assert_eq!(c.tail.get(), 0);
-        assert_eq!(c.head.get(), 0);
-        assert_eq!(c.comb.get(), 0);
+        assert_eq!(c.tail.load(Ordering::Relaxed), 0);
+        assert_eq!(c.head.load(Ordering::Relaxed), 0);
+        assert_eq!(c.comb.load(Ordering::Relaxed), 0);
     }
 
     // Tests whether we can successfully enqueue an operation onto the context.
@@ -218,21 +219,21 @@ mod test {
         let c = Context::<u64, Result<u64, ()>>::default();
         assert!(c.enqueue(121, 0));
         unsafe { assert_eq!((*c.batch[0].as_ptr()).0, Some(121)) };
-        assert_eq!(c.tail.take(), 1);
-        assert_eq!(c.head.take(), 0);
-        assert_eq!(c.comb.take(), 0);
+        assert_eq!(c.tail.load(Ordering::Relaxed), 1);
+        assert_eq!(c.head.load(Ordering::Relaxed), 0);
+        assert_eq!(c.comb.load(Ordering::Relaxed), 0);
     }
 
     // Tests that enqueues on the context fail when it's batch of operations is full.
     #[test]
     fn test_context_enqueue_full() {
         let c = Context::<u64, Result<u64, ()>>::default();
-        c.tail.set(MAX_PENDING_OPS);
+        c.tail.store(MAX_PENDING_OPS, Ordering::Relaxed);
 
         assert!(!c.enqueue(100, 0));
-        assert_eq!(c.tail.get(), MAX_PENDING_OPS);
-        assert_eq!(c.head.get(), 0);
-        assert_eq!(c.comb.get(), 0);
+        assert_eq!(c.tail.load(Ordering::Relaxed), MAX_PENDING_OPS);
+        assert_eq!(c.head.load(Ordering::Relaxed), 0);
+        assert_eq!(c.comb.load(Ordering::Relaxed), 0);
     }
 
     // Tests that we can successfully enqueue responses onto the context.
@@ -241,13 +242,13 @@ mod test {
         let c = Context::<u64, Result<u64, ()>>::default();
         let r = [Ok(11), Ok(12), Ok(13), Ok(14)];
 
-        c.tail.set(16);
-        c.comb.set(12);
+        c.tail.store(16, Ordering::Relaxed);
+        c.comb.store(12, Ordering::Relaxed);
         c.enqueue_resps(&r);
 
-        assert_eq!(c.tail.get(), 16);
-        assert_eq!(c.head.get(), 0);
-        assert_eq!(c.comb.get(), 16);
+        assert_eq!(c.tail.load(Ordering::Relaxed), 16);
+        assert_eq!(c.head.load(Ordering::Relaxed), 0);
+        assert_eq!(c.comb.load(Ordering::Relaxed), 16);
 
         assert_eq!(c.batch[12].get().2, Some(r[0]));
         assert_eq!(c.batch[13].get().2, Some(r[1]));
@@ -262,13 +263,13 @@ mod test {
         let c = Context::<u64, Result<u64, ()>>::default();
         let r = [];
 
-        c.tail.set(16);
-        c.comb.set(12);
+        c.tail.store(16, Ordering::Relaxed);
+        c.comb.store(12, Ordering::Relaxed);
         c.enqueue_resps(&r);
 
-        assert_eq!(c.tail.get(), 16);
-        assert_eq!(c.head.get(), 0);
-        assert_eq!(c.comb.get(), 12);
+        assert_eq!(c.tail.load(Ordering::Relaxed), 16);
+        assert_eq!(c.head.load(Ordering::Relaxed), 0);
+        assert_eq!(c.comb.load(Ordering::Relaxed), 12);
 
         assert_eq!(c.batch[12].get().2, None);
     }
@@ -285,9 +286,9 @@ mod test {
 
         assert_eq!(c.ops(&mut o, 1), MAX_PENDING_OPS / 2);
         /*assert_eq!(o.len(), MAX_PENDING_OPS / 2);
-        assert_eq!(c.tail.get(), MAX_PENDING_OPS / 2);
-        assert_eq!(c.head.get(), 0);
-        assert_eq!(c.comb.get(), 0);
+        assert_eq!(c.tail.load(Ordering::Relaxed), MAX_PENDING_OPS / 2);
+        assert_eq!(c.head.load(Ordering::Relaxed), 0);
+        assert_eq!(c.comb.load(Ordering::Relaxed), 0);
 
         for idx in 0..MAX_PENDING_OPS / 2 {
             assert_eq!(o[idx], idx * idx)
@@ -300,14 +301,14 @@ mod test {
         let c = Context::<usize, usize>::default();
         let mut o = vec![];
 
-        c.tail.set(8);
-        c.comb.set(8);
+        c.tail.store(8, Ordering::Relaxed);
+        c.comb.store(8, Ordering::Relaxed);
 
         assert_eq!(c.ops(&mut o, 0), 0);
         assert_eq!(o.len(), 0);
-        assert_eq!(c.tail.get(), 8);
-        assert_eq!(c.head.get(), 0);
-        assert_eq!(c.comb.get(), 8);
+        assert_eq!(c.tail.load(Ordering::Relaxed), 8);
+        assert_eq!(c.head.load(Ordering::Relaxed), 0);
+        assert_eq!(c.comb.load(Ordering::Relaxed), 8);
     }
 
     // Tests whether ops() panics if the combiner head advances beyond the tail.
@@ -317,8 +318,8 @@ mod test {
         let c = Context::<usize, usize>::default();
         let mut o = vec![];
 
-        c.tail.set(6);
-        c.comb.set(9);
+        c.tail.store(6, Ordering::Relaxed);
+        c.comb.store(9, Ordering::Relaxed);
 
         assert_eq!(c.ops(&mut o, 0), 0);
     }
@@ -329,23 +330,23 @@ mod test {
         let c = Context::<u64, Result<u64, ()>>::default();
         let r = [Ok(11), Ok(12), Ok(13), Ok(14)];
 
-        c.tail.set(16);
+        c.tail.store(16, Ordering::Relaxed);
         c.enqueue_resps(&r);
 
-        assert_eq!(c.tail.get(), 16);
-        assert_eq!(c.comb.get(), 4);
+        assert_eq!(c.tail.load(Ordering::Relaxed), 16);
+        assert_eq!(c.comb.load(Ordering::Relaxed), 4);
 
         assert_eq!(c.res(), Some(r[0]));
-        assert_eq!(c.head.get(), 1);
+        assert_eq!(c.head.load(Ordering::Relaxed), 1);
 
         assert_eq!(c.res(), Some(r[1]));
-        assert_eq!(c.head.get(), 2);
+        assert_eq!(c.head.load(Ordering::Relaxed), 2);
 
         assert_eq!(c.res(), Some(r[2]));
-        assert_eq!(c.head.get(), 3);
+        assert_eq!(c.head.load(Ordering::Relaxed), 3);
 
         assert_eq!(c.res(), Some(r[3]));
-        assert_eq!(c.head.get(), 4);
+        assert_eq!(c.head.load(Ordering::Relaxed), 4);
     }
 
     // Tests that we cannot retrieve responses when none were enqueued to begin with.
@@ -353,11 +354,11 @@ mod test {
     fn test_context_res_empty() {
         let c = Context::<usize, usize>::default();
 
-        c.tail.set(8);
+        c.tail.store(8, Ordering::Relaxed);
 
-        assert_eq!(c.tail.get(), 8);
-        assert_eq!(c.head.get(), 0);
-        assert_eq!(c.comb.get(), 0);
+        assert_eq!(c.tail.load(Ordering::Relaxed), 8);
+        assert_eq!(c.head.load(Ordering::Relaxed), 0);
+        assert_eq!(c.comb.load(Ordering::Relaxed), 0);
 
         assert_eq!(c.res(), None);
     }
@@ -368,9 +369,9 @@ mod test {
     fn test_context_res_panic() {
         let c = Context::<usize, usize>::default();
 
-        c.tail.set(8);
-        c.comb.set(4);
-        c.head.set(6);
+        c.tail.store(8, Ordering::Relaxed);
+        c.comb.store(4, Ordering::Relaxed);
+        c.head.store(6, Ordering::Relaxed);
 
         assert_eq!(c.res(), None);
     }
