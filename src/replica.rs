@@ -4,7 +4,7 @@
 use core::cell::RefCell;
 use core::hash::{Hash, Hasher};
 use core::mem::MaybeUninit;
-use core::sync::atomic::{spin_loop_hint, AtomicUsize, Ordering};
+use core::sync::atomic::{spin_loop_hint, AtomicBool, AtomicUsize, Ordering};
 use std::collections::hash_map::DefaultHasher;
 
 use alloc::sync::Arc;
@@ -97,6 +97,9 @@ where
     ///
     /// The vector is initialized with `MAX_THREADS_PER_REPLICA` elements.
     contexts: Vec<CachePadded<Context<<D as Dispatch>::WriteOperation, <D as Dispatch>::Response>>>,
+
+    /// Number of pending operations for each thread per log.
+    pending: Vec<CachePadded<[AtomicBool; MAX_THREADS_PER_REPLICA]>>,
 
     /// A buffer of operations for flat combining. The combiner stages operations in
     /// here and then batch appends them into the shared log. This helps amortize
@@ -198,8 +201,10 @@ where
             }
             // Allocate a combiner for each log.
             let mut combiners = Vec::with_capacity(nlogs);
+            let mut pending = Vec::with_capacity(nlogs);
             for _i in 0..nlogs {
-                combiners.push(CachePadded::new(AtomicUsize::new(0)))
+                combiners.push(CachePadded::new(AtomicUsize::new(0)));
+                pending.push(CachePadded::new(arr![AtomicBool::new(false); 256]));
             }
 
             uninit_ptr.write(Replica {
@@ -237,6 +242,7 @@ where
                 ],
                 slog: logs.clone(),
                 data: CachePadded::new(D::default()),
+                pending,
             });
 
             let mut replica = uninit_replica.assume_init();
@@ -372,7 +378,7 @@ where
         let hash = idx.0;
 
         // Enqueue the operation onto the thread local batch and then try to flat combine.
-        while !self.make_pending(op.clone(), idx.0, hash) {}
+        self.make_pending(op.clone(), idx.0, hash);
 
         // A thread becomes combiner for operations with hash same as its own operation.
         self.try_combine(idx.0, hash);
@@ -525,7 +531,13 @@ where
     /// indicating whether the operation was enqueued (true) or not (false).
     #[inline(always)]
     fn make_pending(&self, op: <D as Dispatch>::WriteOperation, tid: usize, hash: usize) -> bool {
-        self.contexts[tid - 1].enqueue(op, hash)
+        loop {
+            if self.contexts[tid - 1].enqueue(op.clone(), hash) {
+                self.pending[hash % self.slog.len()][tid - 1].store(true, Ordering::Relaxed);
+                break;
+            }
+        }
+        true
     }
 
     /// Appends an operation to the log and attempts to perform flat combining.
@@ -570,6 +582,7 @@ where
         let mut buffer = self.buffer[hashidx].borrow_mut();
         let mut operations = self.inflight[hashidx].borrow_mut();
         let mut results = self.result[hashidx].borrow_mut();
+        let pending = &self.pending[hashidx];
 
         buffer.clear();
         results.clear();
@@ -577,9 +590,11 @@ where
         let next = self.next.load(Ordering::Relaxed);
 
         // Collect operations from each thread registered with this replica.
-        for i in 1..next {
+        for tid in 1..next {
             // pass hash of current op to contexts, only get ops from context that have the same hash/log id
-            operations[i - 1] = self.contexts[i - 1].ops(&mut buffer, hash);
+            if pending[tid - 1].load(Ordering::Relaxed) {
+                operations[tid - 1] = self.contexts[tid - 1].ops(&mut buffer, hash);
+            }
         }
 
         // Append all collected operations into the shared log. We pass a closure
@@ -618,6 +633,7 @@ where
             self.contexts[i - 1].enqueue_resps(&results[s..f]);
             s += operations[i - 1];
             operations[i - 1] = 0;
+            pending[i - 1].store(false, Ordering::Relaxed);
         }
     }
 }
@@ -705,18 +721,6 @@ mod test {
         assert_eq!(repl.contexts[7].ops(&mut o, 0), 1);
         assert_eq!(o.len(), 1);
         assert_eq!(o[0], 121);
-    }
-
-    // Tests that we can't pend operations on a context that is already full of operations.
-    #[test]
-    fn test_replica_make_pending_false() {
-        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new(1024));
-        let repl = Replica::<Data>::new(vec![slog]);
-        for _i in 0..Context::<u64, Result<u64, ()>>::batch_size() {
-            assert!(repl.make_pending(121, 1, 0))
-        }
-
-        assert!(!repl.make_pending(11, 1, 0));
     }
 
     // Tests that we can append and execute operations using try_combine().
