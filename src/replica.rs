@@ -23,7 +23,7 @@ use super::Dispatch;
 /// `execute` and `execute_ro`. However it feels like this would
 /// hurt API ergonomics a lot.
 #[derive(Copy, Clone, Debug, PartialEq)]
-pub struct ReplicaToken(usize);
+pub struct ReplicaToken(pub usize);
 
 /// To make it harder to use the same ReplicaToken on multiple threads.
 impl !Send for ReplicaToken {}

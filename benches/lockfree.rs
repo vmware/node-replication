@@ -14,6 +14,7 @@ use zipf::ZipfDistribution;
 use node_replication::Dispatch;
 
 mod lockfree_comparisons;
+mod lockfree_partitioned;
 mod mkbench;
 mod utils;
 
@@ -119,6 +120,33 @@ pub fn generate_sops_concurrent(
     ops
 }
 
+pub fn generate_sops_partitioned_concurrent(
+    nop: usize,
+    write_ratio: usize,
+    span: usize,
+) -> Vec<Operation<SkipListConcurrent, ()>> {
+    let mut ops = Vec::with_capacity(nop);
+
+    let mut t_rng = rand::thread_rng();
+    let zipf = ZipfDistribution::new(span, 1.03).unwrap();
+
+    for idx in 0..nop {
+        let id = t_rng.gen_range(0, span as u64);
+
+        if idx % 100 < write_ratio {
+                ops.push(Operation::ReadOperation(SkipListConcurrent::Push(
+                    t_rng.next_u64() % 25_000_000, t_rng.next_u64()
+                )));
+        }
+        else {
+            ops.push(Operation::ReadOperation(SkipListConcurrent::Get(t_rng.next_u64() % 25_000_000)));
+        }
+    }
+
+    ops.shuffle(&mut t_rng);
+    ops
+}
+
 // Number of operation for test-harness.
 #[cfg(feature = "smokebench")]
 pub const NOP: usize = 2_500_000;
@@ -133,15 +161,16 @@ fn concurrent_ds_scale_out<T: Sized>(
         dyn Fn() -> Vec<Operation<<T as Dispatch>::ReadOperation, <T as Dispatch>::WriteOperation>>,
     >,
 ) where
-    T: Dispatch<WriteOperation = ()> + Sized,
+    T: Dispatch<ReadOperation = SkipListConcurrent> + Sized,
     T: 'static,
     T: Dispatch + Sync + Default + Send,
     <T as Dispatch>::ReadOperation: Send + Sync + Debug + Copy,
+    <T as Dispatch>::WriteOperation: Send + Sync + Debug + Copy,
     <T as Dispatch>::Response: Send + Sync + Debug,
 {
     let bench_name = format!("{}-scaleout-wr{}", name, write_ratio);
 
-    mkbench::ScaleBenchBuilder::<ConcurrentDs<T>>::new(mkops())
+    mkbench::ScaleBenchBuilder::<lockfree_partitioned::ConcurrentDs<T>>::new(mkops())
         .thread_defaults()
         .replica_strategy(mkbench::ReplicaStrategy::One) // Can only be One
         .update_batch(128)
@@ -169,7 +198,7 @@ fn main() {
     utils::disable_dvfs();
 
     let mut harness = Default::default();
-    let write_ratios = vec![0, 100];
+    let write_ratios = vec![100];
 
     for write_ratio in write_ratios.into_iter() {
         /*concurrent_ds_scale_out::<SegQueueWrapper>(
@@ -179,11 +208,19 @@ fn main() {
             Box::new(move || generate_qops_concurrent(NOP, write_ratio, KEY_SPACE)),
         );*/
 
-        concurrent_ds_scale_out::<SkipListWrapper>(
+        /*concurrent_ds_scale_out::<SkipListWrapper>(
             &mut harness,
             "skiplist",
             write_ratio,
             Box::new(move || generate_sops_concurrent(NOP, write_ratio, KEY_SPACE)),
+        );*/
+
+        concurrent_ds_scale_out::<lockfree_partitioned::SkipListWrapper>(
+            &mut harness,
+            "skiplist-partinput",
+            write_ratio,
+            Box::new(move || generate_sops_partitioned_concurrent(NOP, write_ratio, KEY_SPACE)),
         );
+
     }
 }

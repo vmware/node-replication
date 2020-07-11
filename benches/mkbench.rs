@@ -881,14 +881,18 @@ where
     _marker: PhantomData<R>,
 }
 
+use crate::SkipListConcurrent;
+use crate::lockfree_partitioned;
+
 impl<R: 'static + ReplicaTrait> ScaleBenchBuilder<R>
 where
-    R::D: Dispatch + Default + Send + Sync,
+    R::D: Dispatch<ReadOperation = SkipListConcurrent> + Default + Send + Sync,
     <R::D as Dispatch>::WriteOperation: Send,
     <R::D as Dispatch>::WriteOperation: Sync,
     <R::D as Dispatch>::ReadOperation: Sync,
     <R::D as Dispatch>::ReadOperation: Send,
     <R::D as Dispatch>::Response: Send,
+
 {
     /// Initialize an "empty" ScaleBenchBuilder with a  MiB log.
     ///
@@ -948,7 +952,7 @@ where
         // Go in increments of one around "interesting" socket boundaries
         let sockets = topology.sockets();
         let cores_on_s0 = topology.cpus_on_socket(sockets[0]);
-        let cores_per_socket = cores_on_s0.len();
+        let cores_per_socket = cores_on_s0.len() / 2;
         for i in 0..sockets.len() {
             let multiplier = i + 1;
             fn try_add(to_add: usize, max_cores: usize, cur_threads: &mut Vec<usize>) {
