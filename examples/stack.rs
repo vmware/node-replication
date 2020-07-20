@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! A minimal example that implements a replicated stack
-use crossbeam::stack::TreiberStack;
+use crossbeam::queue::{PopError, SegQueue};
 use std::sync::Arc;
 
 use node_replication::Dispatch;
@@ -37,7 +37,7 @@ impl LogMapper for Access {
 
 /// The actual stack, it uses a single-threaded Vec.
 struct Stack {
-    storage: TreiberStack<u32>,
+    storage: SegQueue<u32>,
 }
 
 impl Default for Stack {
@@ -67,16 +67,16 @@ impl Default for Stack {
 impl Dispatch for Stack {
     type ReadOperation = Access;
     type WriteOperation = Modify;
-    type Response = Option<u32>;
+    type Response = Result<u32, PopError>;
 
     /// The `dispatch` function applies the immutable operations.
     fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
         match op {
             Access::Peek => {
                 if self.storage.is_empty() {
-                    None
+                    Err(PopError)
                 } else {
-                    Some(0)
+                    Ok(0)
                 }
             }
         }
@@ -87,9 +87,9 @@ impl Dispatch for Stack {
         match op {
             Modify::Push(v) => {
                 self.storage.push(v);
-                return None;
+                return Ok(0);
             }
-            Modify::Pop => return self.storage.try_pop(),
+            Modify::Pop => return self.storage.pop(),
         }
     }
 }

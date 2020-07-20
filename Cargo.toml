@@ -11,6 +11,10 @@ categories = ["algorithms", "concurrency", "data-structures", "no-std", "os"]
 autobenches = false
 
 [[bench]]
+name = "lockfree"
+harness = false
+
+[[bench]]
 name = "hashbench"
 harness = false
 
@@ -81,7 +85,9 @@ clap = { version = "2", features = ["yaml"] }
 rand = { version = "0.7", features = ["small_rng"] }
 dashmap = "3.11.1"
 lazy_static = "1.4"
-crossbeam = "0.6.0"
+crossbeam = { git = "https://github.com/crossbeam-rs/crossbeam" }
+crossbeam-skiplist = { git = "https://github.com/crossbeam-rs/crossbeam" }
+rand_xorshift = "0.2.0"
 
 [features]
 smokebench = []
