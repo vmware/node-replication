@@ -13,10 +13,13 @@ use std::sync;
 use std::thread;
 use std::time;
 
-use node_replication::{Dispatch, Log, Replica, ReplicaToken};
+use node_replication::{Dispatch, Log, LogMapper, Replica, ReplicaToken};
 
 mod utils;
 use utils::{pin_thread, topology::*};
+
+pub const CAPACITY: usize = 5_000_000;
+static mut SPAN: usize = 0;
 
 fn main() {
     let args = std::env::args().filter(|e| e != "--bench");
@@ -59,7 +62,10 @@ fn main() {
     let dur = time::Duration::from_secs(5);
     let dur_in_ns = dur.as_secs() * 1_000_000_000_u64 + dur.subsec_nanos() as u64;
     let dur_in_s = dur_in_ns as f64 / 1_000_000_000_f64;
-    let span = 1_000_000;
+    unsafe {
+        SPAN = CAPACITY / writers;
+    }
+    let span = unsafe { SPAN };
 
     let stat = |var: &str, op, results: Vec<(_, usize)>| {
         for (i, res) in results.into_iter().enumerate() {
@@ -103,19 +109,18 @@ fn main() {
                 let replica = ReplicaAndToken::new(replica);
                 let tid = replica.token.0;
                 pin_thread(cpu[tid - 1].cpu);
-                drive(replica, end, dist, false, span)
+                drive(replica, end, dist, false, span, tid)
             })
         }));
-        join.extend((0..writers).into_iter().map(|_| {
+        join.extend((0..writers).into_iter().map(|tid| {
             let replica = replica.clone();
             let dist = dist.to_owned();
             let cpu = cpus.clone();
 
             thread::spawn(move || {
                 let replica = ReplicaAndToken::new(replica);
-                let tid = replica.token.0;
-                pin_thread(cpu[tid - 1].cpu);
-                drive(replica, end, dist, true, span)
+                pin_thread(cpu[tid].cpu);
+                drive(replica, end, dist, true, span, tid)
             })
         }));
         let (wres, rres): (Vec<_>, _) = join
@@ -133,12 +138,14 @@ trait Backend {
 }
 
 fn drive<B: Backend>(
-    mut backend: B,
+    backend: B,
     end: time::Instant,
     dist: String,
     write: bool,
     span: usize,
+    tid: usize,
 ) -> (bool, usize) {
+    let base = (tid * span) as u64;
     use rand::Rng;
 
     let mut ops = 0;
@@ -150,6 +157,7 @@ fn drive<B: Backend>(
         let id_uniform: u64 = t_rng.gen_range(0, span as u64);
         let id_skewed = zipf.sample(&mut t_rng) as u64;
         let id = if skewed { id_skewed } else { id_uniform };
+        let id = base + id;
         if write {
             backend.b_put(id, t_rng.next_u64());
         } else {
@@ -168,10 +176,26 @@ pub enum OpWr {
     Put(u64, u64),
 }
 
+impl LogMapper for OpWr {
+    fn hash(&self) -> usize {
+        match self {
+            OpWr::Put(k, _v) => (unsafe { *k / SPAN as u64 }) as usize,
+        }
+    }
+}
+
 #[derive(Hash, Debug, Eq, PartialEq, Clone, Copy)]
 pub enum OpRd {
     /// Get item from the hash-map.
     Get(u64),
+}
+
+impl LogMapper for OpRd {
+    fn hash(&self) -> usize {
+        match self {
+            OpRd::Get(k) => (unsafe { *k / SPAN as u64 }) as usize,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -192,8 +216,8 @@ impl NrHashMap {
 impl Default for NrHashMap {
     /// Return a dummy hash-map with initial capacity of 50k elements.
     fn default() -> NrHashMap {
-        let storage = HashMap::with_capacity(5_000_000);
-        for i in 0..5_000_000 {
+        let storage = HashMap::with_capacity(CAPACITY);
+        for i in 0..CAPACITY {
             storage.insert(i as u64, (i + 1) as u64);
         }
         NrHashMap { storage }
@@ -214,8 +238,8 @@ impl Dispatch for NrHashMap {
     /// Implements how we execute operation from the log against our local stack
     fn dispatch_mut(&self, op: Self::WriteOperation) -> Self::Response {
         match op {
-            OpWr::Put(key, val) => {
-                //self.put(key, val);
+            OpWr::Put(_key, _val) => {
+                //self.put(_key, _val);
                 Ok(0)
             }
         }

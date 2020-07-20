@@ -91,7 +91,10 @@ pub use crate::log::Log;
 pub use replica::{Replica, ReplicaToken, MAX_THREADS_PER_REPLICA};
 
 use core::fmt::Debug;
-use core::hash::Hash;
+
+pub trait LogMapper {
+    fn hash(&self) -> usize;
+}
 
 /// Trait that a data structure must implement to be usable with this library.
 ///
@@ -104,12 +107,12 @@ pub trait Dispatch {
     /// A read-only operation. When executed against the data structure, an operation
     /// of this type must not mutate the data structure in anyway. Otherwise, the
     /// assumptions made by this library no longer hold.
-    type ReadOperation: Sized + Clone + PartialEq + Debug + Hash;
+    type ReadOperation: Sized + Clone + PartialEq + Debug + LogMapper;
 
     /// A write operation. When executed against the data structure, an operation of
     /// this type is allowed to mutate state. The library ensures that this is done so
     /// in a thread-safe manner.
-    type WriteOperation: Sized + Clone + PartialEq + Debug + Send + Hash;
+    type WriteOperation: Sized + Clone + PartialEq + Debug + Send + LogMapper;
 
     /// The type on the value returned by the data structure when a `ReadOperation` or a
     /// `WriteOperation` successfully executes against it.

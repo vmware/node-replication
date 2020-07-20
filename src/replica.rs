@@ -2,10 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use core::cell::RefCell;
-use core::hash::{Hash, Hasher};
 use core::mem::MaybeUninit;
 use core::sync::atomic::{spin_loop_hint, AtomicBool, AtomicUsize, Ordering};
-use std::collections::hash_map::DefaultHasher;
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -16,6 +14,7 @@ use crossbeam_utils::CachePadded;
 use super::context::Context;
 use super::log::Log;
 use super::Dispatch;
+use super::LogMapper;
 
 /// A token handed out to threads registered with replicas.
 ///
@@ -143,6 +142,7 @@ where
     /// ```
     /// use node_replication::Dispatch;
     /// use node_replication::Log;
+    /// use node_replication::LogMapper;
     /// use node_replication::Replica;
     ///
     /// use core::sync::atomic::{AtomicUsize, Ordering};
@@ -154,10 +154,24 @@ where
     ///     junk: AtomicUsize,
     /// }
     ///
+    /// #[derive(Hash, Debug, Eq, PartialEq, Clone, Copy)]
+    /// pub struct OpWr(pub usize);
+    ///
+    /// impl LogMapper for OpWr {
+    ///     fn hash(&self) -> usize { 0 }
+    /// }
+    ///
+    /// #[derive(Hash, Debug, Eq, PartialEq, Clone, Copy)]
+    /// pub struct OpRd(());
+    ///
+    /// impl LogMapper for OpRd {
+    ///     fn hash(&self) -> usize { 0 }
+    /// }
+    ///
     /// // This trait allows the `Data` to be used with node-replication.
     /// impl Dispatch for Data {
-    ///     type ReadOperation = ();
-    ///     type WriteOperation = usize;
+    ///     type ReadOperation = OpRd;
+    ///     type WriteOperation = OpWr;
     ///     type Response = Option<usize>;
     ///
     ///     // A read returns the underlying u64.
@@ -173,7 +187,7 @@ where
     ///         &self,
     ///         op: Self::WriteOperation,
     ///     ) -> Self::Response {
-    ///         self.junk.store(op, Ordering::Relaxed);
+    ///         self.junk.store(op.0, Ordering::Relaxed);
     ///         None
     ///     }
     /// }
@@ -266,6 +280,7 @@ where
     /// ```
     /// use node_replication::Dispatch;
     /// use node_replication::Log;
+    /// use node_replication::LogMapper;
     /// use node_replication::Replica;
     ///
     /// use core::sync::atomic::{AtomicUsize, Ordering};
@@ -276,9 +291,23 @@ where
     ///     junk: AtomicUsize,
     /// }
     ///
+    /// #[derive(Hash, Debug, Eq, PartialEq, Clone, Copy)]
+    /// pub struct OpWr(pub usize);
+    ///
+    /// impl LogMapper for OpWr {
+    ///     fn hash(&self) -> usize { 0 }
+    /// }
+    ///
+    /// #[derive(Hash, Debug, Eq, PartialEq, Clone, Copy)]
+    /// pub struct OpRd(());
+    ///
+    /// impl LogMapper for OpRd {
+    ///     fn hash(&self) -> usize { 0 }
+    /// }
+    ///
     /// impl Dispatch for Data {
-    ///     type ReadOperation = ();
-    ///     type WriteOperation = usize;
+    ///     type ReadOperation = OpRd;
+    ///     type WriteOperation = OpWr;
     ///     type Response = Option<usize>;
     ///
     ///     fn dispatch(
@@ -292,7 +321,7 @@ where
     ///         &self,
     ///         op: Self::WriteOperation,
     ///     ) -> Self::Response {
-    ///         self.junk.store(op, Ordering::Relaxed);
+    ///         self.junk.store(op.0, Ordering::Relaxed);
     ///         None
     ///     }
     /// }
@@ -329,6 +358,7 @@ where
     /// ```
     /// use node_replication::Dispatch;
     /// use node_replication::Log;
+    /// use node_replication::LogMapper;
     /// use node_replication::Replica;
     ///
     /// use core::sync::atomic::{AtomicUsize, Ordering};
@@ -339,9 +369,23 @@ where
     ///     junk: AtomicUsize,
     /// }
     ///
+    /// #[derive(Hash, Debug, Eq, PartialEq, Clone, Copy)]
+    /// pub struct OpWr(pub usize);
+    ///
+    /// impl LogMapper for OpWr {
+    ///     fn hash(&self) -> usize { 0 }
+    /// }
+    ///
+    /// #[derive(Hash, Debug, Eq, PartialEq, Clone, Copy)]
+    /// pub struct OpRd(());
+    ///
+    /// impl LogMapper for OpRd {
+    ///     fn hash(&self) -> usize { 0 }
+    /// }
+    ///
     /// impl Dispatch for Data {
-    ///     type ReadOperation = ();
-    ///     type WriteOperation = usize;
+    ///     type ReadOperation = OpRd;
+    ///     type WriteOperation = OpWr;
     ///     type Response = Option<usize>;
     ///
     ///     fn dispatch(
@@ -355,7 +399,7 @@ where
     ///         &self,
     ///         op: Self::WriteOperation,
     ///     ) -> Self::Response {
-    ///         self.junk.store(op, Ordering::Relaxed);
+    ///         self.junk.store(op.0, Ordering::Relaxed);
     ///         None
     ///     }
     /// }
@@ -365,17 +409,15 @@ where
     /// let idx = replica.register().expect("Failed to register with replica.");
     ///
     /// // execute_mut() can be used to write to the replicated data structure.
-    /// let res = replica.execute_mut(100, idx);
+    /// let res = replica.execute_mut(OpWr(100), idx);
     /// assert_eq!(None, res);
     pub fn execute_mut(
         &self,
         op: <D as Dispatch>::WriteOperation,
         idx: ReplicaToken,
     ) -> <D as Dispatch>::Response {
-        //let mut hasher = DefaultHasher::new();
-        //op.hash(&mut hasher);
-        //let hash = hasher.finish() as usize;
-        let hash = idx.0;
+        let hash = op.hash();
+        //let hash = idx.0;
 
         // Enqueue the operation onto the thread local batch and then try to flat combine.
         self.make_pending(op.clone(), idx.0, hash);
@@ -395,6 +437,7 @@ where
     /// ```
     /// use node_replication::Dispatch;
     /// use node_replication::Log;
+    /// use node_replication::LogMapper;
     /// use node_replication::Replica;
     ///
     /// use core::sync::atomic::{AtomicUsize, Ordering};
@@ -405,9 +448,23 @@ where
     ///     junk: AtomicUsize,
     /// }
     ///
+    /// #[derive(Hash, Debug, Eq, PartialEq, Clone, Copy)]
+    /// pub struct OpWr(pub usize);
+    ///
+    /// impl LogMapper for OpWr {
+    ///     fn hash(&self) -> usize { 0 }
+    /// }
+    ///
+    /// #[derive(Hash, Debug, Eq, PartialEq, Clone, Copy)]
+    /// pub struct OpRd(());
+    ///
+    /// impl LogMapper for OpRd {
+    ///     fn hash(&self) -> usize { 0 }
+    /// }
+    ///
     /// impl Dispatch for Data {
-    ///     type ReadOperation = ();
-    ///     type WriteOperation = usize;
+    ///     type ReadOperation = OpRd;
+    ///     type WriteOperation = OpWr;
     ///     type Response = Option<usize>;
     ///
     ///     fn dispatch(
@@ -421,7 +478,7 @@ where
     ///         &self,
     ///         op: Self::WriteOperation,
     ///     ) -> Self::Response {
-    ///         self.junk.store(op, Ordering::Relaxed);
+    ///         self.junk.store(op.0, Ordering::Relaxed);
     ///         None
     ///     }
     /// }
@@ -429,10 +486,10 @@ where
     /// let log = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
     /// let replica = Replica::<Data>::new(vec![log]);
     /// let idx = replica.register().expect("Failed to register with replica.");
-    /// let _wr = replica.execute_mut(100, idx);
+    /// let _wr = replica.execute_mut(OpWr(100), idx);
     ///
     /// // execute() can be used to read from the replicated data structure.
-    /// let res = replica.execute((), idx);
+    /// let res = replica.execute(OpRd(()), idx);
     /// assert_eq!(Some(100), res);
     pub fn execute(
         &self,
@@ -511,9 +568,7 @@ where
         op: <D as Dispatch>::ReadOperation,
         tid: usize,
     ) -> <D as Dispatch>::Response {
-        let mut hasher = DefaultHasher::new();
-        op.hash(&mut hasher);
-        let hash = hasher.finish() as usize;
+        let hash = op.hash();
         let hash_idx = hash % self.slog.len();
 
         // We can perform the read only if our replica is synced up against
@@ -652,9 +707,27 @@ mod test {
         junk: AtomicUsize,
     }
 
+    #[derive(Hash, Debug, Eq, PartialEq, Clone, Copy)]
+    pub struct OpWr(usize);
+
+    impl LogMapper for OpWr {
+        fn hash(&self) -> usize {
+            0
+        }
+    }
+
+    #[derive(Hash, Debug, Eq, PartialEq, Clone, Copy)]
+    pub struct OpRd(usize);
+
+    impl LogMapper for OpRd {
+        fn hash(&self) -> usize {
+            0
+        }
+    }
+
     impl Dispatch for Data {
-        type ReadOperation = usize;
-        type WriteOperation = usize;
+        type ReadOperation = OpRd;
+        type WriteOperation = OpWr;
         type Response = Result<usize, ()>;
 
         fn dispatch(&self, _op: Self::ReadOperation) -> Self::Response {
@@ -717,10 +790,10 @@ mod test {
         let repl = Replica::<Data>::new(vec![slog]);
         let mut o = vec![];
 
-        assert!(repl.make_pending(121, 8, 0));
+        assert!(repl.make_pending(OpWr(121), 8, 0));
         assert_eq!(repl.contexts[7].ops(&mut o, 0), 1);
         assert_eq!(o.len(), 1);
-        assert_eq!(o[0], 121);
+        assert_eq!(o[0], OpWr(121));
     }
 
     // Tests that we can append and execute operations using try_combine().
@@ -730,7 +803,7 @@ mod test {
         let repl = Replica::<Data>::new(vec![slog]);
         let _idx = repl.register();
 
-        repl.make_pending(121, 1, 0);
+        repl.make_pending(OpWr(121), 1, 0);
         repl.try_combine(1, 0);
 
         assert_eq!(repl.combiners[0].load(Ordering::SeqCst), 0);
@@ -745,7 +818,7 @@ mod test {
         let repl = Replica::<Data>::new(vec![slog]);
 
         repl.next.store(9, Ordering::SeqCst);
-        repl.make_pending(121, 8, 0);
+        repl.make_pending(OpWr(121), 8, 0);
         repl.try_combine(1, 0);
 
         assert_eq!(repl.data.junk.load(Ordering::Relaxed), 1);
@@ -760,7 +833,7 @@ mod test {
 
         repl.next.store(9, Ordering::SeqCst);
         repl.combiners[0].store(8, Ordering::SeqCst);
-        repl.make_pending(121, 1, 0);
+        repl.make_pending(OpWr(121), 1, 0);
         repl.try_combine(1, 0);
 
         assert_eq!(repl.data.junk.load(Ordering::Relaxed), 0);
@@ -774,7 +847,7 @@ mod test {
         let repl = Replica::<Data>::new(vec![slog]);
         let idx = repl.register().unwrap();
 
-        assert_eq!(Ok(107), repl.execute_mut(121, idx));
+        assert_eq!(Ok(107), repl.execute_mut(OpWr(121), idx));
         assert_eq!(1, repl.data.junk.load(Ordering::Relaxed));
     }
 
@@ -786,10 +859,8 @@ mod test {
         let repl = Replica::<Data>::new(vec![slog]);
         let _idx = repl.register();
 
-        let op = 121;
-        let mut hasher = DefaultHasher::new();
-        op.hash(&mut hasher);
-        let hash = hasher.finish() as usize;
+        let op = OpWr(121);
+        let hash = op.hash();
         repl.make_pending(op, 1, hash);
 
         assert_eq!(repl.get_response(1, hash), Ok(107));
@@ -802,8 +873,8 @@ mod test {
         let repl = Replica::<Data>::new(vec![slog]);
         let idx = repl.register().expect("Failed to register with replica.");
 
-        assert_eq!(Ok(107), repl.execute_mut(121, idx));
-        assert_eq!(Ok(1), repl.execute(11, idx));
+        assert_eq!(Ok(107), repl.execute_mut(OpWr(121), idx));
+        assert_eq!(Ok(1), repl.execute(OpRd(121), idx));
     }
 
     // Tests that execute() syncs up the replica with the log before
@@ -814,12 +885,12 @@ mod test {
         let repl = Replica::<Data>::new(vec![slog.clone()]);
 
         // Add in operations to the log off the side, not through the replica.
-        let o = [121, 212];
-        slog.append(&o, 2, |_o: usize, _i: usize| {});
-        slog.exec(2, &mut |_o: usize, _i: usize| {});
+        let o = [OpWr(121), OpWr(212)];
+        slog.append(&o, 2, |_o: OpWr, _i: usize| {});
+        slog.exec(2, &mut |_o: OpWr, _i: usize| {});
 
         let t1 = repl.register().expect("Failed to register with replica.");
-        assert_eq!(Ok(2), repl.execute(11, t1));
+        assert_eq!(Ok(2), repl.execute(OpRd(11), t1));
     }
 
     // Tests if there are log number of combiners and all of
@@ -876,8 +947,8 @@ mod test {
         }
 
         impl Dispatch for Block {
-            type ReadOperation = usize;
-            type WriteOperation = usize;
+            type ReadOperation = OpRd;
+            type WriteOperation = OpWr;
             type Response = Result<usize, ()>;
 
             fn dispatch(&self, _op: Self::ReadOperation) -> Self::Response {
@@ -906,7 +977,7 @@ mod test {
             let r = repl.clone();
             threads.push(thread::spawn(move || {
                 let t = r.register().unwrap();
-                r.make_pending(i, t.0, t.0);
+                r.make_pending(OpWr(i), t.0, t.0);
 
                 r.try_combine(t.0, t.0);
             }));

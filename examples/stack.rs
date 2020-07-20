@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use node_replication::Dispatch;
 use node_replication::Log;
+use node_replication::LogMapper;
 use node_replication::Replica;
 
 /// We support mutable push and pop operations on the stack.
@@ -16,10 +17,22 @@ enum Modify {
     Pop,
 }
 
+impl LogMapper for Modify {
+    fn hash(&self) -> usize {
+        0
+    }
+}
+
 /// We support an immutable read operation to peek the stack.
 #[derive(Hash, Clone, Debug, PartialEq)]
 enum Access {
     Peek,
+}
+
+impl LogMapper for Access {
+    fn hash(&self) -> usize {
+        0
+    }
 }
 
 /// The actual stack, it uses a single-threaded Vec.

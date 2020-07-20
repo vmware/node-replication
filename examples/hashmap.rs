@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use node_replication::Dispatch;
 use node_replication::Log;
+use node_replication::LogMapper;
 use node_replication::Replica;
 
 /// The node-replicated hashmap uses a std hashmap internally.
@@ -21,10 +22,22 @@ enum Modify {
     Put(u64, u64),
 }
 
+impl LogMapper for Modify {
+    fn hash(&self) -> usize {
+        0
+    }
+}
+
 /// We support an immutable read operation to lookup a key from the hashmap.
 #[derive(Hash, Clone, Debug, PartialEq)]
 enum Access {
     Get(u64),
+}
+
+impl LogMapper for Access {
+    fn hash(&self) -> usize {
+        0
+    }
 }
 
 /// The Dispatch traits executes `ReadOperation` (our Access enum)
