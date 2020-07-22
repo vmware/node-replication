@@ -11,14 +11,14 @@ use rand::seq::SliceRandom;
 use rand::{distributions::Distribution, Rng, RngCore};
 use zipf::ZipfDistribution;
 
-use node_replication::Dispatch;
+use node_replication::{Dispatch, LogMapper, Replica};
 
-mod lockfree_comparisons;
+//mod lockfree_comparisons;
 mod lockfree_partitioned;
 mod mkbench;
 mod utils;
 
-use lockfree_comparisons::*;
+//use lockfree_comparisons::*;
 use mkbench::ReplicaTrait;
 use utils::benchmark::*;
 use utils::topology::ThreadMapping;
@@ -50,6 +50,12 @@ pub enum QueueRd {
     Len,
 }
 
+impl LogMapper for QueueRd {
+    fn hash(&self) -> usize {
+        0
+    }
+}
+
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
 pub enum QueueConcurrent {
     Push(u64),
@@ -57,10 +63,34 @@ pub enum QueueConcurrent {
     Pop,
 }
 
+impl LogMapper for QueueConcurrent {
+    fn hash(&self) -> usize {
+        0
+    }
+}
+
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
 pub enum SkipListConcurrent {
-    Push(u64, u64),
     Get(u64),
+}
+
+impl LogMapper for SkipListConcurrent {
+    fn hash(&self) -> usize {
+        0
+    }
+}
+
+#[derive(Debug, Eq, PartialEq, Clone, Copy)]
+pub enum OpWr {
+    Push(u64, u64),
+}
+
+impl LogMapper for OpWr {
+    fn hash(&self) -> usize {
+        match self {
+            OpWr::Push(k, _v) => *k as usize,
+        }
+    }
 }
 
 pub fn generate_qops_concurrent(
@@ -97,7 +127,7 @@ pub fn generate_sops_concurrent(
     nop: usize,
     write_ratio: usize,
     span: usize,
-) -> Vec<Operation<SkipListConcurrent, ()>> {
+) -> Vec<Operation<SkipListConcurrent, OpWr>> {
     let mut ops = Vec::with_capacity(nop);
 
     let mut t_rng = rand::thread_rng();
@@ -107,7 +137,7 @@ pub fn generate_sops_concurrent(
         let id = t_rng.gen_range(0, span as u64);
 
         if idx % 100 < write_ratio {
-            ops.push(Operation::ReadOperation(SkipListConcurrent::Push(
+            ops.push(Operation::WriteOperation(OpWr::Push(
                 t_rng.next_u64(),
                 t_rng.next_u64(),
             )));
@@ -126,7 +156,7 @@ pub fn generate_sops_partitioned_concurrent(
     nop: usize,
     write_ratio: usize,
     span: usize,
-) -> Vec<Operation<SkipListConcurrent, ()>> {
+) -> Vec<Operation<SkipListConcurrent, OpWr>> {
     let mut ops = Vec::with_capacity(nop);
 
     let mut t_rng = rand::thread_rng();
@@ -136,7 +166,7 @@ pub fn generate_sops_partitioned_concurrent(
         let id = t_rng.gen_range(0, span as u64);
 
         if idx % 100 < write_ratio {
-            ops.push(Operation::ReadOperation(SkipListConcurrent::Push(
+            ops.push(Operation::WriteOperation(OpWr::Push(
                 t_rng.next_u64() % 25_000_000,
                 t_rng.next_u64(),
             )));
@@ -166,6 +196,7 @@ fn concurrent_ds_scale_out<T: Sized>(
     >,
 ) where
     T: Dispatch<ReadOperation = SkipListConcurrent> + Sized,
+    T: Dispatch<WriteOperation = OpWr> + Sized,
     T: 'static,
     T: Dispatch + Sync + Default + Send,
     <T as Dispatch>::ReadOperation: Send + Sync + Debug + Copy,
@@ -179,6 +210,40 @@ fn concurrent_ds_scale_out<T: Sized>(
         .replica_strategy(mkbench::ReplicaStrategy::One) // Can only be One
         .update_batch(128)
         .thread_mapping(ThreadMapping::Interleave)
+        .log_strategy(mkbench::LogStrategy::One)
+        .configure(
+            c,
+            &bench_name,
+            |_cid, rid, _log, replica, op, _batch_size| match op {
+                Operation::ReadOperation(op) => {
+                    replica.exec_ro(*op, rid);
+                }
+                Operation::WriteOperation(op) => {
+                    replica.exec(*op, rid);
+                }
+            },
+        );
+}
+
+fn concurrent_ds_nr_scale_out<R>(c: &mut TestHarness, name: &str, write_ratio: usize)
+where
+    R: ReplicaTrait + Send + Sync + 'static,
+    R::D: Send,
+    R::D: Dispatch<ReadOperation = SkipListConcurrent>,
+    R::D: Dispatch<WriteOperation = OpWr>,
+    <R::D as Dispatch>::WriteOperation: Send + Sync,
+    <R::D as Dispatch>::ReadOperation: Send + Sync,
+    <R::D as Dispatch>::Response: Sync + Send + Debug,
+{
+    let ops = generate_sops_concurrent(NOP, write_ratio, KEY_SPACE);
+    let bench_name = format!("{}-scaleout-wr{}", name, write_ratio);
+
+    mkbench::ScaleBenchBuilder::<R>::new(ops)
+        .thread_defaults()
+        .replica_strategy(mkbench::ReplicaStrategy::One) // Can only be One
+        .update_batch(128)
+        .thread_mapping(ThreadMapping::Interleave)
+        .log_strategy(mkbench::LogStrategy::PerThread)
         .configure(
             c,
             &bench_name,
@@ -224,6 +289,12 @@ fn main() {
             "skiplist-partinput",
             write_ratio,
             Box::new(move || generate_sops_partitioned_concurrent(NOP, write_ratio, KEY_SPACE)),
+        );
+
+        concurrent_ds_nr_scale_out::<Replica<lockfree_partitioned::SkipListWrapper>>(
+            &mut harness,
+            "skiplist-mlnr-partinput",
+            write_ratio,
         );
     }
 }

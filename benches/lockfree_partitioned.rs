@@ -13,11 +13,11 @@ use crossbeam::epoch;
 use crossbeam::queue::SegQueue;
 use crossbeam_skiplist::SkipList;
 
-use node_replication::{Dispatch, Log, ReplicaToken};
+use node_replication::{Dispatch, Log, LogMapper, ReplicaToken};
 
 use crate::mkbench::ReplicaTrait;
 
-use super::{QueueConcurrent, SkipListConcurrent, INITIAL_CAPACITY};
+use super::{OpWr, QueueConcurrent, SkipListConcurrent, INITIAL_CAPACITY};
 
 /// A wrapper that implements ReplicaTrait which just submits everything against
 /// the data-structure that is already concurrent.
@@ -35,12 +35,13 @@ unsafe impl<T> Sync for ConcurrentDs<T> {}
 impl<T> ReplicaTrait for ConcurrentDs<T>
 where
     T: Dispatch<ReadOperation = SkipListConcurrent>,
+    T: Dispatch<WriteOperation = OpWr>,
     T: Default + Sync,
 {
     type D = T;
 
     fn new_arc(
-        _log: &Arc<Log<'static, <Self::D as Dispatch>::WriteOperation>>,
+        _log: Vec<Arc<Log<'static, <Self::D as Dispatch>::WriteOperation>>>,
     ) -> std::sync::Arc<Self> {
         Arc::new(ConcurrentDs {
             registered: AtomicUsize::new(0),
@@ -59,10 +60,16 @@ where
 
     fn exec(
         &self,
-        _op: <Self::D as Dispatch>::WriteOperation,
-        _idx: ReplicaToken,
+        op: <Self::D as Dispatch>::WriteOperation,
+        idx: ReplicaToken,
     ) -> <Self::D as Dispatch>::Response {
-        unreachable!("All opertations must be read ops")
+        let op = match op {
+            OpWr::Push(key, val) => {
+                //log::error!("{} {} {}", key, idx.0, key + (idx.0 * 25_000_000) as u64 );
+                OpWr::Push(key + (idx.0 * 25_000_000) as u64, val)
+            }
+        };
+        self.data_structure.dispatch_mut(op)
     }
 
     fn exec_ro(
@@ -73,10 +80,6 @@ where
         let op = match op {
             SkipListConcurrent::Get(key) => {
                 SkipListConcurrent::Get(key + (idx.0 * 25_000_000) as u64)
-            }
-            SkipListConcurrent::Push(key, val) => {
-                //log::error!("{} {} {}", key, idx.0, key + (idx.0 * 25_000_000) as u64 );
-                SkipListConcurrent::Push(key + (idx.0 * 25_000_000) as u64, val)
             }
         };
         self.data_structure.dispatch(op)
@@ -105,21 +108,22 @@ impl Default for SkipListWrapper {
 
 impl Dispatch for SkipListWrapper {
     type ReadOperation = SkipListConcurrent;
-    type WriteOperation = ();
+    type WriteOperation = OpWr;
     type Response = Result<Option<u64>, ()>;
 
     fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
         match op {
             SkipListConcurrent::Get(key) => Ok(self.0.get(&key, &epoch::pin()).map(|e| *e.value())),
-            SkipListConcurrent::Push(key, val) => {
-                self.0.insert(key, val, &epoch::pin());
-                Ok(Some(key))
-            }
         }
     }
 
     /// Implements how we execute operation from the log against our local stack
-    fn dispatch_mut(&mut self, _op: Self::WriteOperation) -> Self::Response {
-        unreachable!("dispatch_mut should not be called here")
+    fn dispatch_mut(&self, op: Self::WriteOperation) -> Self::Response {
+        match op {
+            OpWr::Push(key, val) => {
+                self.0.insert(key, val, &epoch::pin());
+                Ok(Some(key))
+            }
+        }
     }
 }

@@ -106,6 +106,7 @@ impl Dispatch for SegQueueWrapper {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct SkipListWrapper(SkipList<u64, u64>);
 
 impl Default for SkipListWrapper {
@@ -128,10 +129,10 @@ impl Dispatch for SkipListWrapper {
     fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
         match op {
             SkipListConcurrent::Get(key) => Ok(self.0.get(&key, &epoch::pin()).map(|e| *e.value())),
-            SkipListConcurrent::Push(key, val) => {
+            /*SkipListConcurrent::Push(key, val) => {
                 self.0.insert(key, val, &epoch::pin());
                 Ok(Some(key))
-            }
+            }*/
         }
     }
 

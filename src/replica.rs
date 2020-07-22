@@ -417,7 +417,7 @@ where
         idx: ReplicaToken,
     ) -> <D as Dispatch>::Response {
         let hash = op.hash();
-        //let hash = idx.0;
+        let hash = idx.0;
 
         // Enqueue the operation onto the thread local batch and then try to flat combine.
         self.make_pending(op.clone(), idx.0, hash);
@@ -553,13 +553,16 @@ where
     /// on another replica are still active. The active replica will use all the entries
     /// in the log and won't be able perform garbage collection because of the inactive
     /// replica. So, this method syncs up the replica against the underlying log.
-    /*pub fn sync(&self, idx: ReplicaToken) {
-        let ctail = self.slog[hash_idx].get_ctail();
-        while !self.slog[hash_idx].is_replica_synced_for_reads(self.idx, ctail) {
-            self.try_combine(idx.0);
-            spin_loop_hint();
+    pub fn sync(&self, idx: ReplicaToken) {
+        let nlogs = self.slog.len();
+        for i in 0..nlogs {
+            let ctail = self.slog[i].get_ctail();
+            while !self.slog[i].is_replica_synced_for_reads(self.idx[i], ctail) {
+                self.try_combine(idx.0, i);
+                spin_loop_hint();
+            }
         }
-    }*/
+    }
 
     /// Issues a read-only operation against the replica and returns a response.
     /// Makes sure the replica is synced up against the log before doing so.
