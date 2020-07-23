@@ -21,7 +21,7 @@ mod utils;
 //use lockfree_comparisons::*;
 use mkbench::ReplicaTrait;
 use utils::benchmark::*;
-use utils::topology::ThreadMapping;
+use utils::topology::{MachineTopology, ThreadMapping};
 use utils::Operation;
 
 /// The initial amount of entries all Hashmaps are initialized with
@@ -236,26 +236,32 @@ where
     <R::D as Dispatch>::Response: Sync + Send + Debug,
 {
     let ops = generate_sops_concurrent(NOP, write_ratio, KEY_SPACE);
-    let bench_name = format!("{}-scaleout-wr{}", name, write_ratio);
+    let max_cores = MachineTopology::new().cores();
+    let mut nlog = 0;
+    while nlog <= max_cores {
+        let logs = if nlog == 0 { 1 } else { nlog };
+        let bench_name = format!("{}{}-scaleout-wr{}", name, logs, write_ratio);
 
-    mkbench::ScaleBenchBuilder::<R>::new(ops)
-        .thread_defaults()
-        .replica_strategy(mkbench::ReplicaStrategy::One) // Can only be One
-        .update_batch(128)
-        .thread_mapping(ThreadMapping::Interleave)
-        .log_strategy(mkbench::LogStrategy::PerThread)
-        .configure(
-            c,
-            &bench_name,
-            |_cid, rid, _log, replica, op, _batch_size| match op {
-                Operation::ReadOperation(op) => {
-                    replica.exec_ro(*op, rid);
-                }
-                Operation::WriteOperation(op) => {
-                    replica.exec(*op, rid);
-                }
-            },
-        );
+        mkbench::ScaleBenchBuilder::<R>::new(ops.clone())
+            .thread_defaults()
+            .replica_strategy(mkbench::ReplicaStrategy::One) // Can only be One
+            .update_batch(128)
+            .thread_mapping(ThreadMapping::Interleave)
+            .log_strategy(mkbench::LogStrategy::Custom(logs))
+            .configure(
+                c,
+                &bench_name,
+                |_cid, rid, _log, replica, op, _batch_size| match op {
+                    Operation::ReadOperation(op) => {
+                        replica.exec_ro(*op, rid);
+                    }
+                    Operation::WriteOperation(op) => {
+                        replica.exec(*op, rid);
+                    }
+                },
+            );
+        nlog += 4; // Multiple of 4
+    }
 }
 
 fn main() {
@@ -293,7 +299,7 @@ fn main() {
 
         concurrent_ds_nr_scale_out::<Replica<lockfree_partitioned::SkipListWrapper>>(
             &mut harness,
-            "skiplist-mlnr-partinput",
+            "skiplist-mlnr",
             write_ratio,
         );
     }
