@@ -544,7 +544,9 @@ where
             if intervals > 0 && intervals != core_ops.1.len() {
                 error!("Receveived different no. of measurements from individual threads");
             }
-            intervals = core_ops.1.len();
+            if intervals < core_ops.1.len() {
+                intervals = core_ops.1.len();
+            }
             core_iteratios.push(core_ops);
         }
 

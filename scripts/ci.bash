@@ -16,7 +16,7 @@ sudo sh -c "echo never > /sys/kernel/mm/transparent_hugepage/enabled"
 #RUST_TEST_THREADS=1 timeout 20h cargo bench --bench hashmap
 #RUST_TEST_THREADS=1 timeout 1h cargo bench --bench vspace
 #RUST_TEST_THREADS=1 timeout 1h cargo bench --bench memfs
-RUST_TEST_THREADS=1 timeout 10h cargo bench --bench lockfree
+RUST_TEST_THREADS=1 timeout 20h cargo bench --bench lockfree
 
 #timeout 1.5h bash benches/hashbench_run.sh
 #timeout 1.5h bash benches/rwlockbench_run.sh
@@ -27,7 +27,7 @@ git clone --depth 1 -b gh-pages git@github.com:gz/node-replication.git gh-pages
 pip3 install -r gh-pages/requirements.txt
 
 # Copy scalebench
-python3 gh-pages/scale_bench_plot.py scaleout_benchmarks.csv
+python3 scripts/scale_bench_plot.py scaleout_benchmarks.csv
 
 # Get revision
 export GIT_REV_CURRENT=`git rev-parse --short HEAD`

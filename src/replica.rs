@@ -3,7 +3,7 @@
 
 use core::cell::RefCell;
 use core::mem::MaybeUninit;
-use core::sync::atomic::{spin_loop_hint, AtomicBool, AtomicUsize, Ordering};
+use core::sync::atomic::{spin_loop_hint, AtomicUsize, Ordering};
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -96,9 +96,6 @@ where
     ///
     /// The vector is initialized with `MAX_THREADS_PER_REPLICA` elements.
     contexts: Vec<CachePadded<Context<<D as Dispatch>::WriteOperation, <D as Dispatch>::Response>>>,
-
-    /// Number of pending operations for each thread per log.
-    pending: Vec<CachePadded<[AtomicBool; MAX_THREADS_PER_REPLICA]>>,
 
     /// A buffer of operations for flat combining. The combiner stages operations in
     /// here and then batch appends them into the shared log. This helps amortize
@@ -215,10 +212,8 @@ where
             }
             // Allocate a combiner for each log.
             let mut combiners = Vec::with_capacity(nlogs);
-            let mut pending = Vec::with_capacity(nlogs);
             for _i in 0..nlogs {
                 combiners.push(CachePadded::new(AtomicUsize::new(0)));
-                pending.push(CachePadded::new(arr![AtomicBool::new(false); 256]));
             }
 
             uninit_ptr.write(Replica {
@@ -256,7 +251,6 @@ where
                 ],
                 slog: logs.clone(),
                 data: CachePadded::new(D::default()),
-                pending,
             });
 
             let mut replica = uninit_replica.assume_init();
@@ -416,8 +410,8 @@ where
         op: <D as Dispatch>::WriteOperation,
         idx: ReplicaToken,
     ) -> <D as Dispatch>::Response {
-        let hash = op.hash();
-        let hash = idx.0;
+        let _hash = op.hash();
+        let hash = idx.0 % self.slog.len();
 
         // Enqueue the operation onto the thread local batch and then try to flat combine.
         self.make_pending(op.clone(), idx.0, hash);
@@ -578,7 +572,7 @@ where
         // the shared log. If it isn't, then try to combine until it is synced up.
         let ctail = self.slog[hash_idx].get_ctail();
         while !self.slog[hash_idx].is_replica_synced_for_reads(self.idx[hash_idx], ctail) {
-            self.try_combine(tid, hash);
+            self.try_combine(tid, hash_idx);
             spin_loop_hint();
         }
 
@@ -591,7 +585,6 @@ where
     fn make_pending(&self, op: <D as Dispatch>::WriteOperation, tid: usize, hash: usize) -> bool {
         loop {
             if self.contexts[tid - 1].enqueue(op.clone(), hash) {
-                self.pending[hash % self.slog.len()][tid - 1].store(true, Ordering::Relaxed);
                 break;
             }
         }
@@ -600,8 +593,7 @@ where
 
     /// Appends an operation to the log and attempts to perform flat combining.
     /// Accepts a thread `tid` as an argument. Required to acquire the combiner lock.
-    fn try_combine(&self, tid: usize, hash: usize) {
-        let hashidx = hash % self.slog.len();
+    fn try_combine(&self, tid: usize, hashidx: usize) {
         // First, check if there already is a flat combiner. If there is no active flat combiner
         // then try to acquire the combiner lock. If there is, then just return.
         for _i in 0..4 {
@@ -623,7 +615,7 @@ where
         }
 
         // Successfully became the combiner; perform one round of flat combining.
-        self.combine(hash);
+        self.combine(hashidx);
 
         // Allow other threads to perform flat combining once we have finished all our work.
         // At this point, we've dropped all mutable references to thread contexts and to
@@ -633,14 +625,11 @@ where
 
     /// Performs one round of flat combining. Collects, appends and executes operations.
     #[inline(always)]
-    fn combine(&self, hash: usize) {
-        let hashidx = hash % self.slog.len();
-
+    fn combine(&self, hashidx: usize) {
         //  TODO: may need to be in a per-log state context
         let mut buffer = self.buffer[hashidx].borrow_mut();
         let mut operations = self.inflight[hashidx].borrow_mut();
         let mut results = self.result[hashidx].borrow_mut();
-        let pending = &self.pending[hashidx];
 
         buffer.clear();
         results.clear();
@@ -650,9 +639,7 @@ where
         // Collect operations from each thread registered with this replica.
         for tid in 1..next {
             // pass hash of current op to contexts, only get ops from context that have the same hash/log id
-            if pending[tid - 1].load(Ordering::Relaxed) {
-                operations[tid - 1] = self.contexts[tid - 1].ops(&mut buffer, hash);
-            }
+            operations[tid - 1] = self.contexts[tid - 1].ops(&mut buffer, hashidx);
         }
 
         // Append all collected operations into the shared log. We pass a closure
@@ -691,7 +678,6 @@ where
             self.contexts[i - 1].enqueue_resps(&results[s..f]);
             s += operations[i - 1];
             operations[i - 1] = 0;
-            pending[i - 1].store(false, Ordering::Relaxed);
         }
     }
 }
@@ -980,9 +966,10 @@ mod test {
             let r = repl.clone();
             threads.push(thread::spawn(move || {
                 let t = r.register().unwrap();
-                r.make_pending(OpWr(i), t.0, t.0);
+                let hash = t.0 % nlogs;
+                r.make_pending(OpWr(i), t.0, hash);
 
-                r.try_combine(t.0, t.0);
+                r.try_combine(t.0, hash);
             }));
         }
 
