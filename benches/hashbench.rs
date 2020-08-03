@@ -1,5 +1,5 @@
 // Copyright © 2017-2019 Jon Gjengset <jon@thesquareplanet.com>.
-// Copyright © VMware, Inc. All Rights Reserved.
+// Copyright © 2019-2020 VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Integration of the rust-evmap benchmarks (https://github.com/jonhoo/rust-evmap/)
