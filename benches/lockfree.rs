@@ -206,7 +206,7 @@ fn concurrent_ds_scale_out<T: Sized>(
     let bench_name = format!("{}-scaleout-wr{}", name, write_ratio);
 
     mkbench::ScaleBenchBuilder::<lockfree_partitioned::ConcurrentDs<T>>::new(mkops())
-        .thread_defaults()
+        .thread_defaults(0)
         .replica_strategy(mkbench::ReplicaStrategy::One) // Can only be One
         .update_batch(128)
         .thread_mapping(ThreadMapping::Interleave)
@@ -236,15 +236,19 @@ where
     <R::D as Dispatch>::Response: Sync + Send + Debug,
 {
     let ops = generate_sops_concurrent(NOP, write_ratio, KEY_SPACE);
-    let max_cores = MachineTopology::new().cores();
+    let topology = MachineTopology::new();
+    let sockets = topology.sockets();
+    let cores_on_s0 = topology.cpus_on_socket(sockets[0]);
+    let cores_per_socket = cores_on_s0.len() / 2;
+
     let mut nlog = 0;
-    while nlog <= max_cores {
+    while nlog <= cores_per_socket {
         let logs = if nlog == 0 { 1 } else { nlog };
         let bench_name = format!("{}{}-scaleout-wr{}", name, logs, write_ratio);
 
         mkbench::ScaleBenchBuilder::<R>::new(ops.clone())
-            .thread_defaults()
-            .replica_strategy(mkbench::ReplicaStrategy::One) // Can only be One
+            .thread_defaults(logs)
+            .replica_strategy(mkbench::ReplicaStrategy::Socket)
             .update_batch(128)
             .thread_mapping(ThreadMapping::Interleave)
             .log_strategy(mkbench::LogStrategy::Custom(logs))
@@ -256,6 +260,12 @@ where
                         replica.exec_ro(*op, rid);
                     }
                     Operation::WriteOperation(op) => {
+                        /*let op = match op {
+                            OpWr::Push(k, v) => {
+                                let key = *k + (rid.0 * 25_000_000) as u64;
+                                OpWr::Push(key, *v)
+                            }
+                        };*/
                         replica.exec(*op, rid);
                     }
                 },
@@ -273,7 +283,7 @@ fn main() {
     utils::disable_dvfs();
 
     let mut harness = Default::default();
-    let write_ratios = vec![100];
+    let write_ratios = vec![0, 10, 80, 100];
 
     for write_ratio in write_ratios.into_iter() {
         /*concurrent_ds_scale_out::<SegQueueWrapper>(
@@ -294,7 +304,7 @@ fn main() {
             &mut harness,
             "skiplist-partinput",
             write_ratio,
-            Box::new(move || generate_sops_partitioned_concurrent(NOP, write_ratio, KEY_SPACE)),
+            Box::new(move || generate_sops_concurrent(NOP, write_ratio, KEY_SPACE)),
         );
 
         concurrent_ds_nr_scale_out::<Replica<lockfree_partitioned::SkipListWrapper>>(

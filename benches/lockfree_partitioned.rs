@@ -66,7 +66,7 @@ where
         let op = match op {
             OpWr::Push(key, val) => {
                 //log::error!("{} {} {}", key, idx.0, key + (idx.0 * 25_000_000) as u64 );
-                OpWr::Push(key + (idx.0 * 25_000_000) as u64, val)
+                OpWr::Push(key, val)
             }
         };
         self.data_structure.dispatch_mut(op)
@@ -78,9 +78,7 @@ where
         idx: ReplicaToken,
     ) -> <Self::D as Dispatch>::Response {
         let op = match op {
-            SkipListConcurrent::Get(key) => {
-                SkipListConcurrent::Get(key + (idx.0 * 25_000_000) as u64)
-            }
+            SkipListConcurrent::Get(key) => SkipListConcurrent::Get(key),
         };
         self.data_structure.dispatch(op)
     }

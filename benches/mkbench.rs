@@ -542,7 +542,10 @@ where
                 .recv()
                 .expect("Can't receive a per-thread result?");
             if intervals > 0 && intervals != core_ops.1.len() {
-                error!("Receveived different no. of measurements from individual threads");
+                error!(
+                    "Receveived different no. of measurements from individual threads {:?}",
+                    core_ops
+                );
             }
             if intervals < core_ops.1.len() {
                 intervals = core_ops.1.len();
@@ -949,10 +952,10 @@ where
         self.replica_strategy(ReplicaStrategy::One);
         self.replica_strategy(ReplicaStrategy::Socket);
         self.replica_strategy(ReplicaStrategy::L1);
-        self.thread_defaults()
+        self.thread_defaults(0)
     }
 
-    pub fn thread_defaults(&mut self) -> &mut Self {
+    pub fn thread_defaults(&mut self, nlogs: usize) -> &mut Self {
         let topology = MachineTopology::new();
         let max_cores = topology.cores();
 
@@ -968,7 +971,10 @@ where
             2
         };
 
-        for t in (0..(max_cores + 1)).step_by(thread_incremements) {
+        let sockets = topology.sockets();
+        let cores_on_s0 = topology.cpus_on_socket(sockets[0]);
+        let cores_per_socket = cores_on_s0.len() / 2;
+        for t in (0..(cores_per_socket)).step_by(thread_incremements) {
             if t == 0 {
                 // Can't run on 0 threads
                 self.threads(t + 1);
@@ -977,24 +983,13 @@ where
             }
         }
 
-        // Go in increments of one around "interesting" socket boundaries
-        let sockets = topology.sockets();
-        let cores_on_s0 = topology.cpus_on_socket(sockets[0]);
-        let cores_per_socket = cores_on_s0.len() / 2;
-        for i in 0..sockets.len() {
-            let multiplier = i + 1;
-            fn try_add(to_add: usize, max_cores: usize, cur_threads: &mut Vec<usize>) {
-                if !cur_threads.contains(&to_add) && to_add <= max_cores {
-                    cur_threads.push(to_add);
-                } else {
-                    trace!("Didn't add {} threads", to_add);
-                }
-            }
-
-            let core_socket_boundary = multiplier * cores_per_socket;
-            try_add(core_socket_boundary - 1, max_cores, &mut self.threads);
-            try_add(core_socket_boundary, max_cores, &mut self.threads);
-            try_add(core_socket_boundary + 1, max_cores, &mut self.threads);
+        let thread_incremements = if nlogs > thread_incremements {
+            nlogs
+        } else {
+            thread_incremements
+        };
+        for t in (cores_per_socket..(max_cores + 1)).step_by(thread_incremements) {
+            self.threads(t);
         }
 
         self.threads.sort();
