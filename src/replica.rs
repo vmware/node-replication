@@ -39,6 +39,11 @@ impl ReplicaToken {
     pub unsafe fn new(ident: usize) -> Self {
         ReplicaToken(ident)
     }
+
+    /// Getter for id
+    pub fn id(&self) -> usize {
+        self.0
+    }
 }
 
 /// The maximum number of threads that can be registered with a replica. If more than
