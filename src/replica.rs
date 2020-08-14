@@ -1,4 +1,4 @@
-// Copyright © VMware, Inc. All Rights Reserved.
+// Copyright © 2019-2020 VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use core::cell::RefCell;
@@ -38,6 +38,11 @@ impl ReplicaToken {
     #[doc(hidden)]
     pub unsafe fn new(ident: usize) -> Self {
         ReplicaToken(ident)
+    }
+
+    /// Getter for id
+    pub fn id(&self) -> usize {
+        self.0
     }
 }
 
