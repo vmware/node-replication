@@ -283,7 +283,7 @@ fn main() {
     utils::disable_dvfs();
 
     let mut harness = Default::default();
-    let write_ratios = vec![0, 10, 80, 100];
+    let write_ratios = vec![100];
 
     for write_ratio in write_ratios.into_iter() {
         /*concurrent_ds_scale_out::<SegQueueWrapper>(
