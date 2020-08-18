@@ -22,7 +22,7 @@ timeout 1.5h bash benches/rwlockbench_run.sh
 
 # Check that we can checkout gh-pages early:
 rm -rf gh-pages
-git clone --depth 1 -b gh-pages git@github.com:gz/node-replication.git gh-pages
+git clone --depth 1 -b gh-pages git@github.com:gz/nr-benchmarks.git gh-pages
 pip3 install -r gh-pages/requirements.txt
 
 # Copy scalebench
