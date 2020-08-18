@@ -23,7 +23,7 @@ RUST_TEST_THREADS=1 timeout 20h cargo bench --bench lockfree
 
 # Check that we can checkout gh-pages early:
 rm -rf gh-pages
-git clone --depth 1 -b gh-pages git@github.com:gz/node-replication.git gh-pages
+git clone --depth 1 -b gh-pages git@github.com:gz/nr-benchmarks.git gh-pages
 pip3 install -r gh-pages/requirements.txt
 
 # Copy scalebench
