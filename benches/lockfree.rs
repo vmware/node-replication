@@ -241,6 +241,8 @@ where
     let cores_on_s0 = topology.cpus_on_socket(sockets[0]);
     let cores_per_socket = cores_on_s0.len() / 2;
 
+    let increment = if topology.cores() > 120 { 8 } else { 4 };
+
     let mut nlog = 0;
     while nlog <= cores_per_socket {
         let logs = if nlog == 0 { 1 } else { nlog };
@@ -270,7 +272,7 @@ where
                     }
                 },
             );
-        nlog += 4; // Multiple of 4
+        nlog += increment;
     }
 }
 

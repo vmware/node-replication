@@ -121,8 +121,8 @@ def throughput_vs_cores(df, write_ratios=[100]):
                       color='black')
     p += scale_linetype_manual(values=['dashed', 'dotted'],
                                guide=None)
-    p.save("{}-throughput-vs-cores.png".format(machine[0]), dpi=300)
-    p.save("{}-throughput-vs-cores.pdf".format(machine[0]), dpi=300)
+    p.save("throughput-{}-wr{}.png".format(machine[0], wr), dpi=300)
+    p.save("throughput-{}-wr{}.pdf".format(machine[0], wr), dpi=300)
 
 if __name__ == '__main__':
     warnings.filterwarnings('ignore')
