@@ -10,7 +10,7 @@ sudo sh -c "echo 0 > /sys/kernel/mm/ksm/run"
 sudo sh -c "echo 0 > /sys/kernel/mm/ksm/merge_across_nodes"
 sudo sh -c "echo never > /sys/kernel/mm/transparent_hugepage/enabled"
 
-#RUST_TEST_THREADS=1 timeout 1h cargo bench --bench log
+RUST_TEST_THREADS=1 timeout 1h cargo bench --bench log
 RUST_TEST_THREADS=1 timeout 1h cargo bench --bench synthetic
 RUST_TEST_THREADS=1 timeout 1h cargo bench --bench stack
 RUST_TEST_THREADS=1 timeout 20h cargo bench --bench hashmap
