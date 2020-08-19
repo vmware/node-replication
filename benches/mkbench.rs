@@ -955,41 +955,20 @@ where
         self.thread_defaults(0)
     }
 
-    pub fn thread_defaults(&mut self, nlogs: usize) -> &mut Self {
+    pub fn thread_defaults(&mut self, _nlogs: usize) -> &mut Self {
         let topology = MachineTopology::new();
         let max_cores = topology.cores();
-
-        // On larger machines thread increments are bigger than on
-        // smaller machines:
-        let thread_incremements = if max_cores > 120 {
-            16
-        } else if max_cores > 24 {
-            8
-        } else if max_cores > 16 {
-            4
-        } else {
-            2
-        };
 
         let sockets = topology.sockets();
         let cores_on_s0 = topology.cpus_on_socket(sockets[0]);
         let cores_per_socket = cores_on_s0.len() / 2;
-        for t in (0..(cores_per_socket)).step_by(thread_incremements) {
+        for t in (0..(max_cores + 1)).step_by(cores_per_socket) {
             if t == 0 {
                 // Can't run on 0 threads
                 self.threads(t + 1);
             } else {
                 self.threads(t);
             }
-        }
-
-        let thread_incremements = if nlogs > thread_incremements {
-            nlogs
-        } else {
-            thread_incremements
-        };
-        for t in (cores_per_socket..(max_cores + 1)).step_by(thread_incremements) {
-            self.threads(t);
         }
 
         self.threads.sort();

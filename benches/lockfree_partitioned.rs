@@ -97,7 +97,8 @@ impl Default for SkipListWrapper {
         let storage = SkipList::new(epoch::default_collector().clone());
         //log::error!("start init");
         for i in 0..INITIAL_CAPACITY {
-            storage.insert(rng.next_u64() % (192 * 25_000_000), i as u64, guard);
+            //storage.insert(rng.next_u64() % (192 * 25_000_000), i as u64, guard);
+            storage.insert(i as u64, i as u64, guard);
         }
         //log::error!("done init");
         SkipListWrapper(storage)
