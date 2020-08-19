@@ -22,7 +22,7 @@ timeout 1.5h bash benches/rwlockbench_run.sh
 
 # Check that we can checkout gh-pages early:
 rm -rf gh-pages
-git clone --depth 1 -b gh-pages git@github.com:gz/nr-benchmarks.git gh-pages
+git clone --depth 1 -b master git@github.com:gz/nr-benchmarks.git gh-pages
 pip3 install -r gh-pages/requirements.txt
 
 # Copy scalebench
@@ -67,7 +67,7 @@ python3 history_plots.py
 # Push to gh-pages
 git add .
 git commit -a -m "Added benchmark results for $GIT_REV_CURRENT."
-git push origin gh-pages
+git push origin master
 cd ..
 
 rm -rf gh-pages
