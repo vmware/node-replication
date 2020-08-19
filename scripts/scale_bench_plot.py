@@ -58,7 +58,7 @@ class theme_my538(theme_gray):
                 strip_background=element_rect(size=0)),
             inplace=True)
 
-def throughput_vs_cores(df, write_ratios=[100]):
+def throughput_vs_cores(df, write_ratios=[0, 10, 80, 100]):
     data_set = []
     machine = []
     for name in df.name.unique():
