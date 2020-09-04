@@ -230,7 +230,7 @@ pub(crate) fn baseline_comparison<R: ReplicaTrait>(
     .expect("Can't write resutls");
 
     // 2nd benchmark: we compare T with a log in front:
-    let log = Arc::new(Log::<<R::D as Dispatch>::WriteOperation>::new(log_size));
+    let log = Arc::new(Log::<<R::D as Dispatch>::WriteOperation>::new(log_size, 1));
     let r = Replica::<R::D>::new(vec![log]);
     let ridx = r.register_me().expect("Failed to register with Replica.");
 
@@ -1064,10 +1064,11 @@ where
 
                             let log = {
                                 let mut logs = Vec::with_capacity(num_logs);
-                                for _i in 0..num_logs {
+                                for i in 0..num_logs {
                                     logs.push(Arc::new(
                                         Log::<<R::D as Dispatch>::WriteOperation>::new(
                                             self.log_size,
+                                            i + 1,
                                         ),
                                     ));
                                 }

@@ -69,6 +69,7 @@ fn main() {
     // The operation log for storing `WriteOperation`, it has a size of 2 MiB:
     let log = Arc::new(Log::<<NrHashMap as Dispatch>::WriteOperation>::new(
         2 * 1024 * 1024,
+        1,
     ));
 
     // Next, we create two replicas of the hashmap
