@@ -737,7 +737,11 @@ mod test {
     // Tests whether we can construct a Replica given a log.
     #[test]
     fn test_replica_create() {
-        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new(1024, 1));
+        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new(
+            1024,
+            1,
+            |_idx: usize, _rid: usize| {},
+        ));
         let repl = Replica::<Data>::new(vec![slog]);
         assert_eq!(repl.idx[0], 1);
         assert_eq!(repl.combiners[0].load(Ordering::SeqCst), 0);
@@ -758,7 +762,11 @@ mod test {
     // Tests whether we can register with this replica and receive an idx.
     #[test]
     fn test_replica_register() {
-        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new(1024, 1));
+        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new(
+            1024,
+            1,
+            |_idx: usize, _rid: usize| {},
+        ));
         let repl = Replica::<Data>::new(vec![slog]);
         assert_eq!(repl.register(), Some(ReplicaToken(1)));
         assert_eq!(repl.next.load(Ordering::SeqCst), 2);
@@ -770,7 +778,11 @@ mod test {
     // Tests whether registering more than the maximum limit of threads per replica is disallowed.
     #[test]
     fn test_replica_register_none() {
-        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new(1024, 1));
+        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new(
+            1024,
+            1,
+            |_idx: usize, _rid: usize| {},
+        ));
         let repl = Replica::<Data>::new(vec![slog]);
         repl.next
             .store(MAX_THREADS_PER_REPLICA + 1, Ordering::SeqCst);
@@ -780,7 +792,11 @@ mod test {
     // Tests that we can successfully allow operations to go pending on this replica.
     #[test]
     fn test_replica_make_pending() {
-        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new(1024, 1));
+        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new(
+            1024,
+            1,
+            |_idx: usize, _rid: usize| {},
+        ));
         let repl = Replica::<Data>::new(vec![slog]);
         let mut o = vec![];
 
@@ -822,7 +838,11 @@ mod test {
     // Tests whether try_combine() fails if someone else is currently flat combining.
     #[test]
     fn test_replica_try_combine_fail() {
-        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new(1024, 1));
+        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new(
+            1024,
+            1,
+            |_idx: usize, _rid: usize| {},
+        ));
         let repl = Replica::<Data>::new(vec![slog]);
 
         repl.next.store(9, Ordering::SeqCst);

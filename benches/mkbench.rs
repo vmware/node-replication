@@ -230,7 +230,11 @@ pub(crate) fn baseline_comparison<R: ReplicaTrait>(
     .expect("Can't write resutls");
 
     // 2nd benchmark: we compare T with a log in front:
-    let log = Arc::new(Log::<<R::D as Dispatch>::WriteOperation>::new(log_size, 1));
+    let log = Arc::new(Log::<<R::D as Dispatch>::WriteOperation>::new(
+        log_size,
+        1,
+        |_idx: usize, _rid: usize| {},
+    ));
     let r = Replica::<R::D>::new(vec![log]);
     let ridx = r.register_me().expect("Failed to register with Replica.");
 
@@ -1069,6 +1073,9 @@ where
                                         Log::<<R::D as Dispatch>::WriteOperation>::new(
                                             self.log_size,
                                             i + 1,
+                                            |idx: usize, rid: usize| {
+                                                println!("Relica {} is stuck on log {}", rid, idx);
+                                            },
                                         ),
                                     ));
                                 }
