@@ -70,7 +70,6 @@ fn main() {
     let log = Arc::new(Log::<<NrHashMap as Dispatch>::WriteOperation>::new(
         2 * 1024 * 1024,
         1,
-        |_idx: usize, _rid: usize| {},
     ));
 
     // Next, we create two replicas of the hashmap

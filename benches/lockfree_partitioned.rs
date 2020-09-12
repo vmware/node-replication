@@ -58,6 +58,10 @@ where
         /* NOP */
     }
 
+    fn sync_log(&self, _idx: ReplicaToken, _logid: usize) {
+        /* NOP */
+    }
+
     fn exec(
         &self,
         op: <Self::D as Dispatch>::WriteOperation,

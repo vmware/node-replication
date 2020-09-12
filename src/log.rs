@@ -3,7 +3,7 @@
 
 use alloc::alloc::{alloc, dealloc, Layout};
 
-use core::cell::Cell;
+use core::cell::{Cell, UnsafeCell};
 use core::default::Default;
 use core::fmt;
 use core::mem::{align_of, size_of};
@@ -133,7 +133,7 @@ where
     lmasks: [CachePadded<Cell<bool>>; MAX_REPLICAS],
 
     /// Callback function
-    gc: Box<dyn Fn(usize, usize)>,
+    gc: UnsafeCell<*const dyn FnMut(usize, usize)>,
 }
 
 impl<'a, T> fmt::Debug for Log<'a, T>
@@ -177,12 +177,12 @@ where
     /// }
     ///
     /// // Creates a 1 Mega Byte sized log.
-    /// let l = Log::<Operation>::new(1 * 1024 * 1024, 1, |_idx: usize, _rid: usize| {});
+    /// let l = Log::<Operation>::new(1 * 1024 * 1024, 1);
     /// ```
     ///
     /// This method also allocates memory for the log upfront. No further allocations
     /// will be performed once this method returns.
-    pub fn new<'b, G: 'static + Fn(usize, usize)>(bytes: usize, idx: usize, gc: G) -> Log<'b, T> {
+    pub fn new<'b>(bytes: usize, idx: usize) -> Log<'b, T> {
         use arr_macro::arr;
 
         // Calculate the number of entries that will go into the log, and retrieve a
@@ -245,13 +245,17 @@ where
             ltails: arr![Default::default(); 192],
             next: CachePadded::new(AtomicUsize::new(1usize)),
             lmasks: fls,
-            gc: Box::new(gc),
+            gc: UnsafeCell::new(&|_lid: usize, _rid: usize| {}),
         }
     }
 
     /// Returns the size of an entry in bytes.
     fn entry_size() -> usize {
         size_of::<Cell<Entry<T>>>()
+    }
+
+    pub fn update_closure(&mut self, gc: &dyn FnMut(usize, usize)) {
+        unsafe { *self.gc.get() = core::mem::transmute(gc) };
     }
 
     /// Registers a replica with the log. Returns an identifier that the replica
@@ -271,7 +275,7 @@ where
     /// }
     ///
     /// // Creates a 1 Mega Byte sized log.
-    /// let l = Log::<Operation>::new(1 * 1024 * 1024, 1, |_idx: usize, _rid: usize| {});
+    /// let l = Log::<Operation>::new(1 * 1024 * 1024, 1);
     ///
     /// // Registers against the log. `idx` can now be used to append operations
     /// // to the log, and execute these operations.
@@ -309,7 +313,7 @@ where
     ///     Write(u64),
     /// }
     ///
-    /// let l = Log::<Operation>::new(1 * 1024 * 1024, 1, |_idx: usize, _rid: usize| {});
+    /// let l = Log::<Operation>::new(1 * 1024 * 1024, 1);
     /// let idx = l.register().expect("Failed to register with the Log.");
     ///
     /// // The set of operations we would like to append. The order will
@@ -444,7 +448,7 @@ where
     ///     Write(u64),
     /// }
     ///
-    /// let l = Log::<Operation>::new(1 * 1024 * 1024, 1, |_idx: usize, _rid: usize| {});
+    /// let l = Log::<Operation>::new(1 * 1024 * 1024, 1);
     /// let idx = l.register().expect("Failed to register with the Log.");
     /// let ops = [Operation::Write(100), Operation::Read];
     ///
@@ -563,7 +567,9 @@ where
             // any new entries on the log to prevent deadlock.
             if min_local_tail == global_head {
                 if iteration % WARN_THRESHOLD == 0 {
-                    (self.gc)(self.idx, dormant_rid);
+                    let f: &mut dyn FnMut(usize, usize) =
+                        unsafe { &mut *(*self.gc.get() as *mut dyn FnMut(usize, usize)) };
+                    f(self.idx, dormant_rid);
                     warn!("Spending a long time in `advance_head`, are we starving?");
                 }
                 iteration += 1;
@@ -633,7 +639,7 @@ where
     /// }
     ///
     /// // We register two replicas here, `idx1` and `idx2`.
-    /// let l = Log::<Operation>::new(1 * 1024 * 1024, 1, |_idx: usize, _rid: usize| {});
+    /// let l = Log::<Operation>::new(1 * 1024 * 1024, 1);
     /// let idx1 = l.register().expect("Failed to register with the Log.");
     /// let idx2 = l.register().expect("Failed to register with the Log.");
     /// let ops = [Operation::Write(100), Operation::Read];
@@ -691,7 +697,7 @@ where
 {
     /// Default constructor for the shared log.
     fn default() -> Self {
-        Log::new(DEFAULT_LOG_BYTES, 1, |_idx: usize, _rid: usize| {})
+        Log::new(DEFAULT_LOG_BYTES, 1)
     }
 }
 
@@ -753,7 +759,7 @@ mod tests {
     // Tests if a small log can be correctly constructed.
     #[test]
     fn test_log_create() {
-        let l = Log::<Operation>::new(1024 * 1024, 1, |_idx: usize, _rid: usize| {});
+        let l = Log::<Operation>::new(1024 * 1024, 1);
         let n = (1024 * 1024) / Log::<Operation>::entry_size();
         assert_eq!(l.rawb, 1024 * 1024);
         assert_eq!(l.size, n);
@@ -775,7 +781,7 @@ mod tests {
     // Tests if the constructor allocates enough space for GC.
     #[test]
     fn test_log_min_size() {
-        let l = Log::<Operation>::new(1024, 1, |_idx: usize, _rid: usize| {});
+        let l = Log::<Operation>::new(1024, 1);
         assert_eq!(l.rawb, 2 * GC_FROM_HEAD * Log::<Operation>::entry_size());
         assert_eq!(l.size, 2 * GC_FROM_HEAD);
         assert_eq!(l.slog.len(), 2 * GC_FROM_HEAD);
@@ -785,7 +791,7 @@ mod tests {
     // are a power of two.
     #[test]
     fn test_log_power_of_two() {
-        let l = Log::<Operation>::new(524 * 1024, 1, |_idx: usize, _rid: usize| {});
+        let l = Log::<Operation>::new(524 * 1024, 1);
         let n = ((524 * 1024) / Log::<Operation>::entry_size()).checked_next_power_of_two();
         assert_eq!(l.rawb, n.unwrap() * Log::<Operation>::entry_size());
         assert_eq!(l.size, n.unwrap());
@@ -817,14 +823,14 @@ mod tests {
     // Tests if we can correctly index into the shared log.
     #[test]
     fn test_log_index() {
-        let l = Log::<Operation>::new(2 * 1024 * 1024, 1, |_idx: usize, _rid: usize| {});
+        let l = Log::<Operation>::new(2 * 1024 * 1024, 1);
         assert_eq!(l.index(99000), 696);
     }
 
     // Tests if we can correctly register with the shared log.
     #[test]
     fn test_log_register() {
-        let l = Log::<Operation>::new(1024, 1, |_idx: usize, _rid: usize| {});
+        let l = Log::<Operation>::new(1024, 1);
         assert_eq!(l.register(), Some(1));
         assert_eq!(l.next.load(Ordering::Relaxed), 2);
     }
@@ -832,7 +838,7 @@ mod tests {
     // Tests that we cannot register more than the max replicas with the log.
     #[test]
     fn test_log_register_none() {
-        let l = Log::<Operation>::new(1024, 1, |_idx: usize, _rid: usize| {});
+        let l = Log::<Operation>::new(1024, 1);
         l.next.store(MAX_REPLICAS, Ordering::Relaxed);
         assert!(l.register().is_none());
         assert_eq!(l.next.load(Ordering::Relaxed), MAX_REPLICAS);
@@ -1088,7 +1094,7 @@ mod tests {
 
         assert_eq!(Log::<Arc<Operation>>::entry_size(), entry_size);
         let size: usize = total_entries * entry_size;
-        let l = Log::<Arc<Operation>>::new(size, 1, |_idx: usize, _rid: usize| {});
+        let l = Log::<Arc<Operation>>::new(size, 1);
         let o1 = [Arc::new(Operation::Read)];
         let o2 = [Arc::new(Operation::Read)];
         assert_eq!(Arc::strong_count(&o1[0]), 1);

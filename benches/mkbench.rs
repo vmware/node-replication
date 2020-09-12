@@ -66,6 +66,8 @@ pub trait ReplicaTrait {
 
     fn sync_me(&self, idx: ReplicaToken);
 
+    fn sync_log(&self, idx: ReplicaToken, logid: usize);
+
     fn exec(
         &self,
         op: <Self::D as Dispatch>::WriteOperation,
@@ -88,6 +90,10 @@ impl<'a, T: Dispatch + Sync + Default> ReplicaTrait for Replica<'a, T> {
 
     fn sync_me(&self, idx: ReplicaToken) {
         self.sync(idx);
+    }
+
+    fn sync_log(&self, idx: ReplicaToken, logid: usize) {
+        self.sync_log(idx, logid);
     }
 
     fn register_me(&self) -> Option<ReplicaToken> {
@@ -230,11 +236,7 @@ pub(crate) fn baseline_comparison<R: ReplicaTrait>(
     .expect("Can't write resutls");
 
     // 2nd benchmark: we compare T with a log in front:
-    let log = Arc::new(Log::<<R::D as Dispatch>::WriteOperation>::new(
-        log_size,
-        1,
-        |_idx: usize, _rid: usize| {},
-    ));
+    let log = Arc::new(Log::<<R::D as Dispatch>::WriteOperation>::new(log_size, 1));
     let r = Replica::<R::D>::new(vec![log]);
     let ridx = r.register_me().expect("Failed to register with Replica.");
 
@@ -606,6 +608,16 @@ where
     }
 
     fn startup(&mut self) {
+        let stuck = Arc::new(arr![AtomicUsize::new(0); 128]);
+        let func = &|idx: usize, rid: usize| {
+            let stuck = stuck.clone();
+            stuck[rid - 1].compare_and_swap(0, idx, Ordering::Release);
+        };
+        let nlogs = self.log.len();
+        for i in 0..nlogs {
+            unsafe { Arc::get_mut_unchecked(&mut self.log[i]).update_closure(func) };
+        }
+
         let thread_num = self.threads();
         // Need a barrier to synchronize starting of threads
         let barrier = Arc::new(Barrier::new(thread_num));
@@ -645,6 +657,7 @@ where
                 let name = self.name.clone();
                 // Clone the Arc<>
                 let operations = self.operations.clone();
+                let stuck = stuck.clone();
 
                 self.handles.push(thread::spawn(move || {
                     utils::pin_thread(core_id);
@@ -709,6 +722,12 @@ where
                                 operations_completed = 0;
                                 next_log += log_period;
                             }
+
+                            let log_id = stuck[rid].load(Ordering::Relaxed);
+                            if log_id != 0 {
+                                stuck[rid].compare_and_swap(log_id, 0, Ordering::Release);
+                                replica.sync_log(replica_token, log_id);
+                            }
                         }
 
                         // Some threads may not end up adding the last second of measuring due to bad timing,
@@ -753,10 +772,8 @@ where
                                     break;
                                 }
 
-                                if core_id == sync_thread {
-                                    replica.sync_me(replica_token);
-                                } else {
-                                    break;
+                                for i in 1..(nlogs + 1) {
+                                    replica.sync_log(replica_token, i);
                                 }
                             }
                         }
@@ -965,8 +982,8 @@ where
 
         let sockets = topology.sockets();
         let cores_on_s0 = topology.cpus_on_socket(sockets[0]);
-        let cores_per_socket = cores_on_s0.len() / 2;
-        for t in (0..(max_cores + 1)).step_by(cores_per_socket) {
+        let step_size = cores_on_s0.len() / 4;
+        for t in (0..(max_cores + 1)).step_by(step_size) {
             if t == 0 {
                 // Can't run on 0 threads
                 self.threads(t + 1);
@@ -1073,9 +1090,6 @@ where
                                         Log::<<R::D as Dispatch>::WriteOperation>::new(
                                             self.log_size,
                                             i + 1,
-                                            |idx: usize, rid: usize| {
-                                                println!("Relica {} is stuck on log {}", rid, idx);
-                                            },
                                         ),
                                     ));
                                 }

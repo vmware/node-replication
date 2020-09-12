@@ -3,6 +3,7 @@
 
 //! Defines a hash-map that can be replicated.
 #![feature(test)]
+#![feature(get_mut_unchecked)]
 
 use std::fmt::Debug;
 use std::marker::Sync;
@@ -238,13 +239,12 @@ where
     let ops = generate_sops_concurrent(NOP, write_ratio, KEY_SPACE);
     let topology = MachineTopology::new();
     let sockets = topology.sockets();
-    let cores_on_s0 = topology.cpus_on_socket(sockets[0]);
-    let cores_per_socket = cores_on_s0.len() / 2;
+    let cores_on_socket = topology.cpus_on_socket(sockets[0]).len();
 
     let increment = if topology.cores() > 120 { 8 } else { 4 };
 
     let mut nlog = 0;
-    while nlog <= cores_per_socket {
+    while nlog <= cores_on_socket {
         let logs = if nlog == 0 { 1 } else { nlog };
         let bench_name = format!("{}{}-scaleout-wr{}", name, logs, write_ratio);
 
