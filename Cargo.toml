@@ -85,7 +85,7 @@ clap = { version = "2", features = ["yaml"] }
 rand = { version = "0.7", features = ["small_rng"] }
 dashmap = "3.11.1"
 lazy_static = "1.4"
-crossbeam = { git = "https://github.com/crossbeam-rs/crossbeam" }
+crossbeam = "0.7.3"
 crossbeam-skiplist = { git = "https://github.com/crossbeam-rs/crossbeam" }
 rand_xorshift = "0.2.0"
 
