@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! A minimal example that implements a replicated stack
-use crossbeam::queue::{PopError, SegQueue};
+use crossbeam::queue::SegQueue;
 use std::sync::Arc;
 
 use node_replication::Dispatch;
@@ -67,14 +67,14 @@ impl Default for Stack {
 impl Dispatch for Stack {
     type ReadOperation = Access;
     type WriteOperation = Modify;
-    type Response = Result<u32, PopError>;
+    type Response = Result<u32, ()>;
 
     /// The `dispatch` function applies the immutable operations.
     fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
         match op {
             Access::Peek => {
                 if self.storage.is_empty() {
-                    Err(PopError)
+                    Err(())
                 } else {
                     Ok(0)
                 }
@@ -89,7 +89,10 @@ impl Dispatch for Stack {
                 self.storage.push(v);
                 return Ok(0);
             }
-            Modify::Pop => return self.storage.pop(),
+            Modify::Pop => match self.storage.pop() {
+                Some(element) => Ok(element),
+                None => Err(()),
+            },
         }
     }
 }
