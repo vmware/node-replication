@@ -5,10 +5,7 @@
 use chashmap::CHashMap as HashMap;
 use std::sync::Arc;
 
-use node_replication::Dispatch;
-use node_replication::Log;
-use node_replication::LogMapper;
-use node_replication::Replica;
+use mlnr::{Dispatch, Log, LogMapper, Replica};
 
 /// The node-replicated hashmap uses a std hashmap internally.
 #[derive(Default)]

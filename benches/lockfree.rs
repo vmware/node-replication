@@ -12,7 +12,7 @@ use rand::seq::SliceRandom;
 use rand::{distributions::Distribution, Rng, RngCore};
 use zipf::ZipfDistribution;
 
-use node_replication::{Dispatch, LogMapper, Replica};
+use mlnr::{Dispatch, LogMapper, Replica};
 
 //mod lockfree_comparisons;
 mod lockfree_partitioned;

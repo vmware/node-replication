@@ -13,7 +13,7 @@ use crossbeam::epoch;
 use crossbeam::queue::SegQueue;
 use crossbeam_skiplist::SkipList;
 
-use node_replication::{Dispatch, Log, LogMapper, ReplicaToken};
+use mlnr::{Dispatch, Log, LogMapper, ReplicaToken};
 
 use crate::mkbench::ReplicaTrait;
 

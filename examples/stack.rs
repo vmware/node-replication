@@ -5,10 +5,7 @@
 use crossbeam::queue::SegQueue;
 use std::sync::Arc;
 
-use node_replication::Dispatch;
-use node_replication::Log;
-use node_replication::LogMapper;
-use node_replication::Replica;
+use mlnr::{Dispatch, Log, LogMapper, Replica};
 
 /// We support mutable push and pop operations on the stack.
 #[derive(Hash, Clone, Debug, PartialEq)]
