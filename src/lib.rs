@@ -63,7 +63,7 @@
 //!    }
 //! }
 //! ```
-//#![no_std]
+#![no_std]
 #![feature(new_uninit)]
 #![feature(get_mut_unchecked)]
 #![feature(negative_impls)]
@@ -71,6 +71,7 @@
 #[cfg(test)]
 extern crate std;
 
+#[macro_use]
 extern crate alloc;
 extern crate core;
 
