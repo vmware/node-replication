@@ -166,7 +166,7 @@ where
     /// # Example
     ///
     /// ```
-    /// use node_replication::Log;
+    /// use mlnr::Log;
     ///
     /// // Operation type that will go onto the log.
     /// #[derive(Clone)]
@@ -264,7 +264,7 @@ where
     /// # Example
     ///
     /// ```ignore
-    /// use node_replication::Log;
+    /// use mlnr::Log;
     ///
     /// // Operation type that will go onto the log.
     /// #[derive(Clone)]
@@ -304,7 +304,7 @@ where
     /// # Example
     ///
     /// ```ignore
-    /// use node_replication::Log;
+    /// use mlnr::Log;
     ///
     /// // Operation type that will go onto the log.
     /// #[derive(Clone)]
@@ -439,7 +439,7 @@ where
     /// # Example
     ///
     /// ```ignore
-    /// use node_replication::Log;
+    /// use mlnr::Log;
     ///
     /// // Operation type that will go onto the log.
     /// #[derive(Clone)]
@@ -629,7 +629,7 @@ where
     /// # Example
     ///
     /// ```ignore
-    /// use node_replication::Log;
+    /// use mlnr::Log;
     ///
     /// // Operation type that will go onto the log.
     /// #[derive(Clone)]

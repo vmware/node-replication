@@ -3,7 +3,7 @@
 
 use core::cell::RefCell;
 use core::mem::MaybeUninit;
-use core::sync::atomic::{spin_loop_hint, AtomicUsize, Ordering};
+use core::sync::atomic::{spin_loop_hint, AtomicBool, AtomicUsize, Ordering};
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -102,6 +102,9 @@ where
     /// The vector is initialized with `MAX_THREADS_PER_REPLICA` elements.
     contexts: Vec<CachePadded<Context<<D as Dispatch>::WriteOperation, <D as Dispatch>::Response>>>,
 
+    /// Number of pending operations for each thread per log.
+    pending: Vec<[CachePadded<AtomicBool>; MAX_THREADS_PER_REPLICA]>,
+
     /// A buffer of operations for flat combining. The combiner stages operations in
     /// here and then batch appends them into the shared log. This helps amortize
     /// the cost of the compare_and_swap() on the tail of the log.
@@ -142,10 +145,10 @@ where
     /// # Example
     ///
     /// ```
-    /// use node_replication::Dispatch;
-    /// use node_replication::Log;
-    /// use node_replication::LogMapper;
-    /// use node_replication::Replica;
+    /// use mlnr::Dispatch;
+    /// use mlnr::Log;
+    /// use mlnr::LogMapper;
+    /// use mlnr::Replica;
     ///
     /// use core::sync::atomic::{AtomicUsize, Ordering};
     /// use std::sync::Arc;
@@ -217,8 +220,10 @@ where
             }
             // Allocate a combiner for each log.
             let mut combiners = Vec::with_capacity(nlogs);
+            let mut pending = Vec::with_capacity(nlogs);
             for _i in 0..nlogs {
                 combiners.push(CachePadded::new(AtomicUsize::new(0)));
+                pending.push(arr![CachePadded::new(AtomicBool::new(false)); 256]);
             }
 
             uninit_ptr.write(Replica {
@@ -226,6 +231,7 @@ where
                 combiners,
                 next: CachePadded::new(AtomicUsize::new(1)),
                 contexts: Vec::with_capacity(MAX_THREADS_PER_REPLICA),
+                pending,
                 buffer: vec![
                     CachePadded::new(RefCell::new(
                         Vec::with_capacity(
@@ -277,10 +283,10 @@ where
     /// # Example
     ///
     /// ```
-    /// use node_replication::Dispatch;
-    /// use node_replication::Log;
-    /// use node_replication::LogMapper;
-    /// use node_replication::Replica;
+    /// use mlnr::Dispatch;
+    /// use mlnr::Log;
+    /// use mlnr::LogMapper;
+    /// use mlnr::Replica;
     ///
     /// use core::sync::atomic::{AtomicUsize, Ordering};
     /// use std::sync::Arc;
@@ -355,10 +361,10 @@ where
     /// # Example
     ///
     /// ```
-    /// use node_replication::Dispatch;
-    /// use node_replication::Log;
-    /// use node_replication::LogMapper;
-    /// use node_replication::Replica;
+    /// use mlnr::Dispatch;
+    /// use mlnr::Log;
+    /// use mlnr::LogMapper;
+    /// use mlnr::Replica;
     ///
     /// use core::sync::atomic::{AtomicUsize, Ordering};
     /// use std::sync::Arc;
@@ -434,10 +440,10 @@ where
     /// # Example
     ///
     /// ```
-    /// use node_replication::Dispatch;
-    /// use node_replication::Log;
-    /// use node_replication::LogMapper;
-    /// use node_replication::Replica;
+    /// use mlnr::Dispatch;
+    /// use mlnr::Log;
+    /// use mlnr::LogMapper;
+    /// use mlnr::Replica;
     ///
     /// use core::sync::atomic::{AtomicUsize, Ordering};
     /// use std::sync::Arc;
@@ -596,6 +602,7 @@ where
     fn make_pending(&self, op: <D as Dispatch>::WriteOperation, tid: usize, hash: usize) -> bool {
         loop {
             if self.contexts[tid - 1].enqueue(op.clone(), hash) {
+                self.pending[hash % self.slog.len()][tid - 1].store(true, Ordering::Relaxed);
                 break;
             }
         }
@@ -641,6 +648,7 @@ where
         let mut buffer = self.buffer[hashidx].borrow_mut();
         let mut operations = self.inflight[hashidx].borrow_mut();
         let mut results = self.result[hashidx].borrow_mut();
+        let pending = &self.pending[hashidx];
 
         buffer.clear();
         results.clear();
@@ -649,8 +657,10 @@ where
 
         // Collect operations from each thread registered with this replica.
         for tid in 1..next {
-            // pass hash of current op to contexts, only get ops from context that have the same hash/log id
-            operations[tid - 1] = self.contexts[tid - 1].ops(&mut buffer, hashidx);
+            if pending[tid - 1].load(Ordering::Relaxed) {
+                // pass hash of current op to contexts, only get ops from context that have the same hash/log id
+                operations[tid - 1] = self.contexts[tid - 1].ops(&mut buffer, hashidx);
+            }
         }
 
         // Append all collected operations into the shared log. We pass a closure
@@ -689,6 +699,7 @@ where
             self.contexts[i - 1].enqueue_resps(&results[s..f]);
             s += operations[i - 1];
             operations[i - 1] = 0;
+            pending[i - 1].store(false, Ordering::Relaxed);
         }
     }
 }
