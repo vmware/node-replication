@@ -15,6 +15,10 @@ name = "lockfree"
 harness = false
 
 [[bench]]
+name = "nrfs"
+harness = false
+
+[[bench]]
 name = "hashbench"
 harness = false
 
@@ -87,6 +91,7 @@ dashmap = "3.11.1"
 lazy_static = "1.4"
 crossbeam = { git = "https://github.com/crossbeam-rs/crossbeam" }
 crossbeam-skiplist = { git = "https://github.com/crossbeam-rs/crossbeam" }
+nrfs = { git = "https://github.com/ankit-iitb/nrfs" }
 rand_xorshift = "0.2.0"
 
 [features]

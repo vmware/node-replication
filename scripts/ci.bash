@@ -15,7 +15,7 @@ sudo sh -c "echo never > /sys/kernel/mm/transparent_hugepage/enabled"
 #RUST_TEST_THREADS=1 timeout 1h cargo bench --bench stack
 #RUST_TEST_THREADS=1 timeout 20h cargo bench --bench hashmap
 #RUST_TEST_THREADS=1 timeout 1h cargo bench --bench vspace
-#RUST_TEST_THREADS=1 timeout 1h cargo bench --bench memfs
+RUST_TEST_THREADS=1 timeout 1h cargo bench --bench nrfs
 RUST_TEST_THREADS=1 timeout 20h cargo bench --bench lockfree
 
 #timeout 1.5h bash benches/hashbench_run.sh
