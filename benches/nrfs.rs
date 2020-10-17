@@ -24,13 +24,17 @@ pub enum OpWr {
 
 impl LogMapper for OpRd {
     fn hash(&self) -> usize {
-        0
+        match self {
+            OpRd::FileRead(fd) => (*fd - 1) as usize,
+        }
     }
 }
 
 impl LogMapper for OpWr {
     fn hash(&self) -> usize {
-        0
+        match self {
+            OpWr::FileWrite(fd) => (*fd - 1) as usize,
+        }
     }
 }
 
