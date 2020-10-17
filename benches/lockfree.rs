@@ -77,7 +77,9 @@ pub enum SkipListConcurrent {
 
 impl LogMapper for SkipListConcurrent {
     fn hash(&self) -> usize {
-        0
+        match self {
+            SkipListConcurrent::Get(k) => *k as usize,
+        }
     }
 }
 

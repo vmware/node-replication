@@ -421,8 +421,7 @@ where
         op: <D as Dispatch>::WriteOperation,
         idx: ReplicaToken,
     ) -> <D as Dispatch>::Response {
-        let _hash = op.hash();
-        let hash = idx.0 % self.slog.len();
+        let hash = op.hash() % self.slog.len();
 
         // Enqueue the operation onto the thread local batch and then try to flat combine.
         self.make_pending(op.clone(), idx.0, hash);
@@ -582,8 +581,7 @@ where
         op: <D as Dispatch>::ReadOperation,
         tid: usize,
     ) -> <D as Dispatch>::Response {
-        let hash = op.hash();
-        let hash_idx = hash % self.slog.len();
+        let hash_idx = op.hash() % self.slog.len();
 
         // We can perform the read only if our replica is synced up against
         // the shared log. If it isn't, then try to combine until it is synced up.
@@ -602,7 +600,7 @@ where
     fn make_pending(&self, op: <D as Dispatch>::WriteOperation, tid: usize, hash: usize) -> bool {
         loop {
             if self.contexts[tid - 1].enqueue(op.clone(), hash) {
-                self.pending[hash % self.slog.len()][tid - 1].store(true, Ordering::Relaxed);
+                self.pending[hash][tid - 1].store(true, Ordering::Release);
                 break;
             }
         }
@@ -657,7 +655,7 @@ where
 
         // Collect operations from each thread registered with this replica.
         for tid in 1..next {
-            if pending[tid - 1].load(Ordering::Relaxed) {
+            if pending[tid - 1].compare_and_swap(true, false, Ordering::Release) {
                 // pass hash of current op to contexts, only get ops from context that have the same hash/log id
                 operations[tid - 1] = self.contexts[tid - 1].ops(&mut buffer, hashidx);
             }
@@ -699,7 +697,6 @@ where
             self.contexts[i - 1].enqueue_resps(&results[s..f]);
             s += operations[i - 1];
             operations[i - 1] = 0;
-            pending[i - 1].store(false, Ordering::Relaxed);
         }
     }
 }
