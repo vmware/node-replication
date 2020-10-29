@@ -5,8 +5,8 @@ authors = ["Chinmay Kulkarni <chinmayk@cs.utah.edu>", "Gerd Zellweger <mail@gerd
 edition = "2018"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
-description = "An operation-log based approach for data replication."
-keywords = ["numa", "log", "x86", "black-box", "replication"]
+description = "A Rust library that constructs a concurrent implementation from any single threaded data structure"
+keywords = ["numa", "log", "x86", "black-box", "replication", "concurrent", "data structures"]
 categories = ["algorithms", "concurrency", "data-structures", "no-std", "os"]
 autobenches = false
 
