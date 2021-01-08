@@ -1,0 +1,83 @@
+[package]
+name = "node-replication"
+version = "0.1.0"
+authors = ["Chinmay Kulkarni <chinmayk@cs.utah.edu>", "Gerd Zellweger <mail@gerdzellweger.com>", "Ankit Bhardwaj <bhrdwj.ankit@gmail.com>", "Irina Calciu <icalciu@vmware.com>"]
+edition = "2018"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+description = "An operation-log based approach for data replication."
+keywords = ["numa", "log", "x86", "black-box", "replication"]
+categories = ["algorithms", "concurrency", "data-structures", "no-std", "os"]
+autobenches = false
+
+[[bench]]
+name = "hashbench"
+harness = false
+
+[[bench]]
+name = "rwlockbench"
+harness = false
+
+[[bench]]
+name = "log"
+harness = false
+
+[[bench]]
+name = "stack"
+harness = false
+
+[[bench]]
+name = "synthetic"
+harness = false
+
+[[bench]]
+name = "hashmap"
+harness = false
+
+[[bench]]
+name = "vspace"
+harness = false
+
+[[bench]]
+name = "memfs"
+harness = false
+
+[dependencies]
+crossbeam-utils = { version = "0.6", default-features = false }
+arr_macro = "0.1.2"
+log = "0.4"
+static_assertions = "1.1.0"
+
+# Add debug symbols on the release build so that we can debug performance issues
+[profile.release]
+debug = true
+#lto = true
+#codegen-units = 1
+
+[profile.bench]
+debug = true
+
+[dev-dependencies]
+log = "0.4"
+hwloc = "0.5"
+env_logger = "0.7"
+num_cpus = "1.12"
+x86 = "0.34.0"
+btfs = "0.0.4"
+zipf = "6.1"
+evmap = "8"
+chashmap = "2.2"
+urcu-sys = "=0.0.5"
+csv = "1.1.3"
+flurry = "0.3.0"
+core_affinity = "0.5.10"
+parking_lot = "0.7.1"
+serde = { version = "1", features = ["derive"] }
+clap = { version = "2", features = ["yaml"] }
+rand = { version = "0.7", features = ["small_rng"] }
+dashmap = "3.11.1"
+lazy_static = "1.4"
+
+[features]
+smokebench = []
+cmp = []
