@@ -10,38 +10,6 @@ keywords = ["numa", "log", "x86", "black-box", "replication"]
 categories = ["algorithms", "concurrency", "data-structures", "no-std", "os"]
 autobenches = false
 
-[[bench]]
-name = "hashbench"
-harness = false
-
-[[bench]]
-name = "rwlockbench"
-harness = false
-
-[[bench]]
-name = "log"
-harness = false
-
-[[bench]]
-name = "stack"
-harness = false
-
-[[bench]]
-name = "synthetic"
-harness = false
-
-[[bench]]
-name = "hashmap"
-harness = false
-
-[[bench]]
-name = "vspace"
-harness = false
-
-[[bench]]
-name = "memfs"
-harness = false
-
 [dependencies]
 crossbeam-utils = { version = "0.6", default-features = false }
 arr_macro = "0.1.2"
