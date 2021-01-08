@@ -1,5 +1,5 @@
 [package]
-name = "node-replication"
+name = "mlnr"
 version = "0.1.0"
 authors = ["Chinmay Kulkarni <chinmayk@cs.utah.edu>", "Gerd Zellweger <mail@gerdzellweger.com>", "Ankit Bhardwaj <bhrdwj.ankit@gmail.com>", "Irina Calciu <icalciu@vmware.com>"]
 edition = "2018"
@@ -11,7 +11,19 @@ categories = ["algorithms", "concurrency", "data-structures", "no-std", "os"]
 autobenches = false
 
 [[bench]]
+name = "lockfree"
+harness = false
+
+[[bench]]
+name = "nrfs"
+harness = false
+
+[[bench]]
 name = "hashbench"
+harness = false
+
+[[bench]]
+name = "chashbench"
 harness = false
 
 [[bench]]
@@ -77,6 +89,10 @@ clap = { version = "2", features = ["yaml"] }
 rand = { version = "0.7", features = ["small_rng"] }
 dashmap = "3.11.1"
 lazy_static = "1.4"
+crossbeam = { git = "https://github.com/crossbeam-rs/crossbeam" }
+crossbeam-skiplist = { git = "https://github.com/crossbeam-rs/crossbeam" }
+nrfs = { git = "https://github.com/ankit-iitb/nrfs" }
+rand_xorshift = "0.2.0"
 
 [features]
 smokebench = []

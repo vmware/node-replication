@@ -2,12 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! A minimal example that implements a replicated hashmap
-use std::collections::HashMap;
+use chashmap::CHashMap as HashMap;
 use std::sync::Arc;
 
-use node_replication::Dispatch;
-use node_replication::Log;
-use node_replication::Replica;
+use mlnr::{Dispatch, Log, LogMapper, Replica};
 
 /// The node-replicated hashmap uses a std hashmap internally.
 #[derive(Default)]
@@ -16,15 +14,27 @@ struct NrHashMap {
 }
 
 /// We support mutable put operation on the hashmap.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Hash, Clone, Debug, PartialEq)]
 enum Modify {
     Put(u64, u64),
 }
 
+impl LogMapper for Modify {
+    fn hash(&self) -> usize {
+        0
+    }
+}
+
 /// We support an immutable read operation to lookup a key from the hashmap.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Hash, Clone, Debug, PartialEq)]
 enum Access {
     Get(u64),
+}
+
+impl LogMapper for Access {
+    fn hash(&self) -> usize {
+        0
+    }
 }
 
 /// The Dispatch traits executes `ReadOperation` (our Access enum)
@@ -43,7 +53,7 @@ impl Dispatch for NrHashMap {
     }
 
     /// The `dispatch_mut` function applies the mutable operations.
-    fn dispatch_mut(&mut self, op: Self::WriteOperation) -> Self::Response {
+    fn dispatch_mut(&self, op: Self::WriteOperation) -> Self::Response {
         match op {
             Modify::Put(key, value) => self.storage.insert(key, value),
         }
@@ -56,11 +66,12 @@ fn main() {
     // The operation log for storing `WriteOperation`, it has a size of 2 MiB:
     let log = Arc::new(Log::<<NrHashMap as Dispatch>::WriteOperation>::new(
         2 * 1024 * 1024,
+        1,
     ));
 
     // Next, we create two replicas of the hashmap
-    let replica1 = Replica::<NrHashMap>::new(&log);
-    let replica2 = Replica::<NrHashMap>::new(&log);
+    let replica1 = Replica::<NrHashMap>::new(vec![log.clone()]);
+    let replica2 = Replica::<NrHashMap>::new(vec![log.clone()]);
 
     // The replica executes a Modify or Access operations by calling
     // `execute_mut` and `execute`. Eventually they end up in the `Dispatch` trait.

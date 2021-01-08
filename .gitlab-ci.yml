@@ -15,7 +15,7 @@ test:
   script:
     - cargo +nightly fmt -- --check
     - timeout 1h cargo test
-    - cargo bench --no-run
+    - cargo bench --bench lockfree --no-run
   dependencies:
     - build
   variables:

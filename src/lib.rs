@@ -16,7 +16,7 @@
 //! [examples](https://github.com/vmware/node-replication/tree/master/examples/hashmap.rs)
 //! folder.
 //!
-//! ```
+//! ```ignore
 //! use node_replication::Dispatch;
 //! use std::collections::HashMap;
 //!
@@ -26,13 +26,13 @@
 //! }
 //!
 //! /// We support a mutable put operation on the hashmap.
-//! #[derive(Debug, PartialEq, Clone)]
+//! #[derive(Hash, Debug, PartialEq, Clone)]
 //! pub enum Modify {
 //!    Put(u64, u64),
 //! }
 //!
 //! /// We support an immutable read operation to lookup a key from the hashmap.
-//! #[derive(Debug, PartialEq, Clone)]
+//! #[derive(Hash, Debug, PartialEq, Clone)]
 //! pub enum Access {
 //!    Get(u64),
 //! }
@@ -71,6 +71,7 @@
 #[cfg(test)]
 extern crate std;
 
+#[macro_use]
 extern crate alloc;
 extern crate core;
 
@@ -92,6 +93,10 @@ pub use replica::{Replica, ReplicaToken, MAX_THREADS_PER_REPLICA};
 
 use core::fmt::Debug;
 
+pub trait LogMapper {
+    fn hash(&self) -> usize;
+}
+
 /// Trait that a data structure must implement to be usable with this library.
 ///
 /// When this library executes a read-only operation against the data structure,
@@ -103,12 +108,12 @@ pub trait Dispatch {
     /// A read-only operation. When executed against the data structure, an operation
     /// of this type must not mutate the data structure in anyway. Otherwise, the
     /// assumptions made by this library no longer hold.
-    type ReadOperation: Sized + Clone + PartialEq + Debug;
+    type ReadOperation: Sized + Clone + PartialEq + Debug + LogMapper;
 
     /// A write operation. When executed against the data structure, an operation of
     /// this type is allowed to mutate state. The library ensures that this is done so
     /// in a thread-safe manner.
-    type WriteOperation: Sized + Clone + PartialEq + Debug + Send;
+    type WriteOperation: Sized + Clone + PartialEq + Debug + Send + LogMapper;
 
     /// The type on the value returned by the data structure when a `ReadOperation` or a
     /// `WriteOperation` successfully executes against it.
@@ -120,5 +125,5 @@ pub trait Dispatch {
 
     /// Method on the data structure that allows a write operation to be
     /// executed against it.
-    fn dispatch_mut(&mut self, op: Self::WriteOperation) -> Self::Response;
+    fn dispatch_mut(&self, op: Self::WriteOperation) -> Self::Response;
 }

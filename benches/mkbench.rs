@@ -25,7 +25,7 @@ use std::time::{Duration, Instant};
 
 use csv::WriterBuilder;
 use log::*;
-use node_replication::{Dispatch, Log, Replica, ReplicaToken};
+use mlnr::{Dispatch, Log, Replica, ReplicaToken};
 use rand::seq::SliceRandom;
 use rand::{rngs::SmallRng, Rng, SeedableRng};
 use serde::Serialize;
@@ -48,7 +48,7 @@ pub const WARN_THRESHOLD: usize = 1 << 28;
 type BenchFn<R> = fn(
     crate::utils::ThreadId,
     ReplicaToken,
-    &Arc<Log<'static, <<R as ReplicaTrait>::D as Dispatch>::WriteOperation>>,
+    &Vec<Arc<Log<'static, <<R as ReplicaTrait>::D as Dispatch>::WriteOperation>>>,
     &Arc<R>,
     &Operation<
         <<R as ReplicaTrait>::D as Dispatch>::ReadOperation,
@@ -60,11 +60,13 @@ type BenchFn<R> = fn(
 pub trait ReplicaTrait {
     type D: Dispatch + Default + Sync;
 
-    fn new_arc(log: &Arc<Log<'static, <Self::D as Dispatch>::WriteOperation>>) -> Arc<Self>;
+    fn new_arc(log: Vec<Arc<Log<'static, <Self::D as Dispatch>::WriteOperation>>>) -> Arc<Self>;
 
     fn register_me(&self) -> Option<ReplicaToken>;
 
     fn sync_me(&self, idx: ReplicaToken);
+
+    fn sync_log(&self, idx: ReplicaToken, logid: usize);
 
     fn exec(
         &self,
@@ -82,12 +84,16 @@ pub trait ReplicaTrait {
 impl<'a, T: Dispatch + Sync + Default> ReplicaTrait for Replica<'a, T> {
     type D = T;
 
-    fn new_arc(log: &Arc<Log<'static, <Self::D as Dispatch>::WriteOperation>>) -> Arc<Self> {
+    fn new_arc(log: Vec<Arc<Log<'static, <Self::D as Dispatch>::WriteOperation>>>) -> Arc<Self> {
         Self::new(log)
     }
 
     fn sync_me(&self, idx: ReplicaToken) {
         self.sync(idx);
+    }
+
+    fn sync_log(&self, idx: ReplicaToken, logid: usize) {
+        self.sync_log(idx, logid);
     }
 
     fn register_me(&self) -> Option<ReplicaToken> {
@@ -230,8 +236,8 @@ pub(crate) fn baseline_comparison<R: ReplicaTrait>(
     .expect("Can't write resutls");
 
     // 2nd benchmark: we compare T with a log in front:
-    let log = Arc::new(Log::<<R::D as Dispatch>::WriteOperation>::new(log_size));
-    let r = Replica::<R::D>::new(&log);
+    let log = Arc::new(Log::<<R::D as Dispatch>::WriteOperation>::new(log_size, 1));
+    let r = Replica::<R::D>::new(vec![log]);
     let ridx = r.register_me().expect("Failed to register with Replica.");
 
     let mut operations_per_second: Vec<usize> = Vec::with_capacity(32);
@@ -328,6 +334,27 @@ impl fmt::Debug for ReplicaStrategy {
     }
 }
 
+/// How logs are mapped to cores/threads.
+#[derive(Serialize, Copy, Clone, Eq, PartialEq)]
+pub enum LogStrategy {
+    /// One Log per system.
+    One,
+    /// One log for every hardware thread.
+    PerThread,
+    /// Custom number of logs.
+    Custom(usize),
+}
+
+impl fmt::Debug for LogStrategy {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            LogStrategy::One => write!(f, "LS=System"),
+            LogStrategy::PerThread => write!(f, "LS=PerThread"),
+            LogStrategy::Custom(v) => write!(f, "LS=Custom({})", v),
+        }
+    }
+}
+
 pub struct ScaleBenchmark<R: ReplicaTrait>
 where
     <R::D as Dispatch>::WriteOperation: Send,
@@ -346,13 +373,15 @@ where
     tm: ThreadMapping,
     /// Total amount of threads used by the benchmark
     ts: usize,
+    /// ReplicaStrategy used by the benchmark
+    ls: LogStrategy,
     /// Replica <-> Thread/Cpu mapping as used by the benchmark.
     rm: HashMap<usize, Vec<Cpu>>,
     /// An Arc reference to operations executed on the log.
     operations:
         Arc<Vec<Operation<<R::D as Dispatch>::ReadOperation, <R::D as Dispatch>::WriteOperation>>>,
     /// An Arc reference to the log.
-    log: Arc<Log<'static, <R::D as Dispatch>::WriteOperation>>,
+    log: Vec<Arc<Log<'static, <R::D as Dispatch>::WriteOperation>>>,
     /// Results of the benchmark we map the #iteration to a list of per-thread results
     /// (each per-thread stores completed ops in per-sec intervals).
     /// It's a hash-map so it acts like a cache i.e., we ensure to only save the latest
@@ -388,6 +417,7 @@ where
         name: String,
         topology: &MachineTopology,
         rs: ReplicaStrategy,
+        ls: LogStrategy,
         tm: ThreadMapping,
         ts: usize,
         operations: Vec<
@@ -395,7 +425,7 @@ where
         >,
         batch_size: usize,
         sync: bool,
-        log: Arc<Log<'static, <R::D as Dispatch>::WriteOperation>>,
+        log: Vec<Arc<Log<'static, <R::D as Dispatch>::WriteOperation>>>,
         f: BenchFn<R>,
     ) -> ScaleBenchmark<R>
     where
@@ -404,6 +434,7 @@ where
         ScaleBenchmark {
             name,
             rs,
+            ls,
             tm,
             ts,
             rm: ScaleBenchmark::<R>::replica_core_allocation(topology, rs, tm, ts),
@@ -497,7 +528,9 @@ where
     fn execute_mut(&self, duration: Duration, reset_log: bool) -> usize {
         if reset_log {
             unsafe {
-                self.log.reset();
+                for log in &self.log {
+                    log.reset();
+                }
             }
         }
 
@@ -515,9 +548,14 @@ where
                 .recv()
                 .expect("Can't receive a per-thread result?");
             if intervals > 0 && intervals != core_ops.1.len() {
-                error!("Receveived different no. of measurements from individual threads");
+                error!(
+                    "Receveived different no. of measurements from individual threads {:?}",
+                    core_ops
+                );
             }
-            intervals = core_ops.1.len();
+            if intervals < core_ops.1.len() {
+                intervals = core_ops.1.len();
+            }
             core_iteratios.push(core_ops);
         }
 
@@ -554,7 +592,7 @@ where
                     // allocation to be local to the where a replica will be used later
                     utils::pin_thread(core0);
 
-                    (rid, ReplicaTrait::new_arc(&log))
+                    (rid, ReplicaTrait::new_arc(log))
                 })
                 .join()
                 .unwrap(),
@@ -570,6 +608,16 @@ where
     }
 
     fn startup(&mut self) {
+        let stuck = Arc::new(arr![AtomicUsize::new(0); 128]);
+        let func = &|idx: usize, rid: usize| {
+            let stuck = stuck.clone();
+            stuck[rid - 1].compare_and_swap(0, idx, Ordering::Release);
+        };
+        let nlogs = self.log.len();
+        for i in 0..nlogs {
+            unsafe { Arc::get_mut_unchecked(&mut self.log[i]).update_closure(func) };
+        }
+
         let thread_num = self.threads();
         // Need a barrier to synchronize starting of threads
         let barrier = Arc::new(Barrier::new(thread_num));
@@ -592,7 +640,7 @@ where
                 utils::pin_thread(core_id);
 
                 let b = barrier.clone();
-                let log: Arc<_> = self.log.clone();
+                let log = self.log.clone();
                 let replica = replicas[rid].clone();
                 let f = self.f.clone();
                 let batch_size = self.batch_size;
@@ -609,6 +657,7 @@ where
                 let name = self.name.clone();
                 // Clone the Arc<>
                 let operations = self.operations.clone();
+                let stuck = stuck.clone();
 
                 self.handles.push(thread::spawn(move || {
                     utils::pin_thread(core_id);
@@ -673,6 +722,12 @@ where
                                 operations_completed = 0;
                                 next_log += log_period;
                             }
+
+                            let log_id = stuck[rid].load(Ordering::Relaxed);
+                            if log_id != 0 {
+                                stuck[rid].compare_and_swap(log_id, 0, Ordering::Release);
+                                replica.sync_log(replica_token, log_id);
+                            }
                         }
 
                         // Some threads may not end up adding the last second of measuring due to bad timing,
@@ -717,10 +772,8 @@ where
                                     break;
                                 }
 
-                                if core_id == sync_thread {
-                                    replica.sync_me(replica_token);
-                                } else {
-                                    break;
+                                for i in 1..(nlogs + 1) {
+                                    replica.sync_log(replica_token, i);
                                 }
                             }
                         }
@@ -861,6 +914,8 @@ where
 {
     /// Replica granularity.
     replica_strategies: Vec<ReplicaStrategy>,
+    /// Log granularity.
+    log_strategies: Vec<LogStrategy>,
     /// Thread assignments.
     thread_mappings: Vec<ThreadMapping>,
     /// # Threads.
@@ -900,6 +955,7 @@ where
     ) -> ScaleBenchBuilder<R> {
         ScaleBenchBuilder {
             replica_strategies: Vec::new(),
+            log_strategies: Vec::new(),
             thread_mappings: Vec::new(),
             threads: Vec::new(),
             batches: vec![1usize],
@@ -917,52 +973,23 @@ where
         self.replica_strategy(ReplicaStrategy::One);
         self.replica_strategy(ReplicaStrategy::Socket);
         self.replica_strategy(ReplicaStrategy::L1);
-        self.thread_defaults()
+        self.thread_defaults(0)
     }
 
-    pub fn thread_defaults(&mut self) -> &mut Self {
+    pub fn thread_defaults(&mut self, _nlogs: usize) -> &mut Self {
         let topology = MachineTopology::new();
         let max_cores = topology.cores();
 
-        // On larger machines thread increments are bigger than on
-        // smaller machines:
-        let thread_incremements = if max_cores > 120 {
-            16
-        } else if max_cores > 24 {
-            8
-        } else if max_cores > 16 {
-            4
-        } else {
-            2
-        };
-
-        for t in (0..(max_cores + 1)).step_by(thread_incremements) {
+        let sockets = topology.sockets();
+        let cores_on_s0 = topology.cpus_on_socket(sockets[0]);
+        let step_size = cores_on_s0.len() / 4;
+        for t in (0..(max_cores + 1)).step_by(step_size) {
             if t == 0 {
                 // Can't run on 0 threads
                 self.threads(t + 1);
             } else {
                 self.threads(t);
             }
-        }
-
-        // Go in increments of one around "interesting" socket boundaries
-        let sockets = topology.sockets();
-        let cores_on_s0 = topology.cpus_on_socket(sockets[0]);
-        let cores_per_socket = cores_on_s0.len();
-        for i in 0..sockets.len() {
-            let multiplier = i + 1;
-            fn try_add(to_add: usize, max_cores: usize, cur_threads: &mut Vec<usize>) {
-                if !cur_threads.contains(&to_add) && to_add <= max_cores {
-                    cur_threads.push(to_add);
-                } else {
-                    trace!("Didn't add {} threads", to_add);
-                }
-            }
-
-            let core_socket_boundary = multiplier * cores_per_socket;
-            try_add(core_socket_boundary - 1, max_cores, &mut self.threads);
-            try_add(core_socket_boundary, max_cores, &mut self.threads);
-            try_add(core_socket_boundary + 1, max_cores, &mut self.threads);
         }
 
         self.threads.sort();
@@ -996,6 +1023,12 @@ where
     /// Run benchmark with given replication strategy.
     pub fn replica_strategy(&mut self, rs: ReplicaStrategy) -> &mut Self {
         self.replica_strategies.push(rs);
+        self
+    }
+
+    /// Run benchmark with given replication strategy.
+    pub fn log_strategy(&mut self, ls: LogStrategy) -> &mut Self {
+        self.log_strategies.push(ls);
         self
     }
 
@@ -1040,40 +1073,59 @@ where
 
         let mut group = c.benchmark_group(name);
         for rs in self.replica_strategies.iter() {
-            for tm in self.thread_mappings.iter() {
-                for ts in self.threads.iter() {
-                    for b in self.batches.iter() {
-                        let log = Arc::new(Log::<<R::D as Dispatch>::WriteOperation>::new(
-                            self.log_size,
-                        ));
-                        let mut runner = ScaleBenchmark::<R>::new(
-                            String::from(name),
-                            &topology,
-                            *rs,
-                            *tm,
-                            *ts,
-                            self.operations.to_vec(),
-                            *b,
-                            self.sync,
-                            log.clone(),
-                            f,
-                        );
-                        runner.startup();
+            for ls in self.log_strategies.iter() {
+                for tm in self.thread_mappings.iter() {
+                    for ts in self.threads.iter() {
+                        for b in self.batches.iter() {
+                            let num_logs = match *ls {
+                                LogStrategy::One => 1,
+                                LogStrategy::PerThread => *ts,
+                                LogStrategy::Custom(v) => v,
+                            };
 
-                        let name = format!("{:?} {:?} BS={}", *rs, *tm, *b);
-                        group.bench_with_input(
-                            BenchmarkId::new(name, *ts),
-                            &runner,
-                            |cb, runner| {
-                                cb.iter_custom(|duration| {
-                                    runner.execute_mut(duration, self.reset_log)
-                                })
-                            },
-                        );
+                            let log = {
+                                let mut logs = Vec::with_capacity(num_logs);
+                                for i in 0..num_logs {
+                                    logs.push(Arc::new(
+                                        Log::<<R::D as Dispatch>::WriteOperation>::new(
+                                            self.log_size,
+                                            i + 1,
+                                        ),
+                                    ));
+                                }
+                                logs
+                            };
 
-                        runner
-                            .terminate()
-                            .expect("Couldn't terminate the experiment");
+                            let mut runner = ScaleBenchmark::<R>::new(
+                                String::from(name),
+                                &topology,
+                                *rs,
+                                *ls,
+                                *tm,
+                                *ts,
+                                self.operations.to_vec(),
+                                *b,
+                                self.sync,
+                                log.clone(),
+                                f,
+                            );
+                            runner.startup();
+
+                            let name = format!("{:?} {:?} {:?} BS={}", *rs, *ls, *tm, *b);
+                            group.bench_with_input(
+                                BenchmarkId::new(name, *ts),
+                                &runner,
+                                |cb, runner| {
+                                    cb.iter_custom(|duration| {
+                                        runner.execute_mut(duration, self.reset_log)
+                                    })
+                                },
+                            );
+
+                            runner
+                                .terminate()
+                                .expect("Couldn't terminate the experiment");
+                        }
                     }
                 }
             }

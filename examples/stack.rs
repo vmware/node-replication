@@ -2,28 +2,39 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! A minimal example that implements a replicated stack
+use crossbeam::queue::SegQueue;
 use std::sync::Arc;
 
-use node_replication::Dispatch;
-use node_replication::Log;
-use node_replication::Replica;
+use mlnr::{Dispatch, Log, LogMapper, Replica};
 
 /// We support mutable push and pop operations on the stack.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Hash, Clone, Debug, PartialEq)]
 enum Modify {
     Push(u32),
     Pop,
 }
 
+impl LogMapper for Modify {
+    fn hash(&self) -> usize {
+        0
+    }
+}
+
 /// We support an immutable read operation to peek the stack.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Hash, Clone, Debug, PartialEq)]
 enum Access {
     Peek,
 }
 
+impl LogMapper for Access {
+    fn hash(&self) -> usize {
+        0
+    }
+}
+
 /// The actual stack, it uses a single-threaded Vec.
 struct Stack {
-    storage: Vec<u32>,
+    storage: SegQueue<u32>,
 }
 
 impl Default for Stack {
@@ -35,7 +46,7 @@ impl Default for Stack {
     fn default() -> Stack {
         const DEFAULT_STACK_SIZE: u32 = 1_000u32;
 
-        let mut s = Stack {
+        let s = Stack {
             storage: Default::default(),
         };
 
@@ -53,23 +64,32 @@ impl Default for Stack {
 impl Dispatch for Stack {
     type ReadOperation = Access;
     type WriteOperation = Modify;
-    type Response = Option<u32>;
+    type Response = Result<u32, ()>;
 
     /// The `dispatch` function applies the immutable operations.
     fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
         match op {
-            Access::Peek => self.storage.last().cloned(),
+            Access::Peek => {
+                if self.storage.is_empty() {
+                    Err(())
+                } else {
+                    Ok(0)
+                }
+            }
         }
     }
 
     /// The `dispatch_mut` function applies the mutable operations.
-    fn dispatch_mut(&mut self, op: Self::WriteOperation) -> Self::Response {
+    fn dispatch_mut(&self, op: Self::WriteOperation) -> Self::Response {
         match op {
             Modify::Push(v) => {
                 self.storage.push(v);
-                return None;
+                return Ok(0);
             }
-            Modify::Pop => return self.storage.pop(),
+            Modify::Pop => match self.storage.pop() {
+                Some(element) => Ok(element),
+                None => Err(()),
+            },
         }
     }
 }
@@ -80,11 +100,12 @@ fn main() {
     // The operation log for storing `WriteOperation`, it has a size of 2 MiB:
     let log = Arc::new(Log::<<Stack as Dispatch>::WriteOperation>::new(
         2 * 1024 * 1024,
+        1,
     ));
 
     // Next, we create two replicas of the stack
-    let replica1 = Replica::<Stack>::new(&log);
-    let replica2 = Replica::<Stack>::new(&log);
+    let replica1 = Replica::<Stack>::new(vec![log.clone()]);
+    let replica2 = Replica::<Stack>::new(vec![log.clone()]);
 
     // The replica executes a Modify or Access operations by calling
     // `execute_mut` and `execute`. Eventually they end up in the `Dispatch` trait.
