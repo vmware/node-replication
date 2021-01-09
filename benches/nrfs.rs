@@ -135,7 +135,7 @@ fn nrfs_scale_out(c: &mut TestHarness, num_cpus: usize, write_ratio: usize) {
     let logs = num_cpus;
 
     mkbench::ScaleBenchBuilder::<Replica<NrFilesystem>>::new(ops)
-        .thread_defaults(logs)
+        .thread_defaults()
         .replica_strategy(mkbench::ReplicaStrategy::Socket)
         .update_batch(128)
         .thread_mapping(ThreadMapping::Sequential)

@@ -38,7 +38,7 @@ where
     type D = T;
 
     fn new_arc(
-        _log: &Arc<Log<'static, <Self::D as Dispatch>::WriteOperation>>,
+        _log: Vec<Arc<Log<'static, <Self::D as Dispatch>::WriteOperation>>>,
     ) -> std::sync::Arc<Self> {
         Arc::new(Partitioner {
             registered: AtomicUsize::new(0),
@@ -57,6 +57,10 @@ where
     }
 
     fn sync_me(&self, _idx: ReplicaToken) {
+        /* NOP */
+    }
+
+    fn sync_log(&self, _idx: ReplicaToken, _logid: usize) {
         /* NOP */
     }
 
@@ -97,7 +101,7 @@ where
     type D = T;
 
     fn new_arc(
-        _log: &Arc<Log<'static, <Self::D as Dispatch>::WriteOperation>>,
+        _log: Vec<Arc<Log<'static, <Self::D as Dispatch>::WriteOperation>>>,
     ) -> std::sync::Arc<Self> {
         Arc::new(ConcurrentDs {
             registered: AtomicUsize::new(0),
@@ -111,6 +115,10 @@ where
     }
 
     fn sync_me(&self, _idx: ReplicaToken) {
+        /* NOP */
+    }
+
+    fn sync_log(&self, _idx: ReplicaToken, _logid: usize) {
         /* NOP */
     }
 

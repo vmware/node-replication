@@ -209,7 +209,7 @@ fn concurrent_ds_scale_out<T: Sized>(
     let bench_name = format!("{}-scaleout-wr{}", name, write_ratio);
 
     mkbench::ScaleBenchBuilder::<lockfree_partitioned::ConcurrentDs<T>>::new(mkops())
-        .thread_defaults(0)
+        .thread_defaults()
         .replica_strategy(mkbench::ReplicaStrategy::One) // Can only be One
         .update_batch(128)
         .thread_mapping(ThreadMapping::Interleave)
@@ -251,7 +251,7 @@ where
         let bench_name = format!("{}{}-scaleout-wr{}", name, logs, write_ratio);
 
         mkbench::ScaleBenchBuilder::<R>::new(ops.clone())
-            .thread_defaults(logs)
+            .thread_defaults()
             .replica_strategy(mkbench::ReplicaStrategy::Socket)
             .update_batch(128)
             .thread_mapping(ThreadMapping::Interleave)
