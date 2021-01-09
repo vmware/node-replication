@@ -86,7 +86,6 @@ extern crate static_assertions;
 mod context;
 mod log;
 mod replica;
-pub mod rwlock;
 
 pub use crate::log::Log;
 pub use replica::{Replica, ReplicaToken, MAX_THREADS_PER_REPLICA};

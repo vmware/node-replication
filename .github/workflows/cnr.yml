@@ -37,8 +37,8 @@ jobs:
       working-directory: ./node-replication-cnr
     - name: Try to compile benchmarks
       run: |
-        cargo bench --bench nrfs --features="cnr" --no-run --verbose
-        cargo bench --bench lockfree --features="cnr" --no-run --verbose
+        cargo bench --bench nrfs --features="c_nr" --no-run --verbose
+        cargo bench --bench lockfree --features="c_nr" --no-run --verbose
       working-directory: ./benches
     - name: Try stack example
       run: RUST_BACKTRACE=1 RUST_LOG='trace' cargo run --release --example stack -- -t1,2 --nop 100000 -l 1 -m sequential

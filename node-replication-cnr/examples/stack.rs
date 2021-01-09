@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! A minimal example that implements a replicated stack
-use crossbeam::queue::SegQueue;
+use crossbeam_queue::SegQueue;
 use std::sync::Arc;
 
-use mlnr::{Dispatch, Log, LogMapper, Replica};
+use cnr::{Dispatch, Log, LogMapper, Replica};
 
 /// We support mutable push and pop operations on the stack.
 #[derive(Hash, Clone, Debug, PartialEq)]

@@ -1,26 +1,21 @@
 [package]
-name = "node-replication-bench"
+name = "nr-bench"
 version = "0.1.0"
 authors = ["Chinmay Kulkarni <chinmayk@cs.utah.edu>", "Gerd Zellweger <mail@gerdzellweger.com>", "Ankit Bhardwaj <bhrdwj.ankit@gmail.com>", "Irina Calciu <icalciu@vmware.com>"]
 edition = "2018"
 license = "MIT OR Apache-2.0"
-readme = "README.md"
-description = "An operation-log based approach for data replication."
-keywords = ["numa", "log", "x86", "black-box", "replication"]
-categories = ["algorithms", "concurrency", "data-structures", "no-std", "os"]
-autobenches = false
 
 [[bench]]
 name = "lockfree"
 harness = false
 path = "lockfree.rs"
-required-features = ["cnr"]
+required-features = ["c_nr"]
 
 [[bench]]
 name = "nrfs"
 harness = false
 path = "nrfs.rs"
-required-features = ["cnr"]
+required-features = ["c_nr"]
 
 [[bench]]
 name = "hashbench"
@@ -107,10 +102,10 @@ crossbeam-utils = { version = "0.6", default-features = false }
 arr_macro = "0.1.2"
 static_assertions = "1.1.0"
 node-replication = { path = "../node-replication-nr" }
-mlnr = { path = "../node-replication-cnr" }
+cnr = { path = "../node-replication-cnr" }
 
 [features]
 smokebench = []
 cmp = []
 nr = []
-cnr = []
+c_nr = []

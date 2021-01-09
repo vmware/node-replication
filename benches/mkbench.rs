@@ -23,10 +23,10 @@ use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc, Barrier, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+#[cfg(feature = "c_nr")]
+use cnr::{Dispatch, Log, Replica, ReplicaToken};
 use csv::WriterBuilder;
 use log::*;
-#[cfg(feature = "cnr")]
-use mlnr::{Dispatch, Log, Replica, ReplicaToken};
 #[cfg(feature = "nr")]
 use node_replication::{Dispatch, Log, Replica, ReplicaToken};
 use rand::seq::SliceRandom;
@@ -61,7 +61,7 @@ type BenchFn<R> = fn(
     usize,
 );
 
-#[cfg(feature = "cnr")]
+#[cfg(feature = "c_nr")]
 type BenchFn<R> = fn(
     crate::utils::ThreadId,
     ReplicaToken,
@@ -104,7 +104,7 @@ impl<'a, T: Dispatch + Sync + Default> ReplicaTrait for Replica<'a, T> {
     fn new_arc(log: Vec<Arc<Log<'static, <Self::D as Dispatch>::WriteOperation>>>) -> Arc<Self> {
         #[cfg(feature = "nr")]
         return Self::new(&log[0].clone());
-        #[cfg(feature = "cnr")]
+        #[cfg(feature = "c_nr")]
         return Self::new(log);
     }
 
@@ -260,9 +260,9 @@ pub(crate) fn baseline_comparison<R: ReplicaTrait>(
     let log_arc = Arc::new(Log::<<R::D as Dispatch>::WriteOperation>::new(log_size));
     #[cfg(feature = "nr")]
     let r = Replica::<R::D>::new(&log_arc);
-    #[cfg(feature = "cnr")]
+    #[cfg(feature = "c_nr")]
     let log = Arc::new(Log::<<R::D as Dispatch>::WriteOperation>::new(log_size, 1));
-    #[cfg(feature = "cnr")]
+    #[cfg(feature = "c_nr")]
     let r = Replica::<R::D>::new(vec![log]);
     let ridx = r.register_me().expect("Failed to register with Replica.");
 
@@ -637,7 +637,7 @@ where
         let stuck = Arc::new(arr![AtomicUsize::new(0); 128]);
         let nlogs = self.log.len();
 
-        #[cfg(feature = "cnr")]
+        #[cfg(feature = "c_nr")]
         {
             let func = &|idx: usize, rid: usize| {
                 let stuck = stuck.clone();
@@ -672,7 +672,7 @@ where
                 let b = barrier.clone();
                 #[cfg(feature = "nr")]
                 let log = self.log[0].clone();
-                #[cfg(feature = "cnr")]
+                #[cfg(feature = "c_nr")]
                 let log = self.log.clone();
                 let replica = replicas[rid].clone();
                 let f = self.f.clone();
@@ -1125,7 +1125,7 @@ where
                                             self.log_size,
                                         ),
                                     ));
-                                    #[cfg(feature = "cnr")]
+                                    #[cfg(feature = "c_nr")]
                                     logs.push(Arc::new(
                                         Log::<<R::D as Dispatch>::WriteOperation>::new(
                                             self.log_size,

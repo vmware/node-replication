@@ -5,7 +5,7 @@ mod mkbench;
 mod utils;
 
 use crate::mkbench::ReplicaTrait;
-use mlnr::{Dispatch, LogMapper, Replica};
+use cnr::{Dispatch, LogMapper, Replica};
 use nrfs::*;
 use std::cell::UnsafeCell;
 use utils::benchmark::*;

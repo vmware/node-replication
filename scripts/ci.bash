@@ -16,8 +16,8 @@ RUST_TEST_THREADS=1 timeout 1h cargo bench --bench synthetic --features="nr"
 RUST_TEST_THREADS=1 timeout 1h cargo bench --bench stack --features="nr"
 RUST_TEST_THREADS=1 timeout 20h cargo bench --bench hashmap --features="nr"
 RUST_TEST_THREADS=1 timeout 1h cargo bench --bench vspace --features="nr"
-RUST_TEST_THREADS=1 timeout 1h cargo bench --bench nrfs --features="cnr"
-RUST_TEST_THREADS=1 timeout 20h cargo bench --bench lockfree --features="cnr"
+RUST_TEST_THREADS=1 timeout 1h cargo bench --bench nrfs --features="c_nr"
+RUST_TEST_THREADS=1 timeout 20h cargo bench --bench lockfree --features="c_nr"
 
 timeout 1.5h bash hashbench_run.sh
 timeout 1.5h bash rwlockbench_run.sh

@@ -145,10 +145,10 @@ where
     /// # Example
     ///
     /// ```
-    /// use mlnr::Dispatch;
-    /// use mlnr::Log;
-    /// use mlnr::LogMapper;
-    /// use mlnr::Replica;
+    /// use cnr::Dispatch;
+    /// use cnr::Log;
+    /// use cnr::LogMapper;
+    /// use cnr::Replica;
     ///
     /// use core::sync::atomic::{AtomicUsize, Ordering};
     /// use std::sync::Arc;
@@ -283,10 +283,10 @@ where
     /// # Example
     ///
     /// ```
-    /// use mlnr::Dispatch;
-    /// use mlnr::Log;
-    /// use mlnr::LogMapper;
-    /// use mlnr::Replica;
+    /// use cnr::Dispatch;
+    /// use cnr::Log;
+    /// use cnr::LogMapper;
+    /// use cnr::Replica;
     ///
     /// use core::sync::atomic::{AtomicUsize, Ordering};
     /// use std::sync::Arc;
@@ -361,10 +361,10 @@ where
     /// # Example
     ///
     /// ```
-    /// use mlnr::Dispatch;
-    /// use mlnr::Log;
-    /// use mlnr::LogMapper;
-    /// use mlnr::Replica;
+    /// use cnr::Dispatch;
+    /// use cnr::Log;
+    /// use cnr::LogMapper;
+    /// use cnr::Replica;
     ///
     /// use core::sync::atomic::{AtomicUsize, Ordering};
     /// use std::sync::Arc;
@@ -439,10 +439,10 @@ where
     /// # Example
     ///
     /// ```
-    /// use mlnr::Dispatch;
-    /// use mlnr::Log;
-    /// use mlnr::LogMapper;
-    /// use mlnr::Replica;
+    /// use cnr::Dispatch;
+    /// use cnr::Log;
+    /// use cnr::LogMapper;
+    /// use cnr::Replica;
     ///
     /// use core::sync::atomic::{AtomicUsize, Ordering};
     /// use std::sync::Arc;
