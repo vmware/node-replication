@@ -3,7 +3,7 @@ name: Compile and Test CNR
 on:
   push:
     paths:
-      - node-replication-cnr/**
+      - cnr/**
       - benches/**
 
 jobs:
@@ -31,10 +31,10 @@ jobs:
     - uses: actions/checkout@v1
     - name: Build
       run: cargo build --release --verbose
-      working-directory: ./node-replication-cnr
+      working-directory: ./cnr
     - name: Try to compile tests
       run: cargo test --release --no-run --verbose
-      working-directory: ./node-replication-cnr
+      working-directory: ./cnr
     - name: Try to compile benchmarks
       run: |
         cargo bench --bench nrfs --features="c_nr" --no-run --verbose
@@ -42,4 +42,4 @@ jobs:
       working-directory: ./benches
     - name: Try stack example
       run: RUST_BACKTRACE=1 RUST_LOG='trace' cargo run --release --example stack -- -t1,2 --nop 100000 -l 1 -m sequential
-      working-directory: ./node-replication-cnr
+      working-directory: ./cnr

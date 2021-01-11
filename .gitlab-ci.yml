@@ -9,17 +9,17 @@ build:
     # Dependency for node-replication
     - sudo apt install libhwloc-dev gnuplot libfuse-dev liburcu-dev liburcu6 pkg-config --yes
     - cd benches; cargo build; cd ..
-    - cd node-replication-cnr; cargo build; cd ..
-    - cd node-replication-nr; cargo build; cd ..
+    - cd cnr; cargo build; cd ..
+    - cd nr; cargo build; cd ..
 
 test:
   stage: test
   script:
     - cd benches; cargo +nightly fmt -- --check; cd ..
-    - cd node-replication-cnr; cargo +nightly fmt -- --check; cd ..
-    - cd node-replication-nr; cargo +nightly fmt -- --check; cd ..
-    - cd node-replication-cnr; timeout 1h cargo test; cd ..
-    - cd node-replication-nr; timeout 1h cargo test; cd ..
+    - cd cnr; cargo +nightly fmt -- --check; cd ..
+    - cd nr; cargo +nightly fmt -- --check; cd ..
+    - cd cnr; timeout 1h cargo test; cd ..
+    - cd nr; timeout 1h cargo test; cd ..
     - cd benches; cargo bench --no-run; cd ..
   dependencies:
     - build

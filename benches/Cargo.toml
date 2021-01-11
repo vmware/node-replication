@@ -101,8 +101,8 @@ rand_xorshift = "0.2.0"
 crossbeam-utils = { version = "0.6", default-features = false }
 arr_macro = "0.1.2"
 static_assertions = "1.1.0"
-node-replication = { path = "../node-replication-nr" }
-cnr = { path = "../node-replication-cnr" }
+node-replication = { path = "../nr" }
+cnr = { path = "../cnr" }
 
 [features]
 smokebench = []
