@@ -76,7 +76,7 @@ debug = true
 
 [dependencies]
 log = "0.4"
-hwloc = "0.5"
+hwloc2 = "2.2"
 env_logger = "0.7"
 num_cpus = "1.12"
 x86 = "0.34.0"
