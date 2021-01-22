@@ -83,7 +83,7 @@ pub trait ReplicaTrait {
 
     fn sync_me(&self, idx: ReplicaToken);
 
-    fn sync_log(&self, idx: ReplicaToken, logid: usize);
+    fn log_sync(&self, idx: ReplicaToken, logid: usize);
 
     fn exec(
         &self,
@@ -112,7 +112,8 @@ impl<'a, T: Dispatch + Sync + Default> ReplicaTrait for Replica<'a, T> {
         self.sync(idx);
     }
 
-    fn sync_log(&self, idx: ReplicaToken, logid: usize) {
+    fn log_sync(&self, idx: ReplicaToken, logid: usize) {
+        #[cfg(feature = "c_nr")]
         self.sync_log(idx, logid);
     }
 
@@ -759,7 +760,7 @@ where
                             let log_id = stuck[rid].load(Ordering::Relaxed);
                             if log_id != 0 {
                                 stuck[rid].compare_and_swap(log_id, 0, Ordering::Release);
-                                replica.sync_log(replica_token, log_id);
+                                replica.log_sync(replica_token, log_id);
                             }
                         }
 
@@ -806,7 +807,7 @@ where
                                 }
 
                                 for i in 1..(nlogs + 1) {
-                                    replica.sync_log(replica_token, i);
+                                    replica.log_sync(replica_token, i);
                                 }
                             }
                         }

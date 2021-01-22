@@ -317,6 +317,7 @@ fn synthetic_scale_out(c: &mut TestHarness) {
 
     mkbench::ScaleBenchBuilder::<Replica<AbstractDataStructure>>::new(ops)
         .machine_defaults()
+        .log_strategy(mkbench::LogStrategy::One)
         .configure(
             c,
             "synthetic-scaleout",

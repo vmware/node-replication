@@ -242,6 +242,7 @@ where
         .replica_strategy(mkbench::ReplicaStrategy::One)
         .replica_strategy(mkbench::ReplicaStrategy::Socket)
         .thread_mapping(ThreadMapping::Interleave)
+        .log_strategy(mkbench::LogStrategy::One)
         .configure(
             c,
             &bench_name,
@@ -265,6 +266,7 @@ fn partitioned_hashmap_scale_out(c: &mut TestHarness, name: &str, write_ratio: u
         .thread_defaults()
         .replica_strategy(mkbench::ReplicaStrategy::PerThread)
         .thread_mapping(ThreadMapping::Interleave)
+        .log_strategy(mkbench::LogStrategy::One)
         .update_batch(128)
         .configure(
             c,
@@ -296,6 +298,7 @@ where
         .replica_strategy(mkbench::ReplicaStrategy::One) // Can only be One
         .update_batch(128)
         .thread_mapping(ThreadMapping::Interleave)
+        .log_strategy(mkbench::LogStrategy::One)
         .configure(
             c,
             &bench_name,

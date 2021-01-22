@@ -13,7 +13,7 @@ use std::sync;
 use std::thread;
 use std::time;
 
-use node_replication::{Dispatch, Log, LogMapper, Replica, ReplicaToken};
+use cnr::{Dispatch, Log, LogMapper, Replica, ReplicaToken};
 
 mod utils;
 use utils::{pin_thread, topology::*};
@@ -90,9 +90,10 @@ fn main() {
     if versions.contains(&"nr") {
         const LOG_SIZE_BYTES: usize = 1024 * 1024 * 2;
         let mut logs = Vec::with_capacity(writers);
-        for _i in 0..writers {
+        for i in 0..writers {
             let log = sync::Arc::new(Log::<<NrHashMap as Dispatch>::WriteOperation>::new(
                 LOG_SIZE_BYTES,
+                i + 1,
             ));
             logs.push(log);
         }

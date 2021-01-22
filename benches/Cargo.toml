@@ -18,15 +18,15 @@ path = "nrfs.rs"
 required-features = ["c_nr"]
 
 [[bench]]
-name = "hashbench"
-harness = false
-path = "hashbench.rs"
-required-features = ["nr"]
-
-[[bench]]
 name = "chashbench"
 harness = false
 path = "chashbench.rs"
+required-features = ["c_nr"]
+
+[[bench]]
+name = "hashbench"
+harness = false
+path = "hashbench.rs"
 required-features = ["nr"]
 
 [[bench]]

@@ -58,7 +58,7 @@ where
         /* NOP */
     }
 
-    fn sync_log(&self, _idx: ReplicaToken, _logid: usize) {
+    fn log_sync(&self, _idx: ReplicaToken, _logid: usize) {
         /* NOP */
     }
 

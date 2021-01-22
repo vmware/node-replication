@@ -119,6 +119,7 @@ fn stack_scale_out(c: &mut TestHarness) {
 
     mkbench::ScaleBenchBuilder::<Replica<Stack>>::new(ops)
         .machine_defaults()
+        .log_strategy(mkbench::LogStrategy::One)
         .configure(
             c,
             "stack-scaleout",
