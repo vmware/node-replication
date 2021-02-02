@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use crossbeam::epoch;
 use crossbeam::queue::SegQueue;
-use crossbeam_skiplist::SkipList;
+use crossbeam_skiplist::SkipMap;
 
 use cnr::{Dispatch, Log, LogMapper, ReplicaToken};
 
@@ -88,7 +88,7 @@ where
     }
 }
 
-pub struct SkipListWrapper(SkipList<u64, u64>);
+pub struct SkipListWrapper(SkipMap<u64, u64>);
 
 impl Default for SkipListWrapper {
     fn default() -> Self {
@@ -98,13 +98,10 @@ impl Default for SkipListWrapper {
         let guard = &epoch::pin();
         let mut rng = XorShiftRng::from_entropy();
 
-        let storage = SkipList::new(epoch::default_collector().clone());
-        //log::error!("start init");
+        let storage = SkipMap::new();
         for i in 0..INITIAL_CAPACITY {
-            //storage.insert(rng.next_u64() % (192 * 25_000_000), i as u64, guard);
-            storage.insert(i as u64, i as u64, guard);
+            storage.insert(i as u64, i as u64);
         }
-        //log::error!("done init");
         SkipListWrapper(storage)
     }
 }
@@ -116,7 +113,7 @@ impl Dispatch for SkipListWrapper {
 
     fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
         match op {
-            SkipListConcurrent::Get(key) => Ok(self.0.get(&key, &epoch::pin()).map(|e| *e.value())),
+            SkipListConcurrent::Get(key) => Ok(self.0.get(&key).map(|e| *e.value())),
         }
     }
 
@@ -124,7 +121,7 @@ impl Dispatch for SkipListWrapper {
     fn dispatch_mut(&self, op: Self::WriteOperation) -> Self::Response {
         match op {
             OpWr::Push(key, val) => {
-                self.0.insert(key, val, &epoch::pin());
+                self.0.insert(key, val);
                 Ok(Some(key))
             }
         }
