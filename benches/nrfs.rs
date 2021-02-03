@@ -130,9 +130,9 @@ fn generate_nrfs_ops(write_ratio: usize) -> Vec<Operation<OpRd, OpWr>> {
 }
 
 fn nrfs_scale_out(c: &mut TestHarness, num_cpus: usize, write_ratio: usize) {
-    let bench_name = format!("nrfs-scaleout-wr{}", write_ratio);
     let ops = generate_nrfs_ops(write_ratio);
     let logs = num_cpus;
+    let bench_name = format!("nrfs-mlnr{}-scaleout-wr{}", logs, write_ratio);
 
     mkbench::ScaleBenchBuilder::<Replica<NrFilesystem>>::new(ops)
         .thread_defaults()

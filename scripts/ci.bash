@@ -32,7 +32,7 @@ git clone --depth 1 -b master git@github.com:gz/nr-benchmarks.git gh-pages
 pip3 install -r gh-pages/requirements.txt
 
 # Copy scalebench
-python3 scripts/scale_bench_plot.py scaleout_benchmarks.csv
+python3 gh-pages/scale_bench_plot.py scaleout_benchmarks.csv
 
 # Get revision
 export GIT_REV_CURRENT=`git rev-parse --short HEAD`
@@ -44,10 +44,12 @@ rm -rf ${SCALEBENCH_DEPLOY}
 mkdir -p ${SCALEBENCH_DEPLOY}
 mv baseline_comparison.csv ${SCALEBENCH_DEPLOY}
 mv scaleout_benchmarks.csv ${SCALEBENCH_DEPLOY}
+mv scaleout_benchmarks_cnr.csv ${SCALEBENCH_DEPLOY}
 mv per_thread_times.* ${SCALEBENCH_DEPLOY}
 mv throughput-*-*.* ${SCALEBENCH_DEPLOY}
 gzip ${SCALEBENCH_DEPLOY}/baseline_comparison.csv
 gzip ${SCALEBENCH_DEPLOY}/scaleout_benchmarks.csv
+gzip ${SCALEBENCH_DEPLOY}/scaleout_benchmarks_cnr.csv
 
 # Copy hashbench results
 HASHBENCH_DEPLOY="gh-pages/hashbench/${CI_MACHINE_TYPE}/${GIT_REV_CURRENT}"
