@@ -25,6 +25,8 @@ timeout 1.5h bash rwlockbench_run.sh
 # Move results to root repo.
 cd ..
 mv benches/*.csv .
+mv benches/*.log .
+mv benches/*.png .
 
 # Check that we can checkout gh-pages early:
 rm -rf gh-pages
