@@ -14,7 +14,7 @@ struct NrHashMap {
 }
 
 /// We support mutable put operation on the hashmap.
-#[derive(Hash, Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 enum Modify {
     Put(u64, u64),
 }
@@ -26,7 +26,7 @@ impl LogMapper for Modify {
 }
 
 /// We support an immutable read operation to lookup a key from the hashmap.
-#[derive(Hash, Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 enum Access {
     Get(u64),
 }

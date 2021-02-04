@@ -262,6 +262,29 @@ where
     /// The application calls this function to update the callback function.
     /// The application does not need to call this function if it knows that all
     /// the replicas are active for this log and no replica will lag behind.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use cnr::Log;
+    ///
+    /// // Operation type that will go onto the log.
+    /// #[derive(Clone)]
+    /// enum Operation {
+    ///     Read,
+    ///     Write(u64),
+    ///     Invalid,
+    /// }
+    ///
+    /// // Creates a 1 Mega Byte sized log.
+    /// let mut l = Log::<Operation>::new(1 * 1024 * 1024, 1);
+    ///
+    /// // Update the callback function for the log.
+    /// let callback_func = &|idx: usize, rid: usize| {
+    ///     // Take action on log `idx` and replica `rid`.
+    /// };
+    /// l.update_closure(callback_func)
+    /// ```
     pub fn update_closure(&mut self, gc: &dyn FnMut(usize, usize)) {
         unsafe { *self.gc.get() = core::mem::transmute(gc) };
     }

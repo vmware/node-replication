@@ -17,13 +17,13 @@ use node_replication::Replica;
 
 use rand::{thread_rng, Rng};
 
-#[derive(Hash, Eq, PartialEq, Clone, Copy, Debug)]
+#[derive(Eq, PartialEq, Clone, Copy, Debug)]
 enum OpWr {
     Push(u32),
     Pop,
 }
 
-#[derive(Hash, Eq, PartialEq, Clone, Copy, Debug)]
+#[derive(Eq, PartialEq, Clone, Copy, Debug)]
 enum OpRd {
     Peek,
 }

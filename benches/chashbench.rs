@@ -171,7 +171,7 @@ fn drive<B: Backend>(
 }
 
 /// Operations we can perform on the stack.
-#[derive(Hash, Debug, Eq, PartialEq, Clone, Copy)]
+#[derive(Debug, Eq, PartialEq, Clone, Copy)]
 pub enum OpWr {
     /// Add an item to the hash-map.
     Put(u64, u64),
@@ -185,7 +185,7 @@ impl LogMapper for OpWr {
     }
 }
 
-#[derive(Hash, Debug, Eq, PartialEq, Clone, Copy)]
+#[derive(Debug, Eq, PartialEq, Clone, Copy)]
 pub enum OpRd {
     /// Get item from the hash-map.
     Get(u64),

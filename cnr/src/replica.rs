@@ -57,11 +57,11 @@ const_assert!(
     MAX_THREADS_PER_REPLICA >= 1 && (MAX_THREADS_PER_REPLICA & (MAX_THREADS_PER_REPLICA - 1) == 0)
 );
 
-/// An instance of a replicated data structure. Uses a shared log to scale
-/// operations on the data structure across cores and processors.
+/// An instance of a replicated data structure. Uses one or more shared logs
+/// to scale operations on the data structure across cores and processors.
 ///
 /// Takes in one type argument: `D` represents the underlying concurrent data
-/// structure `D` must implement the `Dispatch` trait.
+/// structure. `D` must implement the `Dispatch` trait.
 ///
 /// A thread can be registered against the replica by calling `register()`. A
 /// mutable operation can be issued by calling `execute_mut()` (immutable uses
@@ -159,17 +159,19 @@ where
     ///     junk: AtomicUsize,
     /// }
     ///
-    /// #[derive(Hash, Debug, Eq, PartialEq, Clone, Copy)]
+    /// #[derive(Debug, Eq, PartialEq, Clone, Copy)]
     /// pub struct OpWr(pub usize);
     ///
     /// impl LogMapper for OpWr {
+    ///     // Only one log used for the example, hence returning 0.
     ///     fn hash(&self) -> usize { 0 }
     /// }
     ///
-    /// #[derive(Hash, Debug, Eq, PartialEq, Clone, Copy)]
+    /// #[derive(Debug, Eq, PartialEq, Clone, Copy)]
     /// pub struct OpRd(());
     ///
     /// impl LogMapper for OpRd {
+    ///     // Only one log used for the example, hence returning 0.
     ///     fn hash(&self) -> usize { 0 }
     /// }
     ///
@@ -296,17 +298,19 @@ where
     ///     junk: AtomicUsize,
     /// }
     ///
-    /// #[derive(Hash, Debug, Eq, PartialEq, Clone, Copy)]
+    /// #[derive(Debug, Eq, PartialEq, Clone, Copy)]
     /// pub struct OpWr(pub usize);
     ///
     /// impl LogMapper for OpWr {
+    ///     // Only one log used for the example, hence returning 0.
     ///     fn hash(&self) -> usize { 0 }
     /// }
     ///
-    /// #[derive(Hash, Debug, Eq, PartialEq, Clone, Copy)]
+    /// #[derive(Debug, Eq, PartialEq, Clone, Copy)]
     /// pub struct OpRd(());
     ///
     /// impl LogMapper for OpRd {
+    ///     // Only one log used for the example, hence returning 0.
     ///     fn hash(&self) -> usize { 0 }
     /// }
     ///
@@ -374,17 +378,19 @@ where
     ///     junk: AtomicUsize,
     /// }
     ///
-    /// #[derive(Hash, Debug, Eq, PartialEq, Clone, Copy)]
+    /// #[derive(Debug, Eq, PartialEq, Clone, Copy)]
     /// pub struct OpWr(pub usize);
     ///
     /// impl LogMapper for OpWr {
+    ///     // Only one log used for the example, hence returning 0.
     ///     fn hash(&self) -> usize { 0 }
     /// }
     ///
-    /// #[derive(Hash, Debug, Eq, PartialEq, Clone, Copy)]
+    /// #[derive(Debug, Eq, PartialEq, Clone, Copy)]
     /// pub struct OpRd(());
     ///
     /// impl LogMapper for OpRd {
+    ///     // Only one log used for the example, hence returning 0.
     ///     fn hash(&self) -> usize { 0 }
     /// }
     ///
@@ -452,17 +458,19 @@ where
     ///     junk: AtomicUsize,
     /// }
     ///
-    /// #[derive(Hash, Debug, Eq, PartialEq, Clone, Copy)]
+    /// #[derive(Debug, Eq, PartialEq, Clone, Copy)]
     /// pub struct OpWr(pub usize);
     ///
     /// impl LogMapper for OpWr {
+    ///     // Only one log used for the example, hence returning 0.
     ///     fn hash(&self) -> usize { 0 }
     /// }
     ///
-    /// #[derive(Hash, Debug, Eq, PartialEq, Clone, Copy)]
+    /// #[derive(Debug, Eq, PartialEq, Clone, Copy)]
     /// pub struct OpRd(());
     ///
     /// impl LogMapper for OpRd {
+    ///     // Only one log used for the example, hence returning 0.
     ///     fn hash(&self) -> usize { 0 }
     /// }
     ///
@@ -719,7 +727,7 @@ mod test {
         junk: AtomicUsize,
     }
 
-    #[derive(Hash, Debug, Eq, PartialEq, Clone, Copy)]
+    #[derive(Debug, Eq, PartialEq, Clone, Copy)]
     pub struct OpWr(usize);
 
     impl LogMapper for OpWr {
@@ -728,7 +736,7 @@ mod test {
         }
     }
 
-    #[derive(Hash, Debug, Eq, PartialEq, Clone, Copy)]
+    #[derive(Debug, Eq, PartialEq, Clone, Copy)]
     pub struct OpRd(usize);
 
     impl LogMapper for OpRd {

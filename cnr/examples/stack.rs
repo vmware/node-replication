@@ -8,7 +8,7 @@ use std::sync::Arc;
 use cnr::{Dispatch, Log, LogMapper, Replica};
 
 /// We support mutable push and pop operations on the stack.
-#[derive(Hash, Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 enum Modify {
     Push(u32),
     Pop,
@@ -21,7 +21,7 @@ impl LogMapper for Modify {
 }
 
 /// We support an immutable read operation to peek the stack.
-#[derive(Hash, Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 enum Access {
     Peek,
 }

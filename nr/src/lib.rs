@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Node Replication (NR) is a library which can be used to implement a
-//! concurrent version of any single threaded data structure: It takes in a
+//! concurrent version of any single threaded data structure. It takes in a
 //! single threaded implementation of said data structure, and scales it out to
 //! multiple cores and NUMA nodes by combining three techniques: reader-writer
 //! locks, operation logging and flat combining.
@@ -11,7 +11,8 @@
 //! To replicate a single-threaded data structure, one needs to implement the
 //! [Dispatch](trait.Dispatch.html) trait for it. The following snippet
 //! implements [Dispatch](trait.Dispatch.html) for
-//! [HashMap](std::collections::HashMap) as an example. A complete example
+//! [HashMap](https://doc.rust-lang.org/std/collections/struct.HashMap.html)
+//! as an example. A complete example
 //! (using [Replica](struct.Replica.html) and [Log](struct.Log.html)) can be found in the
 //! [examples](https://github.com/vmware/node-replication/tree/master/examples/hashmap.rs)
 //! folder.
