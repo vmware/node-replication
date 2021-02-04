@@ -132,7 +132,12 @@ where
     /// track log wrap-arounds for each of them separately.
     lmasks: [CachePadded<Cell<bool>>; MAX_REPLICAS],
 
-    /// Callback function
+    /// The application can provide a callback function to the log. The function is invoked
+    /// when one or more replicas lag and stop the log to garbage collected the entries.
+    /// One example of a callback function is to notify the application with a lagging
+    /// replica number for this log. The application can then take action to start the log
+    /// consumption on that replica. If the application is proactively taking measures to
+    /// consume the log on all the replicas, then the variable can be initialized to default.
     gc: UnsafeCell<*const dyn FnMut(usize, usize)>,
 }
 
@@ -254,33 +259,15 @@ where
         size_of::<Cell<Entry<T>>>()
     }
 
+    /// The application calls this function to update the callback function.
+    /// The application does not need to call this function if it knows that all
+    /// the replicas are active for this log and no replica will lag behind.
     pub fn update_closure(&mut self, gc: &dyn FnMut(usize, usize)) {
         unsafe { *self.gc.get() = core::mem::transmute(gc) };
     }
 
     /// Registers a replica with the log. Returns an identifier that the replica
     /// can use to execute operations on the log.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// use cnr::Log;
-    ///
-    /// // Operation type that will go onto the log.
-    /// #[derive(Clone)]
-    /// enum Operation {
-    ///    Read,
-    ///    Write(u64),
-    ///    Invalid,
-    /// }
-    ///
-    /// // Creates a 1 Mega Byte sized log.
-    /// let l = Log::<Operation>::new(1 * 1024 * 1024, 1);
-    ///
-    /// // Registers against the log. `idx` can now be used to append operations
-    /// // to the log, and execute these operations.
-    /// let idx = l.register().expect("Failed to register with the Log.");
-    /// ```
     pub(crate) fn register(&self) -> Option<usize> {
         // Loop until we either run out of identifiers or we manage to increment `next`.
         loop {
@@ -301,51 +288,9 @@ where
 
     /// Adds a batch of operations to the shared log.
     ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// use cnr::Log;
-    ///
-    /// // Operation type that will go onto the log.
-    /// #[derive(Clone)]
-    /// enum Operation {
-    ///     Read,
-    ///     Write(u64),
-    /// }
-    ///
-    /// let l = Log::<Operation>::new(1 * 1024 * 1024, 1);
-    /// let idx = l.register().expect("Failed to register with the Log.");
-    ///
-    /// // The set of operations we would like to append. The order will
-    /// // be preserved by the interface.
-    /// let ops = [Operation::Write(100), Operation::Read];
-    ///
-    /// // `append()` might have to garbage collect the log. When doing so,
-    /// // it might encounter operations added in by another replica/thread.
-    /// // This closure allows us to consume those operations. `id` identifies
-    /// // the replica that added in those operations.
-    /// let f = |op: Operation, id: usize| {
-    ///     match(op) {
-    ///         Operation::Read => println!("Read by {}", id),
-    ///         Operation::Write(x) => println!("Write({}) by {}", x, id),
-    ///     }
-    /// };
-    ///
-    /// // Append the operations. These operations will be marked with `idx`,
-    /// // and will be linearized at the tail of the log.
-    /// l.append(&ops, idx, f);
-    /// ```
-    ///
-    /// If there isn't enough space to perform the append, this method busy
-    /// waits until the head is advanced. Accepts a replica `idx`; all appended
-    /// operations/entries will be marked with this replica-identifier. Also
-    /// accepts a closure `s`; when waiting for GC, this closure is passed into
-    /// exec() to ensure that this replica does'nt cause a deadlock.
-    ///
     /// # Note
-    /// Documentation for this function is hidden since `append` is currently not
-    /// intended as a public interface. It is marked as public due to being
-    /// used by the benchmarking code.
+    /// `append` is not intended as a public interface. It is marked
+    /// as public due to being used by the benchmarking code.
     #[inline(always)]
     #[doc(hidden)]
     pub fn append<F: FnMut(T, usize)>(&self, ops: &[T], idx: usize, mut s: F) {
@@ -435,43 +380,6 @@ where
     /// Executes a passed in closure (`d`) on all operations starting from
     /// a replica's local tail on the shared log. The replica is identified through an
     /// `idx` passed in as an argument.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// use cnr::Log;
-    ///
-    /// // Operation type that will go onto the log.
-    /// #[derive(Clone)]
-    /// enum Operation {
-    ///     Read,
-    ///     Write(u64),
-    /// }
-    ///
-    /// let l = Log::<Operation>::new(1 * 1024 * 1024, 1);
-    /// let idx = l.register().expect("Failed to register with the Log.");
-    /// let ops = [Operation::Write(100), Operation::Read];
-    ///
-    /// let f = |op: Operation, id: usize| {
-    ///     match(op) {
-    ///         Operation::Read => println!("Read by {}", id),
-    ///         Operation::Write(x) => println!("Write({}) by {}", x, id),
-    ///     }
-    /// };
-    /// l.append(&ops, idx, f);
-    ///
-    /// // This closure is executed on every operation appended to the
-    /// // since the last call to `exec()` by this replica/thread.
-    /// let mut d = 0;
-    /// let mut g = |op: Operation, id: usize| {
-    ///     match(op) {
-    ///         // The write happened before the read.
-    ///         Operation::Read => assert_eq!(100, d),
-    ///         Operation::Write(x) => d += 100,
-    ///     }
-    /// };
-    /// l.exec(idx, &mut g);
-    /// ```
     ///
     /// The passed in closure is expected to take in two arguments: The operation
     /// from the shared log to be executed and the replica that issued it.
@@ -625,60 +533,6 @@ where
     /// This method checks if the replica is in sync to execute a read-only operation
     /// right away. It does so by comparing the replica's local tail with the log's
     /// completed tail.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// use cnr::Log;
-    ///
-    /// // Operation type that will go onto the log.
-    /// #[derive(Clone)]
-    /// enum Operation {
-    ///     Read,
-    ///     Write(u64),
-    /// }
-    ///
-    /// // We register two replicas here, `idx1` and `idx2`.
-    /// let l = Log::<Operation>::new(1 * 1024 * 1024, 1);
-    /// let idx1 = l.register().expect("Failed to register with the Log.");
-    /// let idx2 = l.register().expect("Failed to register with the Log.");
-    /// let ops = [Operation::Write(100), Operation::Read];
-    ///
-    /// let f = |op: Operation, id: usize| {
-    ///     match(op) {
-    ///         Operation::Read => println!("Read by {}", id),
-    ///         Operation::Write(x) => println!("Write({}) by {}", x, id),
-    ///     }
-    /// };
-    /// l.append(&ops, idx2, f);
-    ///
-    /// let mut d = 0;
-    /// let mut g = |op: Operation, id: usize| {
-    ///     match(op) {
-    ///         // The write happened before the read.
-    ///         Operation::Read => assert_eq!(100, d),
-    ///         Operation::Write(x) => d += 100,
-    ///     }
-    /// };
-    /// l.exec(idx2, &mut g);
-    ///
-    /// // This assertion fails because `idx1` has not executed operations
-    /// // that were appended by `idx2`.
-    /// assert_eq!(false, l.is_replica_synced_for_reads(idx1, l.get_ctail()));
-    ///
-    /// let mut e = 0;
-    /// let mut g = |op: Operation, id: usize| {
-    ///     match(op) {
-    ///         // The write happened before the read.
-    ///         Operation::Read => assert_eq!(100, e),
-    ///         Operation::Write(x) => e += 100,
-    ///     }
-    /// };
-    /// l.exec(idx1, &mut g);
-    ///
-    /// // `idx1` is all synced up, so this assertion passes.
-    /// assert_eq!(true, l.is_replica_synced_for_reads(idx1, l.get_ctail()));
-    /// ```
     #[inline(always)]
     pub(crate) fn is_replica_synced_for_reads(&self, idx: usize, ctail: usize) -> bool {
         self.ltails[idx - 1].load(Ordering::Relaxed) >= ctail

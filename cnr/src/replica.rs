@@ -60,7 +60,7 @@ const_assert!(
 /// An instance of a replicated data structure. Uses a shared log to scale
 /// operations on the data structure across cores and processors.
 ///
-/// Takes in one type argument: `D` represents the underlying sequential data
+/// Takes in one type argument: `D` represents the underlying concurrent data
 /// structure `D` must implement the `Dispatch` trait.
 ///
 /// A thread can be registered against the replica by calling `register()`. A
@@ -75,25 +75,25 @@ where
     /// Idx that will be handed out to the next thread that registers with the replica.
     next: CachePadded<AtomicUsize>,
 
-    /// Reference to the shared log that operations will be appended to and the
+    /// References to the shared logs that operations will be appended to and the
     /// data structure will be updated from.
     slog: Vec<Arc<Log<'a, <D as Dispatch>::WriteOperation>>>,
 
     /// The underlying replicated data structure. Shared between threads registered
-    /// with this replica. Each replica maintains its own.
-    // TODO(nr2): Don't need RwLock anymore
+    /// with this replica. Each replica maintains its own copy of the data structure.
     data: CachePadded<D>,
 
-    //
-    // Per-"ReplicaFlatCombiner":
-    //
-    /// A replica-identifier received when the replica is registered against
-    /// the shared-log. Required when consuming operations from the log.
+    /// TODO: Merge all the following variables in single structure.
+
+    /// A replica receives a replica-identifier when it registers against
+    /// a log. Each replica registers itself against all the shared logs.
+    /// It is required when consuming operations from the log.
     idx: Vec<usize>,
 
     /// Thread idx of the thread currently responsible for flat combining. Zero
     /// if there isn't any thread actively performing flat combining on the log.
-    /// This also doubles up as the combiner lock.
+    /// This also doubles up as the combiner lock. The replica matains combiner lock
+    /// per log.
     combiners: Vec<CachePadded<AtomicUsize>>,
 
     /// List of per-thread contexts. Threads buffer write operations in here when they
@@ -139,7 +139,7 @@ where
 {
     /// Constructs an instance of a replicated data structure.
     ///
-    /// Takes a reference to the shared log as an argument. The Log is assumed to
+    /// Takes references to all the shared logs as an argument. The Logs are assumed to
     /// outlive the replica. The replica is bound to the log's lifetime.
     ///
     /// # Example
@@ -197,7 +197,7 @@ where
     ///     }
     /// }
     ///
-    /// // First create a shared log.
+    /// // Create one or more logs.
     /// let log = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
     ///
     /// // Create a replica that uses the above log.
@@ -568,6 +568,9 @@ where
         }
     }
 
+    /// This method is useful to when a replica stops consuming a particular
+    /// log and some other replica is still using this a log.
+    ///
     /// No need to run in a loop because the replica will
     /// be synced for log_id if there is an active combiner.
     pub fn sync_log(&self, idx: ReplicaToken, log_id: usize) {
@@ -581,6 +584,7 @@ where
         op: <D as Dispatch>::ReadOperation,
         tid: usize,
     ) -> <D as Dispatch>::Response {
+        // Calculate the hash of the operation to map the operation to a log.
         let hash_idx = op.hash() % self.slog.len();
 
         // We can perform the read only if our replica is synced up against

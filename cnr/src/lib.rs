@@ -1,49 +1,72 @@
 // Copyright © 2019-2020 VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! Node Replication (NR) is a library which can be used to implement a
-//! concurrent version of any single threaded data structure: It takes in a
-//! single threaded implementation of said data structure, and scales it out to
-//! multiple cores and NUMA nodes by combining three techniques: reader-writer
-//! locks, operation logging and flat combining.
+//! Concurrent Node Replication (CNR) is a library which can be used to implement a
+//! NUMA-aware version of any concurrent data structure: It takes in a
+//! concurrent implementation of said data structure, and scales it out to
+//! multiple cores and NUMA nodes by combining two techniques:
+//! operation logging and flat combining.
 //!
 //! # How does it work
-//! To replicate a single-threaded data structure, one needs to implement the
+//! To replicate a concurrent data structure, one needs to implement the
 //! [Dispatch](trait.Dispatch.html) trait for it. The following snippet
-//! implements [Dispatch](trait.Dispatch.html) for
-//! [HashMap](std::collections::HashMap) as an example. A complete example
-//! (using [Replica](struct.Replica.html) and [Log](struct.Log.html)) can be found in the
-//! [examples](https://github.com/vmware/node-replication/tree/master/examples/hashmap.rs)
+//! implements [Dispatch](trait.Dispatch.html) for [HashMap](chashmap::CHashMap)
+//! as an example. A complete example (using [Replica](struct.Replica.html)
+//! and [Log](struct.Log.html)) can be found in the
+//! [examples](https://github.com/vmware/node-replication/tree/master/cnr/examples/hashmap.rs)
 //! folder.
 //!
-//! ```ignore
-//! use node_replication::Dispatch;
-//! use std::collections::HashMap;
+//! ```
+//! use cnr::Dispatch;
+//! use cnr::LogMapper;
+//! use chashmap::CHashMap;
 //!
-//! /// The node-replicated hashmap uses a std hashmap internally.
-//! pub struct NrHashMap {
-//!    storage: HashMap<u64, u64>,
+//! /// The replicated hashmap uses a concurrent hashmap internally.
+//! pub struct CNRHashMap {
+//!    storage: CHashMap<usize, usize>,
 //! }
 //!
 //! /// We support a mutable put operation on the hashmap.
 //! #[derive(Hash, Debug, PartialEq, Clone)]
 //! pub enum Modify {
-//!    Put(u64, u64),
+//!    Put(usize, usize),
+//! }
+//!
+//! /// Application developer implements LogMapper for each mutable operation. It
+//! /// is used to map the operation to one of the many log. Commutative operations
+//! /// can go to same or different log and conflicts operations must map to same log.
+//! impl LogMapper for Modify {
+//!    fn hash(&self) -> usize {
+//!       match self {
+//!          Modify::Put(key, _val) => *key
+//!       }
+//!    }
 //! }
 //!
 //! /// We support an immutable read operation to lookup a key from the hashmap.
 //! #[derive(Hash, Debug, PartialEq, Clone)]
 //! pub enum Access {
-//!    Get(u64),
+//!    Get(usize),
+//! }
+//!
+//! /// Application developer implements LogMapper for each immutable operation. It
+//! /// is used to map the operation to one of the many log. Commutative operations
+//! /// can go to same or different log and conflicts operations must map to same log.
+//! impl LogMapper for Access {
+//!    fn hash(&self) -> usize {
+//!       match self {
+//!          Access::Get(key) => *key as usize
+//!       }
+//!    }
 //! }
 //!
 //! /// The Dispatch traits executes `ReadOperation` (our Access enum)
 //! /// and `WriteOperation` (our Modify enum) against the replicated
 //! /// data-structure.
-//! impl Dispatch for NrHashMap {
+//! impl Dispatch for CNRHashMap {
 //!    type ReadOperation = Access;
 //!    type WriteOperation = Modify;
-//!    type Response = Option<u64>;
+//!    type Response = Option<usize>;
 //!
 //!    /// The `dispatch` function applies the immutable operations.
 //!    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
@@ -54,7 +77,7 @@
 //!
 //!    /// The `dispatch_mut` function applies the mutable operations.
 //!    fn dispatch_mut(
-//!        &mut self,
+//!        &self,
 //!        op: Self::WriteOperation,
 //!    ) -> Self::Response {
 //!        match op {
@@ -92,6 +115,15 @@ pub use replica::{Replica, ReplicaToken, MAX_THREADS_PER_REPLICA};
 
 use core::fmt::Debug;
 
+/// Every data structure must implment this trait for ReadOperation and WriteOperation.
+///
+/// Data structure provided `hash` is used to map each operation to a log.
+/// All the conflicting operations must map to a single log and the commutative
+/// operations can map to same or different logs based on the operation argument.
+///
+/// [Replica](struct.Replica.html) internally performs a modulo operation on `hash`
+/// return value with the total number of logs. The data structure can implement
+/// trait to return a value between 0 and (#logs-1) to avoid the modulo operation.
 pub trait LogMapper {
     fn hash(&self) -> usize;
 }
