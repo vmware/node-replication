@@ -1,7 +1,7 @@
 # Benchmarks
 
 This folder contains a few different benchmarks to evaluate the performance of
-the library. They are described in more detail in the following subsections.
+both [node-replication](../nr) and [cnr](../cnr) library. They are described in more detail in the following subsections. Use feature flag to distinguish between node-replication (`--features nr`) and cnr (`--features cnr`) benchmarks.
 
 Please ensure to always set `RUST_TEST_THREADS=1` in your environment for
 benchmarking since the scale-out benchmarks will spawn multiple threads
@@ -56,7 +56,7 @@ log. This gives you the maximum of operations that are theoretically possible
 (if we are ignoring the overhead of synchronization within a replica).
 
 To run these benchmarks execute:
-`RUST_TEST_THREADS=1 cargo bench --bench log`
+`RUST_TEST_THREADS=1 cargo bench --bench log --features nr`
 
 ## Stack [[benchmark](stack.rs)]
 
@@ -66,7 +66,7 @@ log/replica), and a benchmark that evaluates the scalability of the stack by
 running with increasing amounts of threads.
 
 To run these benchmarks execute:
-`RUST_TEST_THREADS=1 cargo bench --bench stack`
+`RUST_TEST_THREADS=1 cargo bench --bench stack --features nr`
 
 ## Hash-map [[benchmark](hashmap.rs)]
 
@@ -76,7 +76,7 @@ a log/replica), and a benchmark that evaluates the scalability of the hash-map
 by running with increasing amounts of threads.
 
 To run these benchmarks execute:
-`RUST_TEST_THREADS=1 cargo bench --bench hashmap`
+`RUST_TEST_THREADS=1 cargo bench --bench hashmap --features nr`
 
 ## Synthetic data-structure [[benchmark](synthetic.rs)]
 
@@ -89,7 +89,7 @@ added synchronization and (b) evaluate the scalability of the synthetic
 data-structure. All benchmarks report throughput in ops/s.
 
 To run these benchmarks execute:
-`RUST_TEST_THREADS=1 cargo bench --bench synthetic`
+`RUST_TEST_THREADS=1 cargo bench --bench synthetic --features nr`
 
 ## VSpace [[benchmark](vspace.rs)]
 
@@ -97,7 +97,7 @@ A benchmark to evaluate the performance of the NR library for address-space
 replication (using an x86-64 4-level address space layout).
 
 To run these benchmarks execute:
-`RUST_TEST_THREADS=1 cargo bench --bench vspace`
+`RUST_TEST_THREADS=1 cargo bench --bench vspace --features nr`
 
 ## MemFS [[benchmark](memfs.rs)]
 
@@ -106,7 +106,7 @@ operations, by using a very simple in-memory file-system
 ([btfs](https://crates.io/crates/btfs)).
 
 To run these benchmarks execute:
-`RUST_TEST_THREADS=1 cargo bench --bench memfs`
+`RUST_TEST_THREADS=1 cargo bench --bench memfs --features nr`
 
 ## Hashbench [[benchmark](hashbench.rs)]
 
