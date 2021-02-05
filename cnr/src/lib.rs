@@ -4,8 +4,8 @@
 //! Concurrent Node Replication (CNR) is a library which can be used to implement a
 //! NUMA-aware version of any concurrent data structure. It takes in a
 //! concurrent implementation of said data structure, and scales it out to
-//! multiple cores and NUMA nodes by combining two techniques:
-//! operation logging and flat combining.
+//! multiple cores and NUMA nodes by combining three techniques:
+//! commutativity based work partitioning, operation logging, and flat combining..
 //!
 //! # How does it work
 //! To replicate a concurrent data structure, one needs to implement the
