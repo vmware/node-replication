@@ -9,8 +9,8 @@ use std::fmt::Debug;
 use std::marker::Sync;
 
 use rand::seq::SliceRandom;
-use rand::{distributions::Distribution, Rng, RngCore};
-use zipf::ZipfDistribution;
+use rand::{Rng, RngCore};
+//use zipf::ZipfDistribution;
 
 use cnr::{Dispatch, LogMapper, Replica};
 
@@ -104,10 +104,9 @@ pub fn generate_qops_concurrent(
     let mut ops = Vec::with_capacity(nop);
 
     let mut t_rng = rand::thread_rng();
-    let zipf = ZipfDistribution::new(span, 1.03).unwrap();
 
     for idx in 0..nop {
-        let id = t_rng.gen_range(0, span as u64);
+        let _id = t_rng.gen_range(0, span as u64);
 
         if idx % 100 < write_ratio {
             if idx % 2 == 0 {
@@ -134,10 +133,9 @@ pub fn generate_sops_concurrent(
     let mut ops = Vec::with_capacity(nop);
 
     let mut t_rng = rand::thread_rng();
-    let zipf = ZipfDistribution::new(span, 1.03).unwrap();
 
     for idx in 0..nop {
-        let id = t_rng.gen_range(0, span as u64);
+        let _id = t_rng.gen_range(0, span as u64);
 
         if idx % 100 < write_ratio {
             ops.push(Operation::WriteOperation(OpWr::Push(
@@ -163,10 +161,9 @@ pub fn generate_sops_partitioned_concurrent(
     let mut ops = Vec::with_capacity(nop);
 
     let mut t_rng = rand::thread_rng();
-    let zipf = ZipfDistribution::new(span, 1.03).unwrap();
 
     for idx in 0..nop {
-        let id = t_rng.gen_range(0, span as u64);
+        let _id = t_rng.gen_range(0, span as u64);
 
         if idx % 100 < write_ratio {
             ops.push(Operation::WriteOperation(OpWr::Push(

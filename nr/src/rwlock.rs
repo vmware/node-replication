@@ -9,8 +9,9 @@
 
 use core::cell::UnsafeCell;
 use core::default::Default;
+use core::hint::spin_loop;
 use core::ops::{Deref, DerefMut};
-use core::sync::atomic::{spin_loop_hint, AtomicBool, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use crossbeam_utils::CachePadded;
 
@@ -101,8 +102,16 @@ where
     /// ```
     pub fn write(&self, n: usize) -> WriteGuard<T> {
         // First, wait until we can acquire the writer lock.
-        while self.wlock.compare_and_swap(false, true, Ordering::Acquire) {
-            spin_loop_hint();
+        loop {
+            match self.wlock.compare_exchange_weak(
+                false,
+                true,
+                Ordering::Acquire,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => break,
+                Err(_) => continue,
+            }
         }
 
         // Next, wait until all readers have released their locks. This condition
@@ -113,7 +122,7 @@ where
             .take(n)
             .all(|item| item.load(Ordering::Relaxed) == 0)
         {
-            spin_loop_hint();
+            spin_loop();
         }
 
         unsafe { WriteGuard::new(self) }
@@ -150,7 +159,7 @@ where
             // optimization spoken of earlier.
             unsafe {
                 while core::ptr::read_volatile(ptr) {
-                    spin_loop_hint();
+                    spin_loop();
                 }
             }
 
@@ -171,8 +180,12 @@ where
 
     /// Unlocks the write lock; invoked by the drop() method.
     pub(in crate::rwlock) unsafe fn write_unlock(&self) {
-        if !self.wlock.compare_and_swap(true, false, Ordering::Acquire) {
-            panic!("write_unlock() called without acquiring the write lock");
+        match self
+            .wlock
+            .compare_exchange_weak(true, false, Ordering::Acquire, Ordering::Acquire)
+        {
+            Ok(_) => (),
+            Err(_) => panic!("write_unlock() called without acquiring the write lock"),
         }
     }
 

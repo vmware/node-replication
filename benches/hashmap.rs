@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Defines a hash-map that can be replicated.
+#![allow(dead_code)]
 #![feature(test)]
 
 use std::collections::HashMap;

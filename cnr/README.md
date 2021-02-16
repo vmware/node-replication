@@ -96,7 +96,7 @@ cargo build
 As a dependency in your `Cargo.toml`:
 
 ```toml
-node-replication = "*"
+cnr = "*"
 ```
 
 The code should currently be treated as an early release and is still work in

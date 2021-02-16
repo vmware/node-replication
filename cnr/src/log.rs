@@ -301,7 +301,11 @@ where
                 return None;
             };
 
-            if self.next.compare_and_swap(n, n + 1, Ordering::SeqCst) != n {
+            if self
+                .next
+                .compare_exchange_weak(n, n + 1, Ordering::SeqCst, Ordering::SeqCst)
+                != Ok(n)
+            {
                 continue;
             };
 
@@ -364,10 +368,12 @@ where
 
             // Try reserving slots for the operations. If that fails, then restart
             // from the beginning of this loop.
-            if self
-                .tail
-                .compare_and_swap(tail, tail + nops, Ordering::Acquire)
-                != tail
+            if self.tail.compare_exchange_weak(
+                tail,
+                tail + nops,
+                Ordering::Acquire,
+                Ordering::Acquire,
+            ) != Ok(tail)
             {
                 continue;
             };

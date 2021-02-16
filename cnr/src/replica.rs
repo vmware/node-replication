@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use core::cell::RefCell;
+use core::hint::spin_loop;
 use core::mem::MaybeUninit;
-use core::sync::atomic::{spin_loop_hint, AtomicBool, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -351,7 +352,11 @@ where
                 return None;
             };
 
-            if self.next.compare_and_swap(idx, idx + 1, Ordering::SeqCst) != idx {
+            if self
+                .next
+                .compare_exchange_weak(idx, idx + 1, Ordering::SeqCst, Ordering::SeqCst)
+                != Ok(idx)
+            {
                 continue;
             };
 
@@ -546,9 +551,15 @@ where
     pub fn verify<F: FnMut(&D)>(&self, mut v: F) {
         // Acquire the combiner lock before attempting anything on the data structure.
         // Use an idx greater than the maximum that can be allocated.
-        while self.combiners[0].compare_and_swap(0, MAX_THREADS_PER_REPLICA + 2, Ordering::Acquire)
-            != 0
-        {}
+        while self.combiners[0].compare_exchange_weak(
+            0,
+            MAX_THREADS_PER_REPLICA + 2,
+            Ordering::Acquire,
+            Ordering::Acquire,
+        ) != Ok(0)
+        {
+            spin_loop();
+        }
 
         let mut f = |o: <D as Dispatch>::WriteOperation, _i: usize| {
             self.data.dispatch_mut(o);
@@ -571,7 +582,7 @@ where
             let ctail = self.slog[i].get_ctail();
             while !self.slog[i].is_replica_synced_for_reads(self.idx[i], ctail) {
                 self.try_combine(idx.0, i);
-                spin_loop_hint();
+                spin_loop();
             }
         }
     }
@@ -600,7 +611,7 @@ where
         let ctail = self.slog[hash_idx].get_ctail();
         while !self.slog[hash_idx].is_replica_synced_for_reads(self.idx[hash_idx], ctail) {
             self.try_combine(tid, hash_idx);
-            spin_loop_hint();
+            spin_loop();
         }
 
         self.data.dispatch(op)
@@ -638,7 +649,13 @@ where
         }
 
         // Try to become the combiner here. If this fails, then simply return.
-        if self.combiners[hashidx].compare_and_swap(0, tid, Ordering::Acquire) != 0 {
+        if self.combiners[hashidx].compare_exchange_weak(
+            0,
+            tid,
+            Ordering::Acquire,
+            Ordering::Acquire,
+        ) != Ok(0)
+        {
             return;
         }
 
@@ -667,7 +684,13 @@ where
 
         // Collect operations from each thread registered with this replica.
         for tid in 1..next {
-            if pending[tid - 1].compare_and_swap(true, false, Ordering::Release) {
+            if pending[tid - 1].compare_exchange_weak(
+                true,
+                false,
+                Ordering::Release,
+                Ordering::Release,
+            ) == Ok(true)
+            {
                 // pass hash of current op to contexts, only get ops from context that have the same hash/log id
                 operations[tid - 1] = self.contexts[tid - 1].ops(&mut buffer, hashidx);
             }

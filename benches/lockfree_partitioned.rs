@@ -2,22 +2,17 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Implements ReplicaTrait for a bunch of different lockfree DS implementations.
-
-use std::convert::TryInto;
-use std::fmt::Debug;
 use std::marker::Sync;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use crossbeam::epoch;
-use crossbeam::queue::SegQueue;
 use crossbeam_skiplist::SkipMap;
 
-use cnr::{Dispatch, Log, LogMapper, ReplicaToken};
+use cnr::{Dispatch, Log, ReplicaToken};
 
 use crate::mkbench::ReplicaTrait;
 
-use super::{OpWr, QueueConcurrent, SkipListConcurrent, INITIAL_CAPACITY};
+use super::{OpWr, SkipListConcurrent, INITIAL_CAPACITY};
 
 /// A wrapper that implements ReplicaTrait which just submits everything against
 /// the data-structure that is already concurrent.
@@ -65,7 +60,7 @@ where
     fn exec(
         &self,
         op: <Self::D as Dispatch>::WriteOperation,
-        idx: ReplicaToken,
+        _idx: ReplicaToken,
     ) -> <Self::D as Dispatch>::Response {
         let op = match op {
             OpWr::Push(key, val) => {
@@ -79,7 +74,7 @@ where
     fn exec_ro(
         &self,
         op: <Self::D as Dispatch>::ReadOperation,
-        idx: ReplicaToken,
+        _idx: ReplicaToken,
     ) -> <Self::D as Dispatch>::Response {
         let op = match op {
             SkipListConcurrent::Get(key) => SkipListConcurrent::Get(key),
@@ -92,12 +87,6 @@ pub struct SkipListWrapper(SkipMap<u64, u64>);
 
 impl Default for SkipListWrapper {
     fn default() -> Self {
-        use rand::{distributions::Distribution, rngs::SmallRng, Rng, RngCore, SeedableRng};
-        use rand_xorshift::XorShiftRng;
-
-        let guard = &epoch::pin();
-        let mut rng = XorShiftRng::from_entropy();
-
         let storage = SkipMap::new();
         for i in 0..INITIAL_CAPACITY {
             storage.insert(i as u64, i as u64);

@@ -47,8 +47,10 @@ where
     }
 
     fn register_me(&self) -> Option<ReplicaToken> {
-        let r = self.registered.compare_and_swap(0, 1, Ordering::SeqCst);
-        if r == 0 {
+        let r = self
+            .registered
+            .compare_exchange_weak(0, 1, Ordering::SeqCst, Ordering::SeqCst);
+        if r == Ok(0) {
             Some(unsafe { ReplicaToken::new(0) })
         } else {
             // Can't register more than one thread on partitioned DS
