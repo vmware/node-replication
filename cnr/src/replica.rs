@@ -688,7 +688,7 @@ where
                 true,
                 false,
                 Ordering::Release,
-                Ordering::Release,
+                Ordering::Relaxed,
             ) == Ok(true)
             {
                 // pass hash of current op to contexts, only get ops from context that have the same hash/log id
