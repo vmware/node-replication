@@ -645,7 +645,7 @@ where
         {
             let func = &|idx: usize, rid: usize| {
                 let stuck = stuck.clone();
-                stuck[rid - 1].compare_exchange_weak(0, idx, Ordering::Release, Ordering::Release);
+                stuck[rid - 1].compare_exchange_weak(0, idx, Ordering::Release, Ordering::Relaxed);
             };
             for i in 0..nlogs {
                 unsafe { Arc::get_mut_unchecked(&mut self.log[i]).update_closure(func) };
@@ -766,7 +766,7 @@ where
                                     log_id,
                                     0,
                                     Ordering::Release,
-                                    Ordering::Release,
+                                    Ordering::Relaxed,
                                 );
                                 replica.log_sync(replica_token, log_id);
                             }
