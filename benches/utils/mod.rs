@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Utility functions to do multi-threaded benchmarking of the log infrastructure.
+#![allow(dead_code)]
 
 use std::fmt::Debug;
 

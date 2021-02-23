@@ -1,6 +1,10 @@
-name: Compile and Test
+name: Compile and Test CNR
 
-on: [push]
+on:
+  push:
+    paths:
+      - cnr/**
+      - benches/**
 
 jobs:
   build:
@@ -27,9 +31,15 @@ jobs:
     - uses: actions/checkout@v1
     - name: Build
       run: cargo build --release --verbose
+      working-directory: ./cnr
     - name: Try to compile tests
       run: cargo test --release --no-run --verbose
+      working-directory: ./cnr
     - name: Try to compile benchmarks
-      run: cargo bench --no-run --verbose
+      run: |
+        cargo bench --bench nrfs --features="c_nr" --no-run --verbose
+        cargo bench --bench lockfree --features="c_nr" --no-run --verbose
+      working-directory: ./benches
     - name: Try stack example
       run: RUST_BACKTRACE=1 RUST_LOG='trace' cargo run --release --example stack -- -t1,2 --nop 100000 -l 1 -m sequential
+      working-directory: ./cnr

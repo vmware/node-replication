@@ -62,6 +62,7 @@ fn log_scale_bench(c: &mut TestHarness) {
     mkbench::ScaleBenchBuilder::<Replica<Nop>>::new(operations)
         .machine_defaults()
         .log_size(LOG_SIZE_BYTES)
+        .log_strategy(mkbench::LogStrategy::One)
         .update_batch(8)
         .reset_log()
         .disable_sync()

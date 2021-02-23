@@ -10,15 +10,23 @@ sudo sh -c "echo 0 > /sys/kernel/mm/ksm/run"
 sudo sh -c "echo 0 > /sys/kernel/mm/ksm/merge_across_nodes"
 sudo sh -c "echo never > /sys/kernel/mm/transparent_hugepage/enabled"
 
-RUST_TEST_THREADS=1 timeout 1h cargo bench --bench log
-RUST_TEST_THREADS=1 timeout 1h cargo bench --bench synthetic
-RUST_TEST_THREADS=1 timeout 1h cargo bench --bench stack
-RUST_TEST_THREADS=1 timeout 20h cargo bench --bench hashmap
-RUST_TEST_THREADS=1 timeout 1h cargo bench --bench vspace
-RUST_TEST_THREADS=1 timeout 1h cargo bench --bench memfs
+cd benches
+RUST_TEST_THREADS=1 timeout 1h cargo bench --bench log --features="nr"
+RUST_TEST_THREADS=1 timeout 1h cargo bench --bench synthetic --features="nr"
+RUST_TEST_THREADS=1 timeout 1h cargo bench --bench stack --features="nr"
+RUST_TEST_THREADS=1 timeout 20h cargo bench --bench hashmap --features="nr"
+RUST_TEST_THREADS=1 timeout 1h cargo bench --bench vspace --features="nr"
+RUST_TEST_THREADS=1 timeout 1h cargo bench --bench nrfs --features="c_nr"
+RUST_TEST_THREADS=1 timeout 20h cargo bench --bench lockfree --features="c_nr"
 
-timeout 1.5h bash benches/hashbench_run.sh
-timeout 1.5h bash benches/rwlockbench_run.sh
+timeout 1.5h bash hashbench_run.sh
+timeout 1.5h bash rwlockbench_run.sh
+
+# Move results to root repo.
+cd ..
+mv benches/*.csv .
+mv benches/*.log .
+mv benches/*.png .
 
 # Check that we can checkout gh-pages early:
 rm -rf gh-pages
@@ -38,10 +46,12 @@ rm -rf ${SCALEBENCH_DEPLOY}
 mkdir -p ${SCALEBENCH_DEPLOY}
 mv baseline_comparison.csv ${SCALEBENCH_DEPLOY}
 mv scaleout_benchmarks.csv ${SCALEBENCH_DEPLOY}
+mv scaleout_benchmarks_cnr.csv ${SCALEBENCH_DEPLOY}
 mv per_thread_times.* ${SCALEBENCH_DEPLOY}
 mv throughput-*-*.* ${SCALEBENCH_DEPLOY}
 gzip ${SCALEBENCH_DEPLOY}/baseline_comparison.csv
 gzip ${SCALEBENCH_DEPLOY}/scaleout_benchmarks.csv
+gzip ${SCALEBENCH_DEPLOY}/scaleout_benchmarks_cnr.csv
 
 # Copy hashbench results
 HASHBENCH_DEPLOY="gh-pages/hashbench/${CI_MACHINE_TYPE}/${GIT_REV_CURRENT}"

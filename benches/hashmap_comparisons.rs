@@ -38,7 +38,7 @@ where
     type D = T;
 
     fn new_arc(
-        _log: &Arc<Log<'static, <Self::D as Dispatch>::WriteOperation>>,
+        _log: Vec<Arc<Log<'static, <Self::D as Dispatch>::WriteOperation>>>,
     ) -> std::sync::Arc<Self> {
         Arc::new(Partitioner {
             registered: AtomicUsize::new(0),
@@ -47,8 +47,10 @@ where
     }
 
     fn register_me(&self) -> Option<ReplicaToken> {
-        let r = self.registered.compare_and_swap(0, 1, Ordering::SeqCst);
-        if r == 0 {
+        let r = self
+            .registered
+            .compare_exchange_weak(0, 1, Ordering::SeqCst, Ordering::SeqCst);
+        if r == Ok(0) {
             Some(unsafe { ReplicaToken::new(0) })
         } else {
             // Can't register more than one thread on partitioned DS
@@ -57,6 +59,10 @@ where
     }
 
     fn sync_me(&self, _idx: ReplicaToken) {
+        /* NOP */
+    }
+
+    fn log_sync(&self, _idx: ReplicaToken, _logid: usize) {
         /* NOP */
     }
 
@@ -97,7 +103,7 @@ where
     type D = T;
 
     fn new_arc(
-        _log: &Arc<Log<'static, <Self::D as Dispatch>::WriteOperation>>,
+        _log: Vec<Arc<Log<'static, <Self::D as Dispatch>::WriteOperation>>>,
     ) -> std::sync::Arc<Self> {
         Arc::new(ConcurrentDs {
             registered: AtomicUsize::new(0),
@@ -111,6 +117,10 @@ where
     }
 
     fn sync_me(&self, _idx: ReplicaToken) {
+        /* NOP */
+    }
+
+    fn log_sync(&self, _idx: ReplicaToken, _logid: usize) {
         /* NOP */
     }
 

@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use core::cell::RefCell;
+use core::hint::spin_loop;
 use core::mem::MaybeUninit;
-use core::sync::atomic::{spin_loop_hint, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -284,7 +285,11 @@ where
                 return None;
             };
 
-            if self.next.compare_and_swap(idx, idx + 1, Ordering::SeqCst) != idx {
+            if self
+                .next
+                .compare_exchange_weak(idx, idx + 1, Ordering::SeqCst, Ordering::SeqCst)
+                != Ok(idx)
+            {
                 continue;
             };
 
@@ -438,11 +443,15 @@ where
     pub fn verify<F: FnMut(&D)>(&self, mut v: F) {
         // Acquire the combiner lock before attempting anything on the data structure.
         // Use an idx greater than the maximum that can be allocated.
-        while self
-            .combiner
-            .compare_and_swap(0, MAX_THREADS_PER_REPLICA + 2, Ordering::Acquire)
-            != 0
-        {}
+        while self.combiner.compare_exchange_weak(
+            0,
+            MAX_THREADS_PER_REPLICA + 2,
+            Ordering::Acquire,
+            Ordering::Acquire,
+        ) != Ok(0)
+        {
+            spin_loop();
+        }
 
         let mut data = self.data.write(self.next.load(Ordering::Relaxed));
 
@@ -465,7 +474,7 @@ where
         let ctail = self.slog.get_ctail();
         while !self.slog.is_replica_synced_for_reads(self.idx, ctail) {
             self.try_combine(idx.0);
-            spin_loop_hint();
+            spin_loop();
         }
     }
 
@@ -481,7 +490,7 @@ where
         let ctail = self.slog.get_ctail();
         while !self.slog.is_replica_synced_for_reads(self.idx, ctail) {
             self.try_combine(tid);
-            spin_loop_hint();
+            spin_loop();
         }
 
         self.data.read(tid - 1).dispatch(op)
@@ -513,7 +522,11 @@ where
         }
 
         // Try to become the combiner here. If this fails, then simply return.
-        if self.combiner.compare_and_swap(0, tid, Ordering::Acquire) != 0 {
+        if self
+            .combiner
+            .compare_exchange_weak(0, tid, Ordering::Acquire, Ordering::Acquire)
+            != Ok(0)
+        {
             return;
         }
 

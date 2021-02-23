@@ -5,7 +5,7 @@
 
 use std::fmt;
 
-use hwloc::*;
+use hwloc2::*;
 use serde::Serialize;
 
 pub type Node = u64;
@@ -89,9 +89,9 @@ impl MachineTopology {
     pub fn new() -> MachineTopology {
         let mut data: Vec<CpuInfo> = Default::default();
 
-        let topo = Topology::new();
+        let topo = Topology::new().expect("Can't retrieve Topology");
         let cpus = topo
-            .objects_with_type(&hwloc::ObjectType::PU)
+            .objects_with_type(&ObjectType::PU)
             .expect("Can't find CPUs");
 
         for cpu in cpus {
@@ -105,7 +105,7 @@ impl MachineTopology {
 
             // Find the parent L1 cache of the CPU
             while parent.is_some()
-                && (parent.unwrap().object_type() != ObjectType::Cache
+                && (parent.unwrap().object_type() != ObjectType::L1Cache
                     || parent.unwrap().cache_attributes().unwrap().depth() < 1)
             {
                 parent = parent.unwrap().parent();
@@ -114,7 +114,7 @@ impl MachineTopology {
 
             // Find the parent L2 cache of the CPU
             while parent.is_some()
-                && (parent.unwrap().object_type() != ObjectType::Cache
+                && (parent.unwrap().object_type() != ObjectType::L2Cache
                     || parent.unwrap().cache_attributes().unwrap().depth() < 2)
             {
                 parent = parent.unwrap().parent();
@@ -123,7 +123,7 @@ impl MachineTopology {
 
             // Find the parent socket/L3 cache of the CPU
             while parent.is_some()
-                && (parent.unwrap().object_type() != ObjectType::Cache
+                && (parent.unwrap().object_type() != ObjectType::L3Cache
                     || parent.unwrap().cache_attributes().unwrap().depth() < 3)
             {
                 parent = parent.unwrap().parent();
@@ -136,7 +136,7 @@ impl MachineTopology {
             }
             let numa_node = parent.map(|n| NodeInfo {
                 node: n.os_index() as Node,
-                memory: n.memory().total_memory(),
+                memory: n.total_memory(),
             });
 
             let cpu_info = CpuInfo {
