@@ -638,14 +638,30 @@ where
     }
 
     fn startup(&mut self) {
-        let stuck = Arc::new(arr![AtomicUsize::new(0); 128]);
+        let stuck = Arc::new(arr![AtomicUsize::new(0); 192]);
         let nlogs = self.log.len();
 
         #[cfg(feature = "c_nr")]
         {
-            let func = &|idx: usize, rid: usize| {
+            use core::sync::atomic::AtomicBool;
+            let func = &|rid: &[AtomicBool], idx: usize| {
                 let stuck = stuck.clone();
-                stuck[rid - 1].compare_exchange_weak(0, idx, Ordering::Release, Ordering::Relaxed);
+                for replia in 0..192 {
+                    if rid[replia].compare_exchange_weak(
+                        true,
+                        false,
+                        Ordering::Relaxed,
+                        Ordering::Relaxed,
+                    ) == Ok(true)
+                    {
+                        stuck[replia].compare_exchange_weak(
+                            0,
+                            idx,
+                            Ordering::Release,
+                            Ordering::Relaxed,
+                        );
+                    }
+                }
             };
             for i in 0..nlogs {
                 unsafe { Arc::get_mut_unchecked(&mut self.log[i]).update_closure(func) };
