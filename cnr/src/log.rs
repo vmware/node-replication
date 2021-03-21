@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use alloc::alloc::{alloc, dealloc, Layout};
-
 use core::cell::{Cell, UnsafeCell};
 use core::default::Default;
 use core::fmt;
@@ -141,7 +140,15 @@ where
     /// replica number for this log. The application can then take action to start the log
     /// consumption on that replica. If the application is proactively taking measures to
     /// consume the log on all the replicas, then the variable can be initialized to default.
-    gc: UnsafeCell<*const dyn FnMut(usize, usize)>,
+    gc: UnsafeCell<*const dyn FnMut(&[AtomicBool; MAX_REPLICAS], usize)>,
+
+    /// Check if the log can issue a GC callback; reset
+    /// after the GC is done in `advance_head` function.
+    notify_replicas: CachePadded<AtomicBool>,
+
+    /// Use this array in GC callback function to notify other replicas to make progress.
+    /// Assumes that the callback handler clears the replica-ids which need to do GC.
+    dormant_replicas: [AtomicBool; MAX_REPLICAS],
 }
 
 impl<'a, T> fmt::Debug for Log<'a, T>
@@ -254,7 +261,9 @@ where
             ltails: arr![Default::default(); 192],
             next: CachePadded::new(AtomicUsize::new(1usize)),
             lmasks: fls,
-            gc: UnsafeCell::new(&|_lid: usize, _rid: usize| {}),
+            gc: UnsafeCell::new(&|_rid: &[AtomicBool; MAX_REPLICAS], _lid: usize| {}),
+            notify_replicas: CachePadded::new(AtomicBool::new(true)),
+            dormant_replicas: arr![Default::default(); 192],
         }
     }
 
@@ -271,6 +280,7 @@ where
     ///
     /// ```
     /// use cnr::Log;
+    /// use core::sync::atomic::AtomicBool;
     ///
     /// // Operation type that will go onto the log.
     /// #[derive(Clone)]
@@ -284,12 +294,12 @@ where
     /// let mut l = Log::<Operation>::new(1 * 1024 * 1024, 1);
     ///
     /// // Update the callback function for the log.
-    /// let callback_func = &|idx: usize, rid: usize| {
-    ///     // Take action on log `idx` and replica `rid`.
+    /// let callback_func = &|rid: &[AtomicBool], idx: usize| {
+    ///     // Take action on log `idx` and replicas in `rid`.
     /// };
     /// l.update_closure(callback_func)
     /// ```
-    pub fn update_closure(&mut self, gc: &dyn FnMut(usize, usize)) {
+    pub fn update_closure(&mut self, gc: &dyn FnMut(&[AtomicBool], usize)) {
         unsafe { *self.gc.get() = core::mem::transmute(gc) };
     }
 
@@ -345,6 +355,37 @@ where
 
             let tail = self.tail.load(Ordering::Relaxed);
             let head = self.head.load(Ordering::Relaxed);
+
+            // Head and tail doesn't wrap around; so it works.
+            let used = tail - head + 1;
+
+            if used > self.size / 3 {
+                let r = self.next.load(Ordering::Relaxed);
+                let mut is_stuck = false;
+                let cur_local_tail = self.ltails[idx - 1].load(Ordering::Relaxed);
+
+                // Find the smallest local tail across all replicas.
+                for idx in 1..r {
+                    let local_tail = self.ltails[idx - 1].load(Ordering::Relaxed);
+                    if cur_local_tail > local_tail && cur_local_tail - local_tail > self.size / 3 {
+                        self.dormant_replicas[idx - 1].store(true, Ordering::Relaxed);
+                        is_stuck = true;
+                    }
+                }
+
+                if is_stuck == true
+                    && self.notify_replicas.compare_exchange_weak(
+                        true,
+                        false,
+                        Ordering::Relaxed,
+                        Ordering::Relaxed,
+                    ) == Ok(true)
+                {
+                    let f: &mut dyn FnMut(&[AtomicBool], usize) =
+                        unsafe { &mut *(*self.gc.get() as *mut dyn FnMut(&[AtomicBool], usize)) };
+                    f(&self.dormant_replicas, self.idx);
+                }
+            }
 
             // If there are fewer than `GC_FROM_HEAD` entries on the log, then just
             // try again. The replica that reserved entry (h + self.size - GC_FROM_HEAD)
@@ -492,9 +533,7 @@ where
         // on the log. If one of the replicas has stopped making progress, then
         // this method might never return.
         let mut iteration = 1;
-        let mut dormant_rid;
         loop {
-            dormant_rid = 1;
             let r = self.next.load(Ordering::Relaxed);
             let global_head = self.head.load(Ordering::Relaxed);
             let f = self.tail.load(Ordering::Relaxed);
@@ -505,7 +544,6 @@ where
             for idx in 1..r {
                 let cur_local_tail = self.ltails[idx - 1].load(Ordering::Relaxed);
                 if min_local_tail > cur_local_tail {
-                    dormant_rid = idx;
                     min_local_tail = cur_local_tail
                 };
             }
@@ -515,9 +553,6 @@ where
             // any new entries on the log to prevent deadlock.
             if min_local_tail == global_head {
                 if iteration % WARN_THRESHOLD == 0 {
-                    let f: &mut dyn FnMut(usize, usize) =
-                        unsafe { &mut *(*self.gc.get() as *mut dyn FnMut(usize, usize)) };
-                    f(self.idx, dormant_rid);
                     warn!("Spending a long time in `advance_head`, are we starving?");
                 }
                 iteration += 1;
@@ -527,6 +562,9 @@ where
 
             // There are entries that can be freed up; update the head offset.
             self.head.store(min_local_tail, Ordering::Relaxed);
+
+            // Reset notify replicas after the GC.
+            self.notify_replicas.store(true, Ordering::Relaxed);
 
             // Make sure that we freed up enough space so that threads waiting for
             // GC in append can make progress. Otherwise, try to make progress again.

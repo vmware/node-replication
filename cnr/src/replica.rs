@@ -593,7 +593,10 @@ where
     /// No need to run in a loop because the replica will
     /// be synced for log_id if there is an active combiner.
     pub fn sync_log(&self, idx: ReplicaToken, log_id: usize) {
-        self.try_combine(idx.0, log_id - 1);
+        let ctail = self.slog[log_id - 1].get_ctail();
+        if !self.slog[log_id - 1].is_replica_synced_for_reads(self.idx[log_id - 1], ctail) {
+            self.try_combine(idx.0, log_id - 1);
+        }
     }
 
     /// Issues a read-only operation against the replica and returns a response.
