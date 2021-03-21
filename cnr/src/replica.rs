@@ -949,6 +949,7 @@ mod test {
         let repl = Replica::<Data>::new(vec![slog.clone()]);
 
         // Add in operations to the log off the side, not through the replica.
+        let _ignore = slog.register().expect("Failed to register with log.");
         let o = [OpWr(121), OpWr(212)];
         slog.append(&o, 2, |_o: OpWr, _i: usize| {});
         slog.exec(2, &mut |_o: OpWr, _i: usize| {});

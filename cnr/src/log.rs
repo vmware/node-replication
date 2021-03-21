@@ -62,6 +62,9 @@ where
 
     /// Indicates whether this entry represents a valid operation when on the log.
     alivef: AtomicBool,
+
+    /// Used to remove operation once all the replica consumes the entry.
+    refcnt: AtomicUsize,
 }
 
 /// A log of operations that is typically accessed by multiple
@@ -228,6 +231,7 @@ where
                         operation: None,
                         replica: 0usize,
                         alivef: AtomicBool::new(false),
+                        refcnt: AtomicUsize::new(0),
                     }),
                 );
             }
@@ -324,6 +328,7 @@ where
         let nops = ops.len();
         let mut iteration = 1;
         let mut waitgc = 1;
+        let num_replicas = self.next.load(Ordering::Relaxed) - 1;
 
         // Keep trying to reserve entries and add operations to the log until
         // we succeed in doing so.
@@ -394,6 +399,7 @@ where
 
                 unsafe { (*e).operation = Some(ops[i].clone()) };
                 unsafe { (*e).replica = idx };
+                unsafe { (*e).refcnt = AtomicUsize::new(num_replicas) };
                 unsafe { (*e).alivef.store(m, Ordering::Release) };
             }
 
@@ -451,7 +457,12 @@ where
                 iteration += 1;
             }
 
-            unsafe { d((*e).operation.as_ref().unwrap().clone(), (*e).replica) };
+            unsafe {
+                d((*e).operation.as_ref().unwrap().clone(), (*e).replica);
+                if (*e).refcnt.fetch_sub(1, Ordering::Release) == 1 {
+                    (*e).operation = None;
+                }
+            }
 
             // Looks like we're going to wrap around now; flip this replica's local mask.
             if self.index(i) == self.size - 1 {
