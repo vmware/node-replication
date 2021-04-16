@@ -58,6 +58,84 @@ const_assert!(
     MAX_THREADS_PER_REPLICA >= 1 && (MAX_THREADS_PER_REPLICA & (MAX_THREADS_PER_REPLICA - 1) == 0)
 );
 
+/// An instance of per log state maintained by each replica.
+pub(self) struct LogState<'a, D>
+where
+    D: Sized + Default + Dispatch + Sync,
+{
+    /// References to the shared logs that operations will be appended to and the
+    /// data structure will be updated from.
+    slog: Arc<Log<'a, <D as Dispatch>::WriteOperation>>,
+
+    /// A replica receives a replica-identifier when it registers against
+    /// a log. Each replica registers itself against all the shared logs.
+    /// It is required when consuming operations from the log.
+    idx: usize,
+
+    /// Thread idx of the thread currently responsible for flat combining. Zero
+    /// if there isn't any thread actively performing flat combining on the log.
+    /// This also doubles up as the combiner lock. The replica matains combiner lock
+    /// per log.
+    combiner: CachePadded<AtomicUsize>,
+
+    /// Number of pending operations for each thread per log.
+    pending: [CachePadded<AtomicBool>; MAX_THREADS_PER_REPLICA],
+
+    /// A buffer of operations for flat combining. The combiner stages operations in
+    /// here and then batch appends them into the shared log. This helps amortize
+    /// the cost of the compare_and_swap() on the tail of the log.
+    buffer: CachePadded<RefCell<Vec<<D as Dispatch>::WriteOperation>>>,
+
+    /// Number of operations collected by the combiner from each thread at any
+    /// given point of time. Index `i` holds the number of operations collected from
+    /// thread with identifier `i + 1`.
+    inflight: CachePadded<RefCell<[usize; MAX_THREADS_PER_REPLICA]>>,
+
+    /// A buffer of results collected after flat combining. With the help of `inflight`,
+    /// the combiner enqueues these results into the appropriate thread context.
+    result: CachePadded<RefCell<Vec<<D as Dispatch>::Response>>>,
+}
+
+impl<'a, D> LogState<'a, D>
+where
+    D: Sized + Default + Dispatch + Sync,
+{
+    pub fn new(log: Arc<Log<'a, <D as Dispatch>::WriteOperation>>) -> LogState<'a, D> {
+        let idx = log.register().unwrap();
+        LogState {
+            slog: log.clone(),
+            idx,
+            combiner: CachePadded::new(AtomicUsize::new(0)),
+            pending: arr![CachePadded::new(AtomicBool::new(false)); 256],
+            buffer:
+                CachePadded::new(
+                    RefCell::new(
+                        Vec::with_capacity(
+                            MAX_THREADS_PER_REPLICA
+                                * Context::<
+                                    <D as Dispatch>::WriteOperation,
+                                    <D as Dispatch>::Response,
+                                >::batch_size(),
+                        ),
+                    ),
+                ),
+            inflight: CachePadded::new(RefCell::new(arr![Default::default(); 256])),
+            result:
+                CachePadded::new(
+                    RefCell::new(
+                        Vec::with_capacity(
+                            MAX_THREADS_PER_REPLICA
+                                * Context::<
+                                    <D as Dispatch>::WriteOperation,
+                                    <D as Dispatch>::Response,
+                                >::batch_size(),
+                        ),
+                    ),
+                ),
+        }
+    }
+}
+
 /// An instance of a replicated data structure. Uses one or more shared logs
 /// to scale operations on the data structure across cores and processors.
 ///
@@ -76,26 +154,9 @@ where
     /// Idx that will be handed out to the next thread that registers with the replica.
     next: CachePadded<AtomicUsize>,
 
-    /// References to the shared logs that operations will be appended to and the
-    /// data structure will be updated from.
-    slog: Vec<Arc<Log<'a, <D as Dispatch>::WriteOperation>>>,
-
     /// The underlying replicated data structure. Shared between threads registered
     /// with this replica. Each replica maintains its own copy of the data structure.
     data: CachePadded<D>,
-
-    /// TODO: Merge all the following variables in single structure.
-
-    /// A replica receives a replica-identifier when it registers against
-    /// a log. Each replica registers itself against all the shared logs.
-    /// It is required when consuming operations from the log.
-    idx: Vec<usize>,
-
-    /// Thread idx of the thread currently responsible for flat combining. Zero
-    /// if there isn't any thread actively performing flat combining on the log.
-    /// This also doubles up as the combiner lock. The replica matains combiner lock
-    /// per log.
-    combiners: Vec<CachePadded<AtomicUsize>>,
 
     /// List of per-thread contexts. Threads buffer write operations in here when they
     /// cannot perform flat combining (because another thread might be doing so).
@@ -103,22 +164,8 @@ where
     /// The vector is initialized with `MAX_THREADS_PER_REPLICA` elements.
     contexts: Vec<CachePadded<Context<<D as Dispatch>::WriteOperation, <D as Dispatch>::Response>>>,
 
-    /// Number of pending operations for each thread per log.
-    pending: Vec<[CachePadded<AtomicBool>; MAX_THREADS_PER_REPLICA]>,
-
-    /// A buffer of operations for flat combining. The combiner stages operations in
-    /// here and then batch appends them into the shared log. This helps amortize
-    /// the cost of the compare_and_swap() on the tail of the log.
-    buffer: Vec<CachePadded<RefCell<Vec<<D as Dispatch>::WriteOperation>>>>,
-
-    /// Number of operations collected by the combiner from each thread at any
-    /// given point of time. Index `i` holds the number of operations collected from
-    /// thread with identifier `i + 1`.
-    inflight: Vec<CachePadded<RefCell<[usize; MAX_THREADS_PER_REPLICA]>>>,
-
-    /// A buffer of results collected after flat combining. With the help of `inflight`,
-    /// the combiner enqueues these results into the appropriate thread context.
-    result: Vec<CachePadded<RefCell<Vec<<D as Dispatch>::Response>>>>,
+    /// An instance of per log state maintained by each replica.
+    logstate: Vec<CachePadded<LogState<'a, D>>>,
 }
 
 /// The Replica is Sync. Member variables are protected by a CAS on `combiner`.
@@ -215,56 +262,12 @@ where
         // putting the (often big) Replica object on the stack first.
         unsafe {
             let uninit_ptr = Arc::get_mut_unchecked(&mut uninit_replica).as_mut_ptr();
-            let nlogs = logs.len();
-            // Register the replica with all the logs.
-            let mut idx = Vec::with_capacity(nlogs);
-            for log in logs.iter() {
-                idx.push(log.register().unwrap());
-            }
-            // Allocate a combiner for each log.
-            let mut combiners = Vec::with_capacity(nlogs);
-            let mut pending = Vec::with_capacity(nlogs);
-            for _i in 0..nlogs {
-                combiners.push(CachePadded::new(AtomicUsize::new(0)));
-                pending.push(arr![CachePadded::new(AtomicBool::new(false)); 256]);
-            }
 
             uninit_ptr.write(Replica {
-                idx,
-                combiners,
                 next: CachePadded::new(AtomicUsize::new(1)),
-                contexts: Vec::with_capacity(MAX_THREADS_PER_REPLICA),
-                pending,
-                buffer: vec![
-                    CachePadded::new(RefCell::new(
-                        Vec::with_capacity(
-                            MAX_THREADS_PER_REPLICA
-                                * Context::<
-                                    <D as Dispatch>::WriteOperation,
-                                    <D as Dispatch>::Response,
-                                >::batch_size(),
-                        ),
-                    ));
-                    nlogs
-                ],
-                inflight: vec![
-                    CachePadded::new(RefCell::new(arr![Default::default(); 256]));
-                    nlogs
-                ],
-                result: vec![
-                    CachePadded::new(RefCell::new(
-                        Vec::with_capacity(
-                            MAX_THREADS_PER_REPLICA
-                                * Context::<
-                                    <D as Dispatch>::WriteOperation,
-                                    <D as Dispatch>::Response,
-                                >::batch_size(),
-                        ),
-                    ));
-                    nlogs
-                ],
-                slog: logs.clone(),
                 data: CachePadded::new(D::default()),
+                logstate: Vec::with_capacity(logs.len()),
+                contexts: Vec::with_capacity(MAX_THREADS_PER_REPLICA),
             });
 
             let mut replica = uninit_replica.assume_init();
@@ -273,7 +276,15 @@ where
                 Arc::get_mut(&mut replica)
                     .unwrap()
                     .contexts
-                    .push(Default::default());
+                    .push(Default::default())
+            }
+
+            // Add per-log state
+            for log in logs.iter() {
+                Arc::get_mut(&mut replica)
+                    .unwrap()
+                    .logstate
+                    .push(CachePadded::new(LogState::new(log.clone())));
             }
 
             replica
@@ -432,7 +443,7 @@ where
         op: <D as Dispatch>::WriteOperation,
         idx: ReplicaToken,
     ) -> <D as Dispatch>::Response {
-        let hash = op.hash() % self.slog.len();
+        let hash = op.hash() % self.logstate.len();
 
         // Enqueue the operation onto the thread local batch and then try to flat combine.
         self.make_pending(op.clone(), idx.0, hash);
@@ -551,7 +562,7 @@ where
     pub fn verify<F: FnMut(&D)>(&self, mut v: F) {
         // Acquire the combiner lock before attempting anything on the data structure.
         // Use an idx greater than the maximum that can be allocated.
-        while self.combiners[0].compare_exchange_weak(
+        while self.logstate[0].combiner.compare_exchange_weak(
             0,
             MAX_THREADS_PER_REPLICA + 2,
             Ordering::Acquire,
@@ -565,11 +576,11 @@ where
             self.data.dispatch_mut(o);
         };
 
-        self.slog[0].exec(self.idx[0], &mut f);
+        self.logstate[0].slog.exec(self.logstate[0].idx, &mut f);
 
         v(&self.data);
 
-        self.combiners[0].store(0, Ordering::Release);
+        self.logstate[0].combiner.store(0, Ordering::Release);
     }
 
     /// This method is useful when a replica stops making progress and some threads
@@ -577,10 +588,13 @@ where
     /// in the log and won't be able perform garbage collection because of the inactive
     /// replica. So, this method syncs up the replica against the underlying log.
     pub fn sync(&self, idx: ReplicaToken) {
-        let nlogs = self.slog.len();
+        let nlogs = self.logstate.len();
         for i in 0..nlogs {
-            let ctail = self.slog[i].get_ctail();
-            while !self.slog[i].is_replica_synced_for_reads(self.idx[i], ctail) {
+            let ctail = self.logstate[i].slog.get_ctail();
+            while !self.logstate[i]
+                .slog
+                .is_replica_synced_for_reads(self.logstate[i].idx, ctail)
+            {
                 self.try_combine(idx.0, i);
                 spin_loop();
             }
@@ -604,12 +618,15 @@ where
         tid: usize,
     ) -> <D as Dispatch>::Response {
         // Calculate the hash of the operation to map the operation to a log.
-        let hash_idx = op.hash() % self.slog.len();
+        let hash_idx = op.hash() % self.logstate.len();
 
         // We can perform the read only if our replica is synced up against
         // the shared log. If it isn't, then try to combine until it is synced up.
-        let ctail = self.slog[hash_idx].get_ctail();
-        while !self.slog[hash_idx].is_replica_synced_for_reads(self.idx[hash_idx], ctail) {
+        let ctail = self.logstate[hash_idx].slog.get_ctail();
+        while !self.logstate[hash_idx]
+            .slog
+            .is_replica_synced_for_reads(self.logstate[hash_idx].idx, ctail)
+        {
             self.try_combine(tid, hash_idx);
             spin_loop();
         }
@@ -623,7 +640,7 @@ where
     fn make_pending(&self, op: <D as Dispatch>::WriteOperation, tid: usize, hash: usize) -> bool {
         loop {
             if self.contexts[tid - 1].enqueue(op.clone(), hash) {
-                self.pending[hash][tid - 1].store(true, Ordering::Release);
+                self.logstate[hash].pending[tid - 1].store(true, Ordering::Release);
                 break;
             }
         }
@@ -638,7 +655,7 @@ where
         for _i in 0..4 {
             if unsafe {
                 core::ptr::read_volatile(
-                    &self.combiners[hashidx]
+                    &self.logstate[hashidx].combiner
                         as *const crossbeam_utils::CachePadded<core::sync::atomic::AtomicUsize>
                         as *const usize,
                 )
@@ -649,7 +666,7 @@ where
         }
 
         // Try to become the combiner here. If this fails, then simply return.
-        if self.combiners[hashidx].compare_exchange_weak(
+        if self.logstate[hashidx].combiner.compare_exchange_weak(
             0,
             tid,
             Ordering::Acquire,
@@ -665,17 +682,17 @@ where
         // Allow other threads to perform flat combining once we have finished all our work.
         // At this point, we've dropped all mutable references to thread contexts and to
         // the staging buffer as well.
-        self.combiners[hashidx].store(0, Ordering::Release);
+        self.logstate[hashidx].combiner.store(0, Ordering::Release);
     }
 
     /// Performs one round of flat combining. Collects, appends and executes operations.
     #[inline(always)]
     fn combine(&self, hashidx: usize) {
         //  TODO: may need to be in a per-log state context
-        let mut buffer = self.buffer[hashidx].borrow_mut();
-        let mut operations = self.inflight[hashidx].borrow_mut();
-        let mut results = self.result[hashidx].borrow_mut();
-        let pending = &self.pending[hashidx];
+        let mut buffer = self.logstate[hashidx].buffer.borrow_mut();
+        let mut operations = self.logstate[hashidx].inflight.borrow_mut();
+        let mut results = self.logstate[hashidx].result.borrow_mut();
+        let pending = &self.logstate[hashidx].pending;
 
         buffer.clear();
         results.clear();
@@ -701,22 +718,26 @@ where
         {
             let f = |o: <D as Dispatch>::WriteOperation, i: usize| {
                 let resp = self.data.dispatch_mut(o);
-                if i == self.idx[hashidx] {
+                if i == self.logstate[hashidx].idx {
                     results.push(resp);
                 }
             };
-            self.slog[hashidx].append(&buffer, self.idx[hashidx], f);
+            self.logstate[hashidx]
+                .slog
+                .append(&buffer, self.logstate[hashidx].idx, f);
         }
 
         // Execute any operations on the shared log against this replica.
         {
             let mut f = |o: <D as Dispatch>::WriteOperation, i: usize| {
                 let resp = self.data.dispatch_mut(o);
-                if i == self.idx[hashidx] {
+                if i == self.logstate[hashidx].idx {
                     results.push(resp)
                 };
             };
-            self.slog[hashidx].exec(self.idx[hashidx], &mut f);
+            self.logstate[hashidx]
+                .slog
+                .exec(self.logstate[hashidx].idx, &mut f);
         }
 
         // Return/Enqueue responses back into the appropriate thread context(s).
@@ -788,17 +809,20 @@ mod test {
     fn test_replica_create() {
         let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new(1024, 1));
         let repl = Replica::<Data>::new(vec![slog]);
-        assert_eq!(repl.idx[0], 1);
-        assert_eq!(repl.combiners[0].load(Ordering::SeqCst), 0);
+        assert_eq!(repl.logstate[0].idx, 1);
+        assert_eq!(repl.logstate[0].combiner.load(Ordering::SeqCst), 0);
         assert_eq!(repl.next.load(Ordering::SeqCst), 1);
         assert_eq!(repl.contexts.len(), MAX_THREADS_PER_REPLICA);
         assert_eq!(
-            repl.buffer[0].borrow().capacity(),
+            repl.logstate[0].buffer.borrow().capacity(),
             MAX_THREADS_PER_REPLICA * Context::<u64, Result<u64, ()>>::batch_size()
         );
-        assert_eq!(repl.inflight[0].borrow().len(), MAX_THREADS_PER_REPLICA);
         assert_eq!(
-            repl.result[0].borrow().capacity(),
+            repl.logstate[0].inflight.borrow().len(),
+            MAX_THREADS_PER_REPLICA
+        );
+        assert_eq!(
+            repl.logstate[0].result.borrow().capacity(),
             MAX_THREADS_PER_REPLICA * Context::<u64, Result<u64, ()>>::batch_size()
         );
         assert_eq!(repl.data.junk.load(Ordering::Relaxed), 0);
@@ -849,7 +873,7 @@ mod test {
         repl.make_pending(OpWr(121), 1, 0);
         repl.try_combine(1, 0);
 
-        assert_eq!(repl.combiners[0].load(Ordering::SeqCst), 0);
+        assert_eq!(repl.logstate[0].combiner.load(Ordering::SeqCst), 0);
         assert_eq!(repl.data.junk.load(Ordering::Relaxed), 1);
         assert_eq!(repl.contexts[0].res(), Some(Ok(107)));
     }
@@ -875,7 +899,7 @@ mod test {
         let repl = Replica::<Data>::new(vec![slog]);
 
         repl.next.store(9, Ordering::SeqCst);
-        repl.combiners[0].store(8, Ordering::SeqCst);
+        repl.logstate[0].combiner.store(8, Ordering::SeqCst);
         repl.make_pending(OpWr(121), 1, 0);
         repl.try_combine(1, 0);
 
@@ -949,11 +973,11 @@ mod test {
         let repl = Replica::<Data>::new(logs.clone());
 
         for i in 0..logs.len() {
-            repl.combiners[i].store(i + 1, Ordering::Relaxed);
+            repl.logstate[i].combiner.store(i + 1, Ordering::Relaxed);
         }
 
         for i in 0..logs.len() {
-            assert_eq!(repl.combiners[i].load(Ordering::Relaxed), i + 1);
+            assert_eq!(repl.logstate[i].combiner.load(Ordering::Relaxed), i + 1);
         }
     }
 
@@ -971,11 +995,11 @@ mod test {
         let repl = Replica::<Data>::new(logs.clone());
 
         for i in 0..logs.len() + 1 {
-            repl.combiners[i].store(i + 1, Ordering::Relaxed);
+            repl.logstate[i].combiner.store(i + 1, Ordering::Relaxed);
         }
 
         for i in 0..logs.len() {
-            assert_eq!(repl.combiners[i].load(Ordering::Relaxed), i + 1);
+            assert_eq!(repl.logstate[i].combiner.load(Ordering::Relaxed), i + 1);
         }
     }
 
@@ -1033,7 +1057,7 @@ mod test {
             thread::sleep(time::Duration::from_secs(1));
             for i in 0..nlogs {
                 let tid = if i > 0 { i } else { nlogs };
-                assert_eq!(r.combiners[i].load(Ordering::SeqCst), tid);
+                assert_eq!(r.logstate[i].combiner.load(Ordering::SeqCst), tid);
             }
         }));
 
