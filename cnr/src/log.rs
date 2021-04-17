@@ -572,6 +572,9 @@ where
     pub(crate) fn get_ctail(&self) -> usize {
         self.ctail.load(Ordering::Relaxed)
     }
+
+    /// This method marks the entry finished.
+    pub(crate) fn fix_scan_entry(&self, _idx: usize) {}
 }
 
 impl<'a, T> Default for Log<'a, T>

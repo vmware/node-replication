@@ -164,6 +164,9 @@ where
     /// The vector is initialized with `MAX_THREADS_PER_REPLICA` elements.
     contexts: Vec<CachePadded<Context<<D as Dispatch>::WriteOperation, <D as Dispatch>::Response>>>,
 
+    /// Scan operation
+    offsets: Vec<RefCell<Vec<usize>>>,
+
     /// An instance of per log state maintained by each replica.
     logstate: Vec<CachePadded<LogState<'a, D>>>,
 }
@@ -268,15 +271,17 @@ where
                 data: CachePadded::new(D::default()),
                 logstate: Vec::with_capacity(logs.len()),
                 contexts: Vec::with_capacity(MAX_THREADS_PER_REPLICA),
+                offsets: Vec::with_capacity(MAX_THREADS_PER_REPLICA),
             });
 
             let mut replica = uninit_replica.assume_init();
             // Add `MAX_THREADS_PER_REPLICA` contexts
             for _idx in 0..MAX_THREADS_PER_REPLICA {
-                Arc::get_mut(&mut replica)
-                    .unwrap()
-                    .contexts
-                    .push(Default::default())
+                let replica_mut = Arc::get_mut(&mut replica).unwrap();
+                replica_mut.contexts.push(Default::default());
+                replica_mut
+                    .offsets
+                    .push(RefCell::new(Vec::with_capacity(logs.len())));
             }
 
             // Add per-log state
@@ -455,6 +460,42 @@ where
         self.get_response(idx.0, hash)
     }
 
+    fn append_scan_to_logs(
+        &self,
+        _op: <D as Dispatch>::WriteOperation,
+        _tid: usize,
+        _logidx: usize,
+    ) -> usize {
+        0
+    }
+
+    pub fn execute_mut_scan(
+        &self,
+        op: <D as Dispatch>::WriteOperation,
+        idx: ReplicaToken,
+    ) -> <D as Dispatch>::Response {
+        let mut entries = self.offsets[idx.0].borrow_mut();
+        entries.clear();
+
+        // Append the scan op in the logs
+        for logidx in 0..self.logstate.len() {
+            let entry = self.append_scan_to_logs(op.clone(), idx.0, logidx);
+            entries.push(entry);
+        }
+
+        // Update/wait for replica to be up to date
+        self.sync_for_scan(idx, &entries);
+
+        let resp = self.data.dispatch_mut(op);
+
+        // Fix scan log entries
+        for logidx in 0..self.logstate.len() {
+            self.logstate[logidx].slog.fix_scan_entry(entries[logidx]);
+        }
+
+        resp
+    }
+
     /// Executes a read-only operation against this replica and returns a response.
     /// `idx` is an identifier for the thread performing the execute operation.
     ///
@@ -581,6 +622,29 @@ where
         v(&self.data);
 
         self.logstate[0].combiner.store(0, Ordering::Release);
+    }
+
+    pub fn sync_for_scan(&self, idx: ReplicaToken, tails: &Vec<usize>) {
+        let nlogs = self.logstate.len();
+
+        loop {
+            let mut is_synced = false;
+            for logidx in 0..nlogs {
+                if !self.logstate[logidx]
+                    .slog
+                    .is_replica_synced_for_reads(self.logstate[logidx].idx, tails[logidx])
+                {
+                    is_synced = false;
+                    self.try_combine(idx.0, logidx);
+                    spin_loop();
+                }
+            }
+
+            // If all the log have reached to until scan entry; return.
+            if is_synced {
+                return;
+            }
+        }
     }
 
     /// This method is useful when a replica stops making progress and some threads
