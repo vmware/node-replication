@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use alloc::alloc::{alloc, dealloc, Layout};
+use alloc::sync::Arc;
+use alloc::vec::Vec;
 
 use core::cell::{Cell, UnsafeCell};
 use core::default::Default;
@@ -59,6 +61,13 @@ where
 
     /// Identifies the replica that issued the above operation.
     replica: usize,
+
+    /// Identifies if the operation is of scan type or not.
+    is_scan: bool,
+
+    /// If operation is of scan type, then `depends_on` stores
+    /// the offsets in other logs this operation depends on.
+    depends_on: Option<Arc<Vec<usize>>>,
 
     /// Indicates whether this entry represents a valid operation when on the log.
     alivef: AtomicBool,
@@ -227,6 +236,8 @@ where
                     Cell::new(Entry {
                         operation: None,
                         replica: 0usize,
+                        is_scan: false,
+                        depends_on: None,
                         alivef: AtomicBool::new(false),
                     }),
                 );
@@ -320,7 +331,12 @@ where
     /// as public due to being used by the benchmarking code.
     #[inline(always)]
     #[doc(hidden)]
-    pub fn append<F: FnMut(T, usize)>(&self, ops: &[T], idx: usize, mut s: F) {
+    pub fn append<F: FnMut(T, usize, bool, Option<Arc<Vec<usize>>>)>(
+        &self,
+        ops: &[T],
+        idx: usize,
+        mut s: F,
+    ) {
         let nops = ops.len();
         let mut iteration = 1;
         let mut waitgc = 1;
@@ -394,6 +410,8 @@ where
 
                 unsafe { (*e).operation = Some(ops[i].clone()) };
                 unsafe { (*e).replica = idx };
+                unsafe { (*e).is_scan = false };
+                unsafe { (*e).depends_on = None };
                 unsafe { (*e).alivef.store(m, Ordering::Release) };
             }
 
@@ -406,6 +424,80 @@ where
         }
     }
 
+    /// Adds a scan operation to the shared log.
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn try_append_scan(&self, op: &T, idx: usize, offset: &Vec<usize>) -> Result<usize, usize> {
+        let nops = 1;
+        let log_offset;
+
+        let tail = self.tail.load(Ordering::Relaxed);
+        let head = self.head.load(Ordering::Relaxed);
+
+        // If there are fewer than `GC_FROM_HEAD` entries on the log, then just
+        // try again. The replica that reserved entry (h + self.size - GC_FROM_HEAD)
+        // is currently trying to advance the head of the log. Keep refreshing the
+        // replica against the log to make sure that it isn't deadlocking GC.
+        if tail > head + self.size - GC_FROM_HEAD {
+            return Err(0);
+        }
+
+        // If on adding in the above entries there would be fewer than `GC_FROM_HEAD`
+        // entries left on the log, then we need to advance the head of the log.
+        if tail + nops > head + self.size - GC_FROM_HEAD {
+            return Err(0);
+        };
+
+        // Try reserving slots for the operations. If that fails, then restart
+        // from the beginning of this loop.
+        if self
+            .tail
+            .compare_exchange_weak(tail, tail + nops, Ordering::Acquire, Ordering::Acquire)
+            != Ok(tail)
+        {
+            return Err(0);
+        };
+
+        // Successfully reserved entries on the shared log. Add the operations in.
+        log_offset = tail;
+        let e = self.slog[self.index(log_offset)].as_ptr();
+        let mut m = self.lmasks[idx - 1].get();
+
+        if unsafe { (*e).alivef.load(Ordering::Relaxed) == m } {
+            m = !m;
+        }
+
+        // Add empty scan op to all the logs but 0. Reserve enrty and exit for 0. Use `fix_scan_entry`
+        // to update entry for log-0, as it requires the offsets for all the remaining logs.
+        if self.idx != 0 {
+            unsafe { (*e).operation = Some(op.clone()) };
+            unsafe { (*e).replica = idx };
+            unsafe { (*e).is_scan = true };
+            unsafe { (*e).depends_on = Some(Arc::new(vec![offset[0]])) };
+            unsafe { (*e).alivef.store(m, Ordering::Release) };
+        }
+
+        Ok(log_offset)
+    }
+
+    /// Update the depends_on field for scan operation. Replica mainatins the
+    /// offset for the scan entry and later it updates the remaining offset there.
+    pub fn fix_scan_entry(&self, op: &T, idx: usize, offsets: &Vec<usize>) {
+        let entry = offsets[0];
+        let e = self.slog[self.index(entry)].as_ptr();
+
+        let mut m = self.lmasks[idx - 1].get();
+        if unsafe { (*e).alivef.load(Ordering::Relaxed) == m } {
+            m = !m;
+        }
+
+        unsafe { (*e).operation = Some(op.clone()) };
+        unsafe { (*e).replica = idx };
+        unsafe { (*e).is_scan = true };
+        unsafe { (*e).depends_on = Some(Arc::new(offsets.to_vec())) };
+        unsafe { (*e).alivef.store(m, Ordering::Release) };
+    }
+
     /// Executes a passed in closure (`d`) on all operations starting from
     /// a replica's local tail on the shared log. The replica is identified through an
     /// `idx` passed in as an argument.
@@ -413,7 +505,11 @@ where
     /// The passed in closure is expected to take in two arguments: The operation
     /// from the shared log to be executed and the replica that issued it.
     #[inline(always)]
-    pub(crate) fn exec<F: FnMut(T, usize)>(&self, idx: usize, d: &mut F) {
+    pub(crate) fn exec<F: FnMut(T, usize, bool, Option<Arc<Vec<usize>>>)>(
+        &self,
+        idx: usize,
+        d: &mut F,
+    ) {
         // Load the logical log offset from which we must execute operations.
         let l = self.ltails[idx - 1].load(Ordering::Relaxed);
 
@@ -451,7 +547,20 @@ where
                 iteration += 1;
             }
 
-            unsafe { d((*e).operation.as_ref().unwrap().clone(), (*e).replica) };
+            let mut depends_on = None;
+            unsafe {
+                if (*e).is_scan {
+                    depends_on = Some((*e).depends_on.as_ref().unwrap().clone());
+                }
+            }
+            unsafe {
+                d(
+                    (*e).operation.as_ref().unwrap().clone(),
+                    (*e).replica,
+                    (*e).is_scan,
+                    depends_on,
+                )
+            };
 
             // Looks like we're going to wrap around now; flip this replica's local mask.
             if self.index(i) == self.size - 1 {
@@ -476,7 +585,11 @@ where
     /// then this method will never return. Accepts a closure that is passed into exec()
     /// to ensure that this replica does not deadlock GC.
     #[inline(always)]
-    fn advance_head<F: FnMut(T, usize)>(&self, rid: usize, mut s: &mut F) {
+    fn advance_head<F: FnMut(T, usize, bool, Option<Arc<Vec<usize>>>)>(
+        &self,
+        rid: usize,
+        mut s: &mut F,
+    ) {
         // Keep looping until we can advance the head and create some free space
         // on the log. If one of the replicas has stopped making progress, then
         // this method might never return.
@@ -572,9 +685,6 @@ where
     pub(crate) fn get_ctail(&self) -> usize {
         self.ctail.load(Ordering::Relaxed)
     }
-
-    /// This method marks the entry finished.
-    pub(crate) fn fix_scan_entry(&self, _idx: usize) {}
 }
 
 impl<'a, T> Default for Log<'a, T>

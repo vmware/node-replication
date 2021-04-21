@@ -460,40 +460,47 @@ where
         self.get_response(idx.0, hash)
     }
 
-    fn append_scan_to_logs(
-        &self,
-        _op: <D as Dispatch>::WriteOperation,
-        _tid: usize,
-        _logidx: usize,
-    ) -> usize {
-        0
-    }
-
     pub fn execute_mut_scan(
         &self,
         op: <D as Dispatch>::WriteOperation,
         idx: ReplicaToken,
     ) -> <D as Dispatch>::Response {
+        let nlogs = self.logstate.len();
+
+        // If there is only one log in the system, then execute
+        // scan operation as a mutable operations.
+        if nlogs == 1 {
+            return self.execute_mut(op, idx);
+        }
+
         let mut entries = self.offsets[idx.0].borrow_mut();
         entries.clear();
 
-        // Append the scan op in the logs
-        for logidx in 0..self.logstate.len() {
-            let entry = self.append_scan_to_logs(op.clone(), idx.0, logidx);
+        // We don't have response buffer here, which means that we cannot execute exec()
+        // inside `append_scan` function. if there is no space in the log for a single
+        // entry, call try_combine first.
+        for logidx in 0..nlogs {
+            let entry = loop {
+                match self.logstate[logidx]
+                    .slog
+                    .try_append_scan(&op, idx.0, &entries)
+                {
+                    Ok(entry) => break entry,
+                    Err(_) => {
+                        self.try_combine(idx.0, logidx);
+                        continue;
+                    }
+                }
+            };
             entries.push(entry);
         }
 
+        self.logstate[0].slog.fix_scan_entry(&op, idx.0, &entries);
+
         // Update/wait for replica to be up to date
-        self.sync_for_scan(idx, &entries);
+        self.sync_for_scan(idx.0, 0, self.logstate.len(), &entries);
 
-        let resp = self.data.dispatch_mut(op);
-
-        // Fix scan log entries
-        for logidx in 0..self.logstate.len() {
-            self.logstate[logidx].slog.fix_scan_entry(entries[logidx]);
-        }
-
-        resp
+        self.data.dispatch_mut(op)
     }
 
     /// Executes a read-only operation against this replica and returns a response.
@@ -613,7 +620,7 @@ where
             spin_loop();
         }
 
-        let mut f = |o: <D as Dispatch>::WriteOperation, _i: usize| {
+        let mut f = |o: <D as Dispatch>::WriteOperation, _i: usize, _is_scan, _depends_on| {
             self.data.dispatch_mut(o);
         };
 
@@ -624,18 +631,16 @@ where
         self.logstate[0].combiner.store(0, Ordering::Release);
     }
 
-    pub fn sync_for_scan(&self, idx: ReplicaToken, tails: &Vec<usize>) {
-        let nlogs = self.logstate.len();
-
+    fn sync_for_scan(&self, tid: usize, start: usize, end: usize, tails: &Vec<usize>) {
         loop {
             let mut is_synced = false;
-            for logidx in 0..nlogs {
+            for logidx in start..end {
                 if !self.logstate[logidx]
                     .slog
                     .is_replica_synced_for_reads(self.logstate[logidx].idx, tails[logidx])
                 {
                     is_synced = false;
-                    self.try_combine(idx.0, logidx);
+                    self.try_combine(tid, logidx);
                     spin_loop();
                 }
             }
@@ -741,7 +746,7 @@ where
         }
 
         // Successfully became the combiner; perform one round of flat combining.
-        self.combine(hashidx);
+        self.combine(tid, hashidx);
 
         // Allow other threads to perform flat combining once we have finished all our work.
         // At this point, we've dropped all mutable references to thread contexts and to
@@ -751,7 +756,7 @@ where
 
     /// Performs one round of flat combining. Collects, appends and executes operations.
     #[inline(always)]
-    fn combine(&self, hashidx: usize) {
+    fn combine(&self, thread_id: usize, hashidx: usize) {
         //  TODO: may need to be in a per-log state context
         let mut buffer = self.logstate[hashidx].buffer.borrow_mut();
         let mut operations = self.logstate[hashidx].inflight.borrow_mut();
@@ -780,10 +785,27 @@ where
         // Append all collected operations into the shared log. We pass a closure
         // in here because operations on the log might need to be consumed for GC.
         {
-            let f = |o: <D as Dispatch>::WriteOperation, i: usize| {
-                let resp = self.data.dispatch_mut(o);
-                if i == self.logstate[hashidx].idx {
-                    results.push(resp);
+            let f = |o: <D as Dispatch>::WriteOperation,
+                     i: usize,
+                     is_scan,
+                     depends_on: Option<Arc<Vec<usize>>>| match is_scan {
+                false => {
+                    let resp = self.data.dispatch_mut(o);
+                    if i == self.logstate[hashidx].idx {
+                        results.push(resp);
+                    }
+                }
+                true => {
+                    let depends_on = depends_on.as_ref().unwrap();
+                    // TODO1: Can there be an infinite loop here, combiner is waiting on the self combining?
+                    // TODO2: What happens when there is/are only 2 logs in the system?
+                    match depends_on.len() != self.logstate.len() {
+                        true => self.sync_for_scan(thread_id, 0, 1, depends_on),
+                        false => {
+                            self.sync_for_scan(thread_id, 1, self.logstate.len(), depends_on);
+                            self.data.dispatch_mut(o);
+                        }
+                    }
                 }
             };
             self.logstate[hashidx]
@@ -793,11 +815,19 @@ where
 
         // Execute any operations on the shared log against this replica.
         {
-            let mut f = |o: <D as Dispatch>::WriteOperation, i: usize| {
-                let resp = self.data.dispatch_mut(o);
-                if i == self.logstate[hashidx].idx {
-                    results.push(resp)
-                };
+            let mut f = |o: <D as Dispatch>::WriteOperation, i: usize, is_scan, _depends_on| {
+                match is_scan {
+                    false => {
+                        let resp = self.data.dispatch_mut(o);
+                        if i == self.logstate[hashidx].idx {
+                            results.push(resp)
+                        };
+                    }
+                    true => {
+                        // Do something here.
+                        ()
+                    }
+                }
             };
             self.logstate[hashidx]
                 .slog
