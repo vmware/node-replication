@@ -126,7 +126,7 @@ impl<'a, T: Dispatch + Sync + Default> ReplicaTrait for Replica<'a, T> {
         op: <Self::D as Dispatch>::WriteOperation,
         idx: ReplicaToken,
     ) -> <Self::D as Dispatch>::Response {
-        self.execute_mut(op, idx)
+        self.execute_mut_scan(op, idx)
     }
 
     fn exec_ro(

@@ -242,7 +242,7 @@ where
 
     let increment = if topology.cores() > 120 { 8 } else { 4 };
 
-    let mut nlog = 0;
+    let mut nlog = 4;
     while nlog <= cores_on_socket {
         let logs = if nlog == 0 { 1 } else { nlog };
         let bench_name = format!("{}{}-scaleout-wr{}", name, logs, write_ratio);
@@ -284,7 +284,7 @@ fn main() {
     utils::disable_dvfs();
 
     let mut harness = Default::default();
-    let write_ratios = vec![0, 10, 80, 100];
+    let write_ratios = vec![100];
 
     for write_ratio in write_ratios.into_iter() {
         /*concurrent_ds_scale_out::<SegQueueWrapper>(
@@ -299,14 +299,14 @@ fn main() {
             "skiplist",
             write_ratio,
             Box::new(move || generate_sops_concurrent(NOP, write_ratio, KEY_SPACE)),
-        );*/
+        );
 
         concurrent_ds_scale_out::<lockfree_partitioned::SkipListWrapper>(
             &mut harness,
             "skiplist-partinput",
             write_ratio,
             Box::new(move || generate_sops_concurrent(NOP, write_ratio, KEY_SPACE)),
-        );
+        );*/
 
         concurrent_ds_nr_scale_out::<Replica<lockfree_partitioned::SkipListWrapper>>(
             &mut harness,
