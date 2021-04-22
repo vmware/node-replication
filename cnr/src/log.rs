@@ -469,7 +469,7 @@ where
 
         // Add empty scan op to all the logs but 0. Reserve enrty and exit for 0. Use `fix_scan_entry`
         // to update entry for log-0, as it requires the offsets for all the remaining logs.
-        if self.idx != 0 {
+        if self.idx != 1 {
             unsafe { (*e).operation = Some(op.clone()) };
             unsafe { (*e).replica = idx };
             unsafe { (*e).is_scan = true };

@@ -633,7 +633,7 @@ where
 
     fn sync_for_scan(&self, tid: usize, start: usize, end: usize, tails: &Vec<usize>) {
         loop {
-            let mut is_synced = false;
+            let mut is_synced = true;
             for logidx in start..end {
                 if !self.logstate[logidx]
                     .slog
@@ -815,7 +815,10 @@ where
 
         // Execute any operations on the shared log against this replica.
         {
-            let mut f = |o: <D as Dispatch>::WriteOperation, i: usize, is_scan, _depends_on| {
+            let mut f = |o: <D as Dispatch>::WriteOperation,
+                         i: usize,
+                         is_scan,
+                         depends_on: Option<Arc<Vec<usize>>>| {
                 match is_scan {
                     false => {
                         let resp = self.data.dispatch_mut(o);
@@ -824,8 +827,16 @@ where
                         };
                     }
                     true => {
-                        // Do something here.
-                        ()
+                        let depends_on = depends_on.as_ref().unwrap();
+                        // TODO1: Can there be an infinite loop here, combiner is waiting on the self combining?
+                        // TODO2: What happens when there is/are only 2 logs in the system?
+                        match depends_on.len() != self.logstate.len() {
+                            true => self.sync_for_scan(thread_id, 0, 1, depends_on),
+                            false => {
+                                self.sync_for_scan(thread_id, 1, self.logstate.len(), depends_on);
+                                self.data.dispatch_mut(o);
+                            }
+                        }
                     }
                 }
             };
