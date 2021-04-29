@@ -505,13 +505,22 @@ where
             entries.push(entry);
         }
 
+        // Update scan entry depends_on.
         self.logstate[0].slog.fix_scan_entry(&op, idx.0, &entries);
-        self.release_scan_lock();
 
         // Update/wait for replica to be up to date
-        self.sync_for_scan(idx.0, 0, self.logstate.len(), &entries);
+        self.sync_for_scan(idx.0, 0, self.logstate.len(), true, &entries);
 
-        self.data.dispatch_mut(op)
+        let mut resp = None;
+        {
+            let mut f = |o: <D as Dispatch>::WriteOperation| {
+                resp = Some(self.data.dispatch_mut(o));
+            };
+            self.logstate[0].slog.exec_scan(entries[0], &mut f);
+        }
+        self.release_scan_lock();
+
+        resp.unwrap()
     }
 
     /// Executes a read-only operation against this replica and returns a response.
@@ -642,7 +651,14 @@ where
         self.logstate[0].combiner.store(0, Ordering::Release);
     }
 
-    fn sync_for_scan(&self, tid: usize, start: usize, end: usize, tails: &Vec<usize>) {
+    fn sync_for_scan(
+        &self,
+        tid: usize,
+        start: usize,
+        end: usize,
+        try_combine: bool,
+        tails: &Vec<usize>,
+    ) {
         loop {
             let mut is_synced = true;
             for logidx in start..end {
@@ -651,7 +667,9 @@ where
                     .is_replica_synced_for_reads(self.logstate[logidx].idx, tails[logidx])
                 {
                     is_synced = false;
-                    self.try_combine(tid, logidx);
+                    if try_combine == true {
+                        self.try_combine(tid, logidx);
+                    }
                     spin_loop();
                 }
             }
@@ -759,7 +777,13 @@ where
 
     /// Acquire the scan lock.
     fn acquire_scan_lock(&self, tid: usize) {
-        while !self.try_scan_lock(tid) {}
+        while !self.try_scan_lock(tid) {
+            // Try to make progress while waiting for scan lock.
+            for logidx in 0..self.logstate.len() {
+                self.try_combine(tid, logidx);
+                spin_loop();
+            }
+        }
     }
 
     /// Release the scan lock.
@@ -851,9 +875,15 @@ where
                     // TODO1: Can there be an infinite loop here, combiner is waiting on the self combining?
                     // TODO2: What happens when there is/are only 2 logs in the system?
                     match depends_on.len() != self.logstate.len() {
-                        true => self.sync_for_scan(thread_id, 0, 1, depends_on),
+                        true => self.sync_for_scan(thread_id, 0, 1, false, depends_on),
                         false => {
-                            self.sync_for_scan(thread_id, 1, self.logstate.len(), depends_on);
+                            self.sync_for_scan(
+                                thread_id,
+                                1,
+                                self.logstate.len(),
+                                false,
+                                depends_on,
+                            );
                             self.data.dispatch_mut(o);
                         }
                     }
@@ -882,9 +912,15 @@ where
                         // TODO1: Can there be an infinite loop here, combiner is waiting on the self combining?
                         // TODO2: What happens when there is/are only 2 logs in the system?
                         match depends_on.len() != self.logstate.len() {
-                            true => self.sync_for_scan(thread_id, 0, 1, depends_on),
+                            true => self.sync_for_scan(thread_id, 0, 1, false, depends_on),
                             false => {
-                                self.sync_for_scan(thread_id, 1, self.logstate.len(), depends_on);
+                                self.sync_for_scan(
+                                    thread_id,
+                                    1,
+                                    self.logstate.len(),
+                                    false,
+                                    depends_on,
+                                );
                                 self.data.dispatch_mut(o);
                             }
                         }
