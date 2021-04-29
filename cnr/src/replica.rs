@@ -448,7 +448,8 @@ where
         op: <D as Dispatch>::WriteOperation,
         idx: ReplicaToken,
     ) -> <D as Dispatch>::Response {
-        let hash = op.hash() % self.logstate.len();
+        let nthreads = self.next.load(Ordering::Relaxed) - 1;
+        let hash = (op.hash() % nthreads) % self.logstate.len();
 
         // Enqueue the operation onto the thread local batch and then try to flat combine.
         self.make_pending(op.clone(), idx.0, hash);
@@ -466,10 +467,11 @@ where
         idx: ReplicaToken,
     ) -> <D as Dispatch>::Response {
         let nlogs = self.logstate.len();
+        let nthreads = self.next.load(Ordering::Relaxed) - 1;
 
         // If there is only one log in the system, then execute
         // scan operation as a mutable operations.
-        if nlogs == 1 {
+        if nlogs == 1 || nthreads == 1 {
             return self.execute_mut(op, idx);
         }
 
@@ -687,7 +689,8 @@ where
         tid: usize,
     ) -> <D as Dispatch>::Response {
         // Calculate the hash of the operation to map the operation to a log.
-        let hash_idx = op.hash() % self.logstate.len();
+        let nthreads = self.next.load(Ordering::Relaxed) - 1;
+        let hash_idx = (op.hash() % nthreads) % self.logstate.len();
 
         // We can perform the read only if our replica is synced up against
         // the shared log. If it isn't, then try to combine until it is synced up.
