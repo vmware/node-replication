@@ -169,6 +169,10 @@ where
 
     /// An instance of per log state maintained by each replica.
     logstate: Vec<CachePadded<LogState<'a, D>>>,
+
+    /// A scan lock, needed to atomically append scan entries in multiple logs;
+    /// otherwise there might be a circular dependency that can cause a deadlock.
+    scanlock: CachePadded<AtomicUsize>,
 }
 
 /// The Replica is Sync. Member variables are protected by a CAS on `combiner`.
@@ -272,6 +276,7 @@ where
                 logstate: Vec::with_capacity(logs.len()),
                 contexts: Vec::with_capacity(MAX_THREADS_PER_REPLICA),
                 offsets: Vec::with_capacity(MAX_THREADS_PER_REPLICA),
+                scanlock: CachePadded::new(AtomicUsize::new(0)),
             });
 
             let mut replica = uninit_replica.assume_init();
@@ -475,6 +480,9 @@ where
             return self.execute_mut(op, idx);
         }
 
+        // Acquire the scan lock.
+        self.acquire_scan_lock(idx.0);
+
         let mut entries = self.offsets[idx.0].borrow_mut();
         entries.clear();
 
@@ -498,6 +506,7 @@ where
         }
 
         self.logstate[0].slog.fix_scan_entry(&op, idx.0, &entries);
+        self.release_scan_lock();
 
         // Update/wait for replica to be up to date
         self.sync_for_scan(idx.0, 0, self.logstate.len(), &entries);
@@ -717,6 +726,45 @@ where
             }
         }
         true
+    }
+
+    /// Try to acquire the scan lock.
+    fn try_scan_lock(&self, tid: usize) -> bool {
+        for _i in 0..4 {
+            if unsafe {
+                core::ptr::read_volatile(
+                    &self.scanlock
+                        as *const crossbeam_utils::CachePadded<core::sync::atomic::AtomicUsize>
+                        as *const usize,
+                )
+            } != 0
+            {
+                /* someone else has the lock */
+                return false;
+            };
+        }
+
+        if self
+            .scanlock
+            .compare_exchange_weak(0, tid, Ordering::Acquire, Ordering::Acquire)
+            != Ok(0)
+        {
+            /* cas failed, we don't hold the lock */
+            return false;
+        }
+
+        /* successfully acquired the lock */
+        return true;
+    }
+
+    /// Acquire the scan lock.
+    fn acquire_scan_lock(&self, tid: usize) {
+        while !self.try_scan_lock(tid) {}
+    }
+
+    /// Release the scan lock.
+    fn release_scan_lock(&self) {
+        self.scanlock.store(0, Ordering::Release);
     }
 
     /// Appends an operation to the log and attempts to perform flat combining.
