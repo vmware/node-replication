@@ -86,6 +86,9 @@ where
     /// the cost of the compare_and_swap() on the tail of the log.
     buffer: CachePadded<RefCell<Vec<<D as Dispatch>::WriteOperation>>>,
 
+    /// A buffer of scan type operations for flat combining.
+    scan_buffer: CachePadded<RefCell<Vec<<D as Dispatch>::WriteOperation>>>,
+
     /// Number of operations collected by the combiner from each thread at any
     /// given point of time. Index `i` holds the number of operations collected from
     /// thread with identifier `i + 1`.
@@ -120,6 +123,7 @@ where
                     ),
                 ),
             inflight: CachePadded::new(RefCell::new(arr![Default::default(); 256])),
+            scan_buffer: CachePadded::new(RefCell::new(Vec::with_capacity(1))),
             result:
                 CachePadded::new(
                     RefCell::new(
@@ -457,7 +461,7 @@ where
         let hash = (op.hash() % nthreads) % self.logstate.len();
 
         // Enqueue the operation onto the thread local batch and then try to flat combine.
-        self.make_pending(op.clone(), idx.0, hash);
+        self.make_pending(op.clone(), idx.0, hash, false);
 
         // A thread becomes combiner for operations with hash same as its own operation.
         self.try_combine(idx.0, hash);
@@ -482,8 +486,26 @@ where
 
         // Acquire the scan lock.
         self.acquire_scan_lock(idx.0);
+        let hash = 0; /* Fake hash; scan op is appended to each log.*/
 
-        let mut entries = self.offsets[idx.0].borrow_mut();
+        // Enqueue the operation onto the thread local batch and then try to flat combine.
+        self.make_pending(op.clone(), idx.0, 0, true);
+
+        // A thread becomes combiner for operations with hash same as its own operation.
+        self.try_combine(idx.0, hash);
+
+        // Return the response to the caller function.
+        let resp = self.get_response(idx.0, hash);
+        self.release_scan_lock();
+
+        //error!("{}", idx.0);
+        resp
+    }
+
+    pub fn append_scan(&self, op: <D as Dispatch>::WriteOperation, tid: usize) {
+        let nlogs = self.logstate.len();
+
+        let mut entries = self.offsets[tid].borrow_mut();
         entries.clear();
 
         // We don't have response buffer here, which means that we cannot execute exec()
@@ -491,36 +513,26 @@ where
         // entry, call try_combine first.
         for logidx in 0..nlogs {
             let entry = loop {
-                match self.logstate[logidx]
-                    .slog
-                    .try_append_scan(&op, idx.0, &entries)
-                {
+                match self.logstate[logidx].slog.try_append_scan(
+                    &op,
+                    self.logstate[logidx].idx,
+                    &entries,
+                ) {
                     Ok(entry) => break entry,
                     Err(_) => {
-                        self.try_combine(idx.0, logidx);
+                        self.try_combine(tid, logidx);
                         continue;
                     }
                 }
             };
             entries.push(entry);
         }
+        //error!("{} - {:?}", tid, entries);
 
         // Update scan entry depends_on.
-        self.logstate[0].slog.fix_scan_entry(&op, idx.0, &entries);
-
-        // Update/wait for replica to be up to date
-        self.sync_for_scan(idx.0, 0, self.logstate.len(), true, &entries);
-
-        let mut resp = None;
-        {
-            let mut f = |o: <D as Dispatch>::WriteOperation| {
-                resp = Some(self.data.dispatch_mut(o));
-            };
-            self.logstate[0].slog.exec_scan(entries[0], &mut f);
-        }
-        self.release_scan_lock();
-
-        resp.unwrap()
+        self.logstate[0]
+            .slog
+            .fix_scan_entry(&op, self.logstate[0].idx, &entries);
     }
 
     /// Executes a read-only operation against this replica and returns a response.
@@ -736,9 +748,15 @@ where
     /// Enqueues an operation inside a thread local context. Returns a boolean
     /// indicating whether the operation was enqueued (true) or not (false).
     #[inline(always)]
-    fn make_pending(&self, op: <D as Dispatch>::WriteOperation, tid: usize, hash: usize) -> bool {
+    fn make_pending(
+        &self,
+        op: <D as Dispatch>::WriteOperation,
+        tid: usize,
+        hash: usize,
+        is_scan: bool,
+    ) -> bool {
         loop {
-            if self.contexts[tid - 1].enqueue(op.clone(), hash) {
+            if self.contexts[tid - 1].enqueue(op.clone(), hash, is_scan) {
                 self.logstate[hash].pending[tid - 1].store(true, Ordering::Release);
                 break;
             }
@@ -834,16 +852,19 @@ where
     fn combine(&self, thread_id: usize, hashidx: usize) {
         //  TODO: may need to be in a per-log state context
         let mut buffer = self.logstate[hashidx].buffer.borrow_mut();
+        let mut scan_buffer = self.logstate[hashidx].scan_buffer.borrow_mut();
         let mut operations = self.logstate[hashidx].inflight.borrow_mut();
         let mut results = self.logstate[hashidx].result.borrow_mut();
         let pending = &self.logstate[hashidx].pending;
 
         buffer.clear();
+        scan_buffer.clear();
         results.clear();
 
         let next = self.next.load(Ordering::Relaxed);
 
         // Collect operations from each thread registered with this replica.
+        let mut scan_tid = 0;
         for tid in 1..next {
             if pending[tid - 1].compare_exchange_weak(
                 true,
@@ -853,7 +874,11 @@ where
             ) == Ok(true)
             {
                 // pass hash of current op to contexts, only get ops from context that have the same hash/log id
-                operations[tid - 1] = self.contexts[tid - 1].ops(&mut buffer, hashidx);
+                operations[tid - 1] =
+                    self.contexts[tid - 1].ops(&mut buffer, &mut scan_buffer, hashidx);
+                if scan_buffer.len() > 0 {
+                    scan_tid = tid;
+                }
             }
         }
 
@@ -884,7 +909,10 @@ where
                                 false,
                                 depends_on,
                             );
-                            self.data.dispatch_mut(o);
+                            let resp = self.data.dispatch_mut(o);
+                            if i == self.logstate[hashidx].idx {
+                                results.push(resp)
+                            };
                         }
                     }
                 }
@@ -892,6 +920,12 @@ where
             self.logstate[hashidx]
                 .slog
                 .append(&buffer, self.logstate[hashidx].idx, f);
+
+            if scan_tid != 0 {
+                // Only one outstanding scan operation per log is allowed for now.
+                assert_eq!(scan_buffer.len(), 1);
+                self.append_scan(scan_buffer[0].clone(), thread_id);
+            }
         }
 
         // Execute any operations on the shared log against this replica.
@@ -921,7 +955,10 @@ where
                                     false,
                                     depends_on,
                                 );
-                                self.data.dispatch_mut(o);
+                                let resp = self.data.dispatch_mut(o);
+                                if i == self.logstate[hashidx].idx {
+                                    results.push(resp)
+                                };
                             }
                         }
                     }
@@ -937,7 +974,7 @@ where
         // TODO: hashing makes this non-linear, need to take into account which operations
         // belong to our current combiner round...
         for i in 1..next {
-            if operations[i - 1] == 0 {
+            if operations[i - 1] == 0 || i == scan_tid {
                 continue;
             };
 
@@ -945,6 +982,13 @@ where
             self.contexts[i - 1].enqueue_resps(&results[s..f]);
             s += operations[i - 1];
             operations[i - 1] = 0;
+        }
+
+        // Add scan-op results at the end
+        if scan_tid != 0 {
+            f += operations[scan_tid - 1];
+            self.contexts[scan_tid - 1].enqueue_resps(&results[s..f]);
+            operations[scan_tid - 1] = 0;
         }
     }
 }

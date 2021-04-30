@@ -575,44 +575,6 @@ where
         self.ltails[idx - 1].store(t, Ordering::Relaxed);
     }
 
-    #[inline(always)]
-    pub(crate) fn exec_scan<F: FnMut(T)>(&self, offset: usize, f: &mut F) {
-        let idx = self.idx;
-        // Load the logical log offset from which we must execute operations.
-        let l = self.ltails[idx - 1].load(Ordering::Relaxed);
-        assert_eq!(l, offset);
-
-        // Check if we have any work to do by comparing our local tail with the log's
-        // global tail. If they're equal, then we're done here and can simply return.
-        let t = self.tail.load(Ordering::Relaxed);
-        if l == t {
-            return;
-        }
-
-        let h = self.head.load(Ordering::Relaxed);
-
-        // Make sure we're within the shared log. If we aren't, then panic.
-        if l > t || l < h {
-            panic!("Local tail not within the shared log!")
-        };
-
-        let e = self.slog[self.index(l)].as_ptr();
-
-        while unsafe { (*e).alivef.load(Ordering::Acquire) != self.lmasks[idx - 1].get() } {}
-
-        unsafe { f((*e).operation.as_ref().unwrap().clone()) };
-
-        // Looks like we're going to wrap around now; flip this replica's local mask.
-        if self.index(l) == self.size - 1 {
-            self.lmasks[idx - 1].set(!self.lmasks[idx - 1].get());
-        }
-
-        // Update the completed tail after we've executed the fake operation.
-        // Also update this replica's local tail.
-        self.ctail.fetch_max(l + 1, Ordering::Relaxed);
-        self.ltails[idx - 1].store(l + 1, Ordering::Relaxed);
-    }
-
     /// Returns a physical index given a logical index into the shared log.
     #[inline(always)]
     fn index(&self, logical: usize) -> usize {
