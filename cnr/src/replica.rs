@@ -502,10 +502,15 @@ where
         resp
     }
 
-    pub fn append_scan(&self, op: <D as Dispatch>::WriteOperation, tid: usize) {
+    pub fn append_scan(
+        &self,
+        op: <D as Dispatch>::WriteOperation,
+        thread_id: usize,
+        results: &mut Vec<<D as Dispatch>::Response>,
+    ) {
         let nlogs = self.logstate.len();
 
-        let mut entries = self.offsets[tid].borrow_mut();
+        let mut entries = self.offsets[thread_id].borrow_mut();
         entries.clear();
 
         // We don't have response buffer here, which means that we cannot execute exec()
@@ -513,16 +518,47 @@ where
         // entry, call try_combine first.
         for logidx in 0..nlogs {
             let entry = loop {
+                let f = |o: <D as Dispatch>::WriteOperation,
+                         i: usize,
+                         is_scan,
+                         depends_on: Option<Arc<Vec<usize>>>| {
+                    match is_scan {
+                        false => {
+                            let resp = self.data.dispatch_mut(o);
+                            if i == self.logstate[logidx].idx {
+                                results.push(resp);
+                            }
+                        }
+                        true => {
+                            let depends_on = depends_on.as_ref().unwrap();
+                            match depends_on.len() != self.logstate.len() {
+                                true => self.sync_for_scan(thread_id, 0, 1, false, depends_on),
+                                false => {
+                                    self.sync_for_scan(
+                                        thread_id,
+                                        1,
+                                        self.logstate.len(),
+                                        false,
+                                        depends_on,
+                                    );
+                                    let resp = self.data.dispatch_mut(o);
+                                    if i == self.logstate[logidx].idx {
+                                        results.push(resp)
+                                    };
+                                }
+                            }
+                        }
+                    }
+                };
+
                 match self.logstate[logidx].slog.try_append_scan(
                     &op,
                     self.logstate[logidx].idx,
                     &entries,
+                    f,
                 ) {
                     Ok(entry) => break entry,
-                    Err(_) => {
-                        self.try_combine(tid, logidx);
-                        continue;
-                    }
+                    Err(_) => continue,
                 }
             };
             entries.push(entry);
@@ -924,7 +960,7 @@ where
             if scan_tid != 0 {
                 // Only one outstanding scan operation per log is allowed for now.
                 assert_eq!(scan_buffer.len(), 1);
-                self.append_scan(scan_buffer[0].clone(), thread_id);
+                self.append_scan(scan_buffer[0].clone(), thread_id, &mut results);
             }
         }
 

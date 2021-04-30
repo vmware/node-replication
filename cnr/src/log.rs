@@ -427,7 +427,13 @@ where
     /// Adds a scan operation to the shared log.
     #[inline(always)]
     #[doc(hidden)]
-    pub fn try_append_scan(&self, op: &T, idx: usize, offset: &Vec<usize>) -> Result<usize, usize> {
+    pub fn try_append_scan<F: FnMut(T, usize, bool, Option<Arc<Vec<usize>>>)>(
+        &self,
+        op: &T,
+        idx: usize,
+        offset: &Vec<usize>,
+        mut s: F,
+    ) -> Result<usize, usize> {
         let nops = 1;
         let log_offset;
 
@@ -439,13 +445,15 @@ where
         // is currently trying to advance the head of the log. Keep refreshing the
         // replica against the log to make sure that it isn't deadlocking GC.
         if tail > head + self.size - GC_FROM_HEAD {
+            self.exec(idx, &mut s);
             return Err(0);
         }
 
         // If on adding in the above entries there would be fewer than `GC_FROM_HEAD`
         // entries left on the log, then we need to advance the head of the log.
+        let mut advance = false;
         if tail + nops > head + self.size - GC_FROM_HEAD {
-            return Err(0);
+            advance = true;
         };
 
         // Try reserving slots for the operations. If that fails, then restart
@@ -475,6 +483,11 @@ where
             unsafe { (*e).is_scan = true };
             unsafe { (*e).depends_on = Some(Arc::new(vec![offset[0]])) };
             unsafe { (*e).alivef.store(m, Ordering::Release) };
+        }
+
+        // If needed, advance the head of the log forward to make room on the log.
+        if advance {
+            self.advance_head(idx, &mut s);
         }
 
         Ok(log_offset)
