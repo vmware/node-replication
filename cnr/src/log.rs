@@ -8,6 +8,7 @@ use alloc::vec::Vec;
 use core::cell::{Cell, UnsafeCell};
 use core::default::Default;
 use core::fmt;
+use core::hint::spin_loop;
 use core::mem::{align_of, size_of};
 use core::ops::{Drop, FnMut};
 use core::slice::from_raw_parts_mut;
@@ -130,7 +131,7 @@ where
     /// Required for garbage collection; since replicas make progress over the log
     /// independently, we want to make sure that we don't garbage collect operations
     /// that haven't been executed by all replicas.
-    ltails: [CachePadded<AtomicUsize>; MAX_REPLICAS],
+    pub ltails: [CachePadded<AtomicUsize>; MAX_REPLICAS],
 
     /// Identifier that will be allocated to the next replica that registers with
     /// this Log. Also required to correctly index into ltails above.
@@ -148,6 +149,9 @@ where
     /// consumption on that replica. If the application is proactively taking measures to
     /// consume the log on all the replicas, then the variable can be initialized to default.
     gc: UnsafeCell<*const dyn FnMut(usize, usize)>,
+
+    /// Use to append scan op atomically to all the logs.
+    scanlock: CachePadded<AtomicUsize>,
 }
 
 impl<'a, T> fmt::Debug for Log<'a, T>
@@ -262,6 +266,7 @@ where
             next: CachePadded::new(AtomicUsize::new(1usize)),
             lmasks: fls,
             gc: UnsafeCell::new(&|_lid: usize, _rid: usize| {}),
+            scanlock: CachePadded::new(AtomicUsize::new(0)),
         }
     }
 
@@ -509,6 +514,47 @@ where
         unsafe { (*e).is_scan = true };
         unsafe { (*e).depends_on = Some(Arc::new(offsets.to_vec())) };
         unsafe { (*e).alivef.store(m, Ordering::Release) };
+    }
+
+    /// Try to acquire the scan lock.
+    fn try_scan_lock(&self, tid: usize) -> bool {
+        for _i in 0..4 {
+            if unsafe {
+                core::ptr::read_volatile(
+                    &self.scanlock
+                        as *const crossbeam_utils::CachePadded<core::sync::atomic::AtomicUsize>
+                        as *const usize,
+                )
+            } != 0
+            {
+                /* someone else has the lock */
+                return false;
+            };
+        }
+
+        if self
+            .scanlock
+            .compare_exchange_weak(0, tid, Ordering::Acquire, Ordering::Acquire)
+            != Ok(0)
+        {
+            /* cas failed, we don't hold the lock */
+            return false;
+        }
+
+        /* successfully acquired the lock */
+        return true;
+    }
+
+    /// Acquire the scan lock.
+    pub(crate) fn acquire_scan_lock(&self, tid: usize) {
+        while !self.try_scan_lock(tid) {
+            spin_loop();
+        }
+    }
+
+    /// Release the scan lock.
+    pub(crate) fn release_scan_lock(&self) {
+        self.scanlock.store(0, Ordering::Release);
     }
 
     /// Executes a passed in closure (`d`) on all operations starting from
