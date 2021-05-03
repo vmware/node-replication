@@ -336,7 +336,7 @@ where
     /// as public due to being used by the benchmarking code.
     #[inline(always)]
     #[doc(hidden)]
-    pub fn append<F: FnMut(T, usize, bool, Option<Arc<Vec<usize>>>)>(
+    pub fn append<F: FnMut(T, usize, bool, Option<Arc<Vec<usize>>>) -> bool>(
         &self,
         ops: &[T],
         idx: usize,
@@ -432,7 +432,7 @@ where
     /// Adds a scan operation to the shared log.
     #[inline(always)]
     #[doc(hidden)]
-    pub fn try_append_scan<F: FnMut(T, usize, bool, Option<Arc<Vec<usize>>>)>(
+    pub fn try_append_scan<F: FnMut(T, usize, bool, Option<Arc<Vec<usize>>>) -> bool>(
         &self,
         op: &T,
         idx: usize,
@@ -564,7 +564,7 @@ where
     /// The passed in closure is expected to take in two arguments: The operation
     /// from the shared log to be executed and the replica that issued it.
     #[inline(always)]
-    pub(crate) fn exec<F: FnMut(T, usize, bool, Option<Arc<Vec<usize>>>)>(
+    pub(crate) fn exec<F: FnMut(T, usize, bool, Option<Arc<Vec<usize>>>) -> bool>(
         &self,
         idx: usize,
         d: &mut F,
@@ -612,7 +612,7 @@ where
                     depends_on = Some((*e).depends_on.as_ref().unwrap().clone());
                 }
             }
-            unsafe {
+            let ret = unsafe {
                 d(
                     (*e).operation.as_ref().unwrap().clone(),
                     (*e).replica,
@@ -620,6 +620,11 @@ where
                     depends_on,
                 )
             };
+            if ret == false {
+                self.ctail.fetch_max(i, Ordering::Relaxed);
+                return;
+            }
+            self.ltails[idx - 1].store(i + 1, Ordering::Release);
 
             // Looks like we're going to wrap around now; flip this replica's local mask.
             if self.index(i) == self.size - 1 {
@@ -644,7 +649,7 @@ where
     /// then this method will never return. Accepts a closure that is passed into exec()
     /// to ensure that this replica does not deadlock GC.
     #[inline(always)]
-    fn advance_head<F: FnMut(T, usize, bool, Option<Arc<Vec<usize>>>)>(
+    fn advance_head<F: FnMut(T, usize, bool, Option<Arc<Vec<usize>>>) -> bool>(
         &self,
         rid: usize,
         mut s: &mut F,
@@ -772,7 +777,7 @@ where
     }
 }
 
-#[cfg(test)]
+/*#[cfg(test)]
 mod tests {
     // Import std so that we have an allocator for our unit tests.
     extern crate std;
@@ -1195,4 +1200,4 @@ mod tests {
         l.exec(two, &mut f);
         assert_eq!(l.is_replica_synced_for_reads(two, l.get_ctail()), true);
     }
-}
+}*/

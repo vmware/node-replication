@@ -457,8 +457,7 @@ where
         op: <D as Dispatch>::WriteOperation,
         idx: ReplicaToken,
     ) -> <D as Dispatch>::Response {
-        let nthreads = self.next.load(Ordering::Relaxed) - 1;
-        let hash = (op.hash() % nthreads) % self.logstate.len();
+        let hash = op.hash() % self.logstate.len();
 
         // Enqueue the operation onto the thread local batch and then try to flat combine.
         self.make_pending(op.clone(), idx.0, hash, false);
@@ -476,11 +475,10 @@ where
         idx: ReplicaToken,
     ) -> <D as Dispatch>::Response {
         let nlogs = self.logstate.len();
-        let nthreads = self.next.load(Ordering::Relaxed) - 1;
 
         // If there is only one log in the system, then execute
         // scan operation as a mutable operations.
-        if nlogs == 1 || nthreads == 1 {
+        if nlogs == 1 {
             return self.execute_mut(op, idx);
         }
 
@@ -518,18 +516,26 @@ where
                 let f = |o: <D as Dispatch>::WriteOperation,
                          i: usize,
                          is_scan,
-                         depends_on: Option<Arc<Vec<usize>>>| {
+                         depends_on: Option<Arc<Vec<usize>>>|
+                 -> bool {
                     match is_scan {
                         false => {
                             let resp = self.data.dispatch_mut(o);
                             if i == self.logstate[logidx].idx {
                                 results.push(resp);
                             }
+                            return true;
                         }
                         true => {
                             let depends_on = depends_on.as_ref().unwrap();
                             match depends_on.len() != self.logstate.len() {
-                                true => self.sync_for_scan(thread_id, 0, 1, depends_on),
+                                // Leaf log(s) for scan operation.
+                                true => self.logstate[0].slog.is_replica_synced_for_reads(
+                                    self.logstate[0].idx,
+                                    depends_on[0],
+                                ),
+
+                                // Root log for scan operation.
                                 false => {
                                     self.sync_for_scan(
                                         thread_id,
@@ -541,6 +547,7 @@ where
                                     if i == self.logstate[logidx].idx {
                                         results.push(resp)
                                     };
+                                    return true;
                                 }
                             }
                         }
@@ -684,9 +691,11 @@ where
             spin_loop();
         }
 
-        let mut f = |o: <D as Dispatch>::WriteOperation, _i: usize, _is_scan, _depends_on| {
-            self.data.dispatch_mut(o);
-        };
+        let mut f =
+            |o: <D as Dispatch>::WriteOperation, _i: usize, _is_scan, _depends_on| -> bool {
+                self.data.dispatch_mut(o);
+                true
+            };
 
         self.logstate[0].slog.exec(self.logstate[0].idx, &mut f);
 
@@ -696,38 +705,15 @@ where
     }
 
     fn sync_for_scan(&self, tid: usize, start: usize, end: usize, tails: &Vec<usize>) {
-        let mut iterations = 0;
         loop {
-            iterations += 1;
             let mut is_synced = true;
             for logidx in start..end {
                 if !self.logstate[logidx]
                     .slog
                     .is_replica_synced_for_reads(self.logstate[logidx].idx, tails[logidx])
                 {
-                    // Waiting for a long time, try to apply the entries from the log.
-                    if iterations % 100000 == 0 {
-                        debug!(
-                            "L{} T {:?}, R1- {} {} {} {} - R2 {} {} {} {} - C {} {} {} {}",
-                            logidx,
-                            tails,
-                            self.logstate[0].slog.ltails[0].load(Ordering::Relaxed),
-                            self.logstate[1].slog.ltails[0].load(Ordering::Relaxed),
-                            self.logstate[2].slog.ltails[0].load(Ordering::Relaxed),
-                            self.logstate[3].slog.ltails[0].load(Ordering::Relaxed),
-                            self.logstate[0].slog.ltails[1].load(Ordering::Relaxed),
-                            self.logstate[1].slog.ltails[1].load(Ordering::Relaxed),
-                            self.logstate[2].slog.ltails[1].load(Ordering::Relaxed),
-                            self.logstate[3].slog.ltails[1].load(Ordering::Relaxed),
-                            self.logstate[0].combiner.load(Ordering::Relaxed),
-                            self.logstate[1].combiner.load(Ordering::Relaxed),
-                            self.logstate[2].combiner.load(Ordering::Relaxed),
-                            self.logstate[3].combiner.load(Ordering::Relaxed)
-                        );
-                    }
                     is_synced = false;
                     self.try_combine(tid, logidx);
-                    spin_loop();
                 }
             }
 
@@ -773,8 +759,7 @@ where
         tid: usize,
     ) -> <D as Dispatch>::Response {
         // Calculate the hash of the operation to map the operation to a log.
-        let nthreads = self.next.load(Ordering::Relaxed) - 1;
-        let hash_idx = (op.hash() % nthreads) % self.logstate.len();
+        let hash_idx = op.hash() % self.logstate.len();
 
         // We can perform the read only if our replica is synced up against
         // the shared log. If it isn't, then try to combine until it is synced up.
@@ -844,7 +829,6 @@ where
             // Try to make progress while waiting for scan lock.
             for logidx in 1..self.logstate.len() {
                 self.try_combine(tid, logidx);
-                spin_loop();
             }
         }
     }
@@ -933,25 +917,33 @@ where
             let f = |o: <D as Dispatch>::WriteOperation,
                      i: usize,
                      is_scan,
-                     depends_on: Option<Arc<Vec<usize>>>| match is_scan {
-                false => {
-                    let resp = self.data.dispatch_mut(o);
-                    if i == self.logstate[hashidx].idx {
-                        results.push(resp);
+                     depends_on: Option<Arc<Vec<usize>>>|
+             -> bool {
+                match is_scan {
+                    false => {
+                        let resp = self.data.dispatch_mut(o);
+                        if i == self.logstate[hashidx].idx {
+                            results.push(resp);
+                        }
+                        return true;
                     }
-                }
-                true => {
-                    let depends_on = depends_on.as_ref().unwrap();
-                    // TODO1: Can there be an infinite loop here, combiner is waiting on the self combining?
-                    // TODO2: What happens when there is/are only 2 logs in the system?
-                    match depends_on.len() != self.logstate.len() {
-                        true => self.sync_for_scan(thread_id, 0, 1, depends_on),
-                        false => {
-                            self.sync_for_scan(thread_id, 1, self.logstate.len(), depends_on);
-                            let resp = self.data.dispatch_mut(o);
-                            if i == self.logstate[hashidx].idx {
-                                results.push(resp)
-                            };
+                    true => {
+                        let depends_on = depends_on.as_ref().unwrap();
+                        match depends_on.len() != self.logstate.len() {
+                            // Leaf log(s) for scan operation.
+                            true => self.logstate[0]
+                                .slog
+                                .is_replica_synced_for_reads(self.logstate[0].idx, depends_on[0]),
+
+                            // Root log for scan operation.
+                            false => {
+                                self.sync_for_scan(thread_id, 1, self.logstate.len(), depends_on);
+                                let resp = self.data.dispatch_mut(o);
+                                if i == self.logstate[hashidx].idx {
+                                    results.push(resp)
+                                };
+                                return true;
+                            }
                         }
                     }
                 }
@@ -972,26 +964,32 @@ where
             let mut f = |o: <D as Dispatch>::WriteOperation,
                          i: usize,
                          is_scan,
-                         depends_on: Option<Arc<Vec<usize>>>| {
+                         depends_on: Option<Arc<Vec<usize>>>|
+             -> bool {
                 match is_scan {
                     false => {
                         let resp = self.data.dispatch_mut(o);
                         if i == self.logstate[hashidx].idx {
                             results.push(resp)
                         };
+                        return true;
                     }
                     true => {
                         let depends_on = depends_on.as_ref().unwrap();
-                        // TODO1: Can there be an infinite loop here, combiner is waiting on the self combining?
-                        // TODO2: What happens when there is/are only 2 logs in the system?
                         match depends_on.len() != self.logstate.len() {
-                            true => self.sync_for_scan(thread_id, 0, 1, depends_on),
+                            // Leaf log(s) for scan operation.
+                            true => self.logstate[0]
+                                .slog
+                                .is_replica_synced_for_reads(self.logstate[0].idx, depends_on[0]),
+
+                            // Root log for scan operation.
                             false => {
                                 self.sync_for_scan(thread_id, 1, self.logstate.len(), depends_on);
                                 let resp = self.data.dispatch_mut(o);
                                 if i == self.logstate[hashidx].idx {
                                     results.push(resp)
                                 };
+                                return true;
                             }
                         }
                     }
@@ -1026,7 +1024,7 @@ where
     }
 }
 
-#[cfg(test)]
+/*#[cfg(test)]
 mod test {
     extern crate std;
 
@@ -1339,4 +1337,4 @@ mod test {
             assert_eq!(repl.contexts[i].res(), Some(Ok(107)));
         }
     }
-}
+}*/

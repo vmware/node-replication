@@ -203,7 +203,7 @@ where
     }
 }
 
-#[cfg(test)]
+/*#[cfg(test)]
 mod test {
     use super::*;
     use std::vec;
@@ -393,4 +393,4 @@ mod test {
         let c = Context::<u64, Result<u64, ()>>::default();
         assert_eq!(c.index(100), 100 % MAX_PENDING_OPS);
     }
-}
+}*/
