@@ -91,6 +91,12 @@ pub trait ReplicaTrait {
         idx: ReplicaToken,
     ) -> <Self::D as Dispatch>::Response;
 
+    fn exec_scan(
+        &self,
+        op: <Self::D as Dispatch>::WriteOperation,
+        idx: ReplicaToken,
+    ) -> <Self::D as Dispatch>::Response;
+
     fn exec_ro(
         &self,
         op: <Self::D as Dispatch>::ReadOperation,
@@ -127,6 +133,17 @@ impl<'a, T: Dispatch + Sync + Default> ReplicaTrait for Replica<'a, T> {
         idx: ReplicaToken,
     ) -> <Self::D as Dispatch>::Response {
         self.execute_mut(op, idx)
+    }
+
+    fn exec_scan(
+        &self,
+        op: <Self::D as Dispatch>::WriteOperation,
+        idx: ReplicaToken,
+    ) -> <Self::D as Dispatch>::Response {
+        #[cfg(feature = "nr")]
+        return self.execute_mut(op, idx);
+        #[cfg(feature = "c_nr")]
+        return self.execute_mut_scan(op, idx);
     }
 
     fn exec_ro(
