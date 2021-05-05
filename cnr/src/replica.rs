@@ -838,9 +838,8 @@ where
         self.scanlock.store(0, Ordering::Release);
     }
 
-    /// Appends an operation to the log and attempts to perform flat combining.
-    /// Accepts a thread `tid` as an argument. Required to acquire the combiner lock.
-    fn try_combine(&self, tid: usize, hashidx: usize) {
+    /// Try to acquire the combiner lock for `hashidx` log.
+    fn try_combiner_lock(&self, tid: usize, hashidx: usize) -> bool {
         // First, check if there already is a flat combiner. If there is no active flat combiner
         // then try to acquire the combiner lock. If there is, then just return.
         for _i in 0..4 {
@@ -852,7 +851,8 @@ where
                 )
             } != 0
             {
-                return;
+                // Someone else has the lock.
+                return false;
             };
         }
 
@@ -864,6 +864,22 @@ where
             Ordering::Acquire,
         ) != Ok(0)
         {
+            // CAS failed; unable to acquire the lock.
+            return false;
+        }
+        return true;
+    }
+
+    /// Release the scan lock.
+    fn release_combiner_lock(&self, hashidx: usize) {
+        self.logstate[hashidx].combiner.store(0, Ordering::Release);
+    }
+
+    /// Appends an operation to the log and attempts to perform flat combining.
+    /// Accepts a thread `tid` as an argument. Required to acquire the combiner lock.
+    fn try_combine(&self, tid: usize, hashidx: usize) {
+        // try to acquire combiner lock.
+        if !self.try_combiner_lock(tid, hashidx) {
             return;
         }
 
@@ -873,7 +889,7 @@ where
         // Allow other threads to perform flat combining once we have finished all our work.
         // At this point, we've dropped all mutable references to thread contexts and to
         // the staging buffer as well.
-        self.logstate[hashidx].combiner.store(0, Ordering::Release);
+        self.release_combiner_lock(hashidx);
     }
 
     /// Performs one round of flat combining. Collects, appends and executes operations.
