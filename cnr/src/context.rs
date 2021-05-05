@@ -203,7 +203,7 @@ where
     }
 }
 
-/*#[cfg(test)]
+#[cfg(test)]
 mod test {
     use super::*;
     use std::vec;
@@ -222,7 +222,7 @@ mod test {
     #[test]
     fn test_context_enqueue() {
         let c = Context::<u64, Result<u64, ()>>::default();
-        assert!(c.enqueue(121, 0));
+        assert!(c.enqueue(121, 0, false));
         unsafe { assert_eq!((*c.batch[0].as_ptr()).0, Some(121)) };
         assert_eq!(c.tail.load(Ordering::Relaxed), 1);
         assert_eq!(c.head.load(Ordering::Relaxed), 0);
@@ -235,7 +235,7 @@ mod test {
         let c = Context::<u64, Result<u64, ()>>::default();
         c.tail.store(MAX_PENDING_OPS, Ordering::Relaxed);
 
-        assert!(!c.enqueue(100, 0));
+        assert!(!c.enqueue(100, 0, false));
         assert_eq!(c.tail.load(Ordering::Relaxed), MAX_PENDING_OPS);
         assert_eq!(c.head.load(Ordering::Relaxed), 0);
         assert_eq!(c.comb.load(Ordering::Relaxed), 0);
@@ -284,20 +284,45 @@ mod test {
     fn test_context_ops() {
         let c = Context::<usize, usize>::default();
         let mut o = vec![];
+        let mut scan = vec![];
 
         for idx in 0..MAX_PENDING_OPS / 2 {
-            assert!(c.enqueue(idx * idx, 1))
+            assert!(c.enqueue(idx * idx, 1, false))
         }
 
-        assert_eq!(c.ops(&mut o, 1), MAX_PENDING_OPS / 2);
-        /*assert_eq!(o.len(), MAX_PENDING_OPS / 2);
+        assert_eq!(c.ops(&mut o, &mut scan, 1), MAX_PENDING_OPS / 2);
+        assert_eq!(o.len(), MAX_PENDING_OPS / 2);
+        assert_eq!(scan.len(), 0);
         assert_eq!(c.tail.load(Ordering::Relaxed), MAX_PENDING_OPS / 2);
         assert_eq!(c.head.load(Ordering::Relaxed), 0);
         assert_eq!(c.comb.load(Ordering::Relaxed), 0);
 
         for idx in 0..MAX_PENDING_OPS / 2 {
             assert_eq!(o[idx], idx * idx)
-        }*/
+        }
+    }
+
+    // Tests whether scan ops() can successfully retrieve operations enqueued on this context.
+    #[test]
+    fn test_context_ops_scan() {
+        let c = Context::<usize, usize>::default();
+        let mut o = vec![];
+        let mut scan = vec![];
+
+        for idx in 0..MAX_PENDING_OPS / 2 {
+            assert!(c.enqueue(idx * idx, 1, true))
+        }
+
+        assert_eq!(c.ops(&mut o, &mut scan, 1), MAX_PENDING_OPS / 2);
+        assert_eq!(o.len(), 0);
+        assert_eq!(scan.len(), MAX_PENDING_OPS / 2);
+        assert_eq!(c.tail.load(Ordering::Relaxed), MAX_PENDING_OPS / 2);
+        assert_eq!(c.head.load(Ordering::Relaxed), 0);
+        assert_eq!(c.comb.load(Ordering::Relaxed), 0);
+
+        for idx in 0..MAX_PENDING_OPS / 2 {
+            assert_eq!(scan[idx], idx * idx)
+        }
     }
 
     // Tests whether ops() returns nothing when we don't have any pending operations.
@@ -305,11 +330,12 @@ mod test {
     fn test_context_ops_empty() {
         let c = Context::<usize, usize>::default();
         let mut o = vec![];
+        let mut scan = vec![];
 
         c.tail.store(8, Ordering::Relaxed);
         c.comb.store(8, Ordering::Relaxed);
 
-        assert_eq!(c.ops(&mut o, 0), 0);
+        assert_eq!(c.ops(&mut o, &mut scan, 0), 0);
         assert_eq!(o.len(), 0);
         assert_eq!(c.tail.load(Ordering::Relaxed), 8);
         assert_eq!(c.head.load(Ordering::Relaxed), 0);
@@ -322,11 +348,12 @@ mod test {
     fn test_context_ops_panic() {
         let c = Context::<usize, usize>::default();
         let mut o = vec![];
+        let mut scan = vec![];
 
         c.tail.store(6, Ordering::Relaxed);
         c.comb.store(9, Ordering::Relaxed);
 
-        assert_eq!(c.ops(&mut o, 0), 0);
+        assert_eq!(c.ops(&mut o, &mut scan, 0), 0);
     }
 
     // Tests whether we can retrieve responses enqueued on this context.
@@ -393,4 +420,4 @@ mod test {
         let c = Context::<u64, Result<u64, ()>>::default();
         assert_eq!(c.index(100), 100 % MAX_PENDING_OPS);
     }
-}*/
+}
