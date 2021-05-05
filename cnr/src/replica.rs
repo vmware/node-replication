@@ -482,18 +482,22 @@ where
             return self.execute_mut(op, idx);
         }
 
-        // Acquire the scan lock.
-        self.acquire_scan_lock(idx.0);
         let hash = 0; /* Fake hash; scan op is appended to each log.*/
+        // Acquire the scan and combiner lock.
+        self.acquire_scan_lock(idx.0);
+        self.acquire_combiner_lock(idx.0, hash);
 
         // Enqueue the operation onto the thread local batch and then try to flat combine.
-        self.make_pending(op.clone(), idx.0, 0, true);
+        self.make_pending(op.clone(), idx.0, hash, true);
 
         // A thread becomes combiner for operations with hash same as its own operation.
-        self.try_combine(idx.0, hash);
+        self.combine(idx.0, hash);
 
         // Return the response to the caller function.
         let resp = self.get_response(idx.0, hash);
+
+        // Release combiner and scan lock.
+        self.release_combiner_lock(hash);
         self.release_scan_lock();
 
         resp
@@ -793,6 +797,7 @@ where
     fn acquire_scan_lock(&self, tid: usize) {
         while !self.try_scan_lock(tid) {
             // Try to make progress while waiting for scan lock.
+            // Someone is operating on log-0, so work on remaining logs.
             for logidx in 1..self.logstate.len() {
                 self.try_combine(tid, logidx);
             }
@@ -834,6 +839,12 @@ where
             return false;
         }
         return true;
+    }
+
+    fn acquire_combiner_lock(&self, tid: usize, hashidx: usize) {
+        while !self.try_combiner_lock(tid, hashidx) {
+            spin_loop();
+        }
     }
 
     /// Release the scan lock.
@@ -1000,15 +1011,16 @@ where
         results: &mut Vec<<D as Dispatch>::Response>,
     ) -> bool {
         let mut f = |o: <D as Dispatch>::WriteOperation,
-                     _i: usize,
+                     i: usize,
                      is_scan,
                      depends_on: Option<Arc<Vec<usize>>>|
          -> bool {
-            // TODO: Is it okay to execute operation without pusing the response to results?
-            // If someone is waiting for the response then there will be an active combiners,
-            // if there is no active combiner then the operations are to sync replica?
+            // TODO: Is it okay to execute operation without pushing the response to results?
+            // If someone is waiting for the response then there will be an active combiner,
+            // and if there is no active combiner then the operations are to sync replica?
             match is_scan {
                 false => {
+                    assert!(i != self.logstate[0].idx);
                     self.data.dispatch_mut(o);
                     return true;
                 }
@@ -1018,6 +1030,7 @@ where
                         return self.is_replica_sync_for_logs(0, 1, depends_on);
                     } else {
                         if self.is_replica_sync_for_logs(1, self.logstate.len(), depends_on) {
+                            assert!(i != self.logstate[0].idx);
                             self.data.dispatch_mut(o);
                             return true;
                         }
@@ -1408,5 +1421,91 @@ mod test {
         for i in 0..logs.len() {
             assert_eq!(repl.contexts[i].res(), Some(Ok(107)));
         }
+    }
+
+    #[derive(Default)]
+    struct ScanDS {
+        junk: AtomicUsize,
+    }
+
+    #[derive(Debug, Eq, PartialEq, Clone, Copy)]
+    pub struct WriteOp(usize);
+
+    impl LogMapper for WriteOp {
+        fn hash(&self) -> usize {
+            self.0
+        }
+    }
+
+    #[derive(Debug, Eq, PartialEq, Clone, Copy)]
+    pub struct ReadOp(usize);
+
+    impl LogMapper for ReadOp {
+        fn hash(&self) -> usize {
+            self.0
+        }
+    }
+
+    impl Dispatch for ScanDS {
+        type ReadOperation = ReadOp;
+        type WriteOperation = WriteOp;
+        type Response = Result<usize, ()>;
+
+        fn dispatch(&self, _op: Self::ReadOperation) -> Self::Response {
+            Ok(self.junk.load(Ordering::Relaxed))
+        }
+
+        fn dispatch_mut(&self, _op: Self::WriteOperation) -> Self::Response {
+            return Ok(self.junk.fetch_add(1, Ordering::Relaxed));
+        }
+    }
+
+    #[test]
+    fn test_scan_ops() {
+        let _r = env_logger::try_init();
+        let mut logs = vec![];
+        let nlogs = 4;
+
+        for i in 0..nlogs {
+            logs.push(Arc::new(Log::<<ScanDS as Dispatch>::WriteOperation>::new(
+                4 * 1024 * 1024,
+                i + 1,
+            )));
+        }
+
+        let repl = Replica::<ScanDS>::new(logs.clone());
+        let idx = repl.register().unwrap();
+
+        for i in 0..nlogs {
+            let _ignore = repl.execute_mut_scan(WriteOp(i), idx);
+        }
+        let resp = repl.execute_mut(WriteOp(0), idx);
+        assert_eq!(resp, Ok(nlogs));
+    }
+
+    #[test]
+    fn test_outstanding_scan_ops() {
+        let _r = env_logger::try_init();
+        let mut logs = vec![];
+        let nlogs = 4;
+
+        for i in 0..nlogs {
+            logs.push(Arc::new(Log::<<ScanDS as Dispatch>::WriteOperation>::new(
+                4 * 1024 * 1024,
+                i + 1,
+            )));
+        }
+
+        let repl1 = Replica::<ScanDS>::new(logs.clone());
+        let repl2 = Replica::<ScanDS>::new(logs.clone());
+        let idx1 = repl1.register().unwrap();
+        let idx2 = repl2.register().unwrap();
+        let mut results = vec![];
+
+        for _i in 0..nlogs {
+            repl2.append_scan(WriteOp(0), idx2.id(), &mut results);
+        }
+        let resp = repl1.execute_mut(WriteOp(0), idx1);
+        assert_eq!(resp, Ok(nlogs));
     }
 }

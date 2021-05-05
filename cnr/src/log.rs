@@ -612,19 +612,23 @@ where
                     depends_on = Some((*e).depends_on.as_ref().unwrap().clone());
                 }
             }
-            let ret = unsafe {
+            if !unsafe {
                 d(
                     (*e).operation.as_ref().unwrap().clone(),
                     (*e).replica,
                     (*e).is_scan,
                     depends_on,
                 )
-            };
-            if ret == false {
+            } {
+                // if the operation is unable to complete; then update the ctail for
+                // already executed operations and return. Only happends for scan ops.
                 self.ctail.fetch_max(i, Ordering::Relaxed);
                 return;
             }
-            self.ltails[idx - 1].store(i + 1, Ordering::Release);
+
+            // Increment ltail for each operations, needed for scan
+            // operations as the rubberband is ltail sensitive.
+            self.ltails[idx - 1].fetch_add(1, Ordering::Relaxed);
 
             // Looks like we're going to wrap around now; flip this replica's local mask.
             if self.index(i) == self.size - 1 {

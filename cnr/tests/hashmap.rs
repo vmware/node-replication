@@ -21,7 +21,9 @@ enum OpRd {
 
 impl LogMapper for OpRd {
     fn hash(&self) -> usize {
-        0
+        match self {
+            OpRd::Get(k) => *k,
+        }
     }
 }
 
@@ -32,7 +34,9 @@ enum OpWr {
 
 impl LogMapper for OpWr {
     fn hash(&self) -> usize {
-        0
+        match self {
+            OpWr::Put(k, _v) => *k,
+        }
     }
 }
 
@@ -65,14 +69,8 @@ impl Dispatch for CNRHashmap {
     }
 }
 
-#[test]
-fn multiple_replica_scans() {
+fn setup(nlogs: usize, nreplicas: usize, nops: usize, nthreads: usize) {
     let _r = env_logger::try_init();
-
-    let nlogs = 4;
-    let nreplicas = 2;
-    let nops = 100;
-    let nthreads = 8;
     let barrier = Arc::new(Barrier::new(nthreads));
 
     let mut logs = Vec::with_capacity(nlogs);
@@ -101,7 +99,12 @@ fn multiple_replica_scans() {
             b.wait();
 
             for i in 0..nops {
-                replica.execute_mut_scan(OpWr::Put(i, idx.id()), idx);
+                match i % 3 {
+                    0 => replica.execute_mut_scan(OpWr::Put(i, idx.id()), idx),
+                    1 => replica.execute_mut(OpWr::Put(i, idx.id()), idx),
+                    2 => replica.execute(OpRd::Get(i), idx),
+                    _ => unreachable!(),
+                };
             }
 
             b.wait();
@@ -113,4 +116,58 @@ fn multiple_replica_scans() {
     for thread in threads.into_iter() {
         thread.join().expect("Thread didn't finish successfully.");
     }
+}
+
+#[test]
+fn single_replica_single_log_mix1() {
+    let nlogs = 1;
+    let nreplicas = 1;
+    let nops = 1000;
+    let nthreads = 1;
+    setup(nlogs, nreplicas, nops, nthreads);
+}
+
+#[test]
+fn single_replica_single_log_mix2() {
+    let nlogs = 1;
+    let nreplicas = 1;
+    let nops = 1000;
+    let nthreads = 8;
+    setup(nlogs, nreplicas, nops, nthreads);
+}
+
+#[test]
+fn single_replica_multi_log_mix() {
+    let nlogs = 4;
+    let nreplicas = 1;
+    let nops = 1000;
+    let nthreads = 8;
+    setup(nlogs, nreplicas, nops, nthreads);
+}
+
+#[test]
+fn multi_replica_single_log_mix1() {
+    let nlogs = 1;
+    let nreplicas = 2;
+    let nops = 1000;
+    let nthreads = 2;
+    setup(nlogs, nreplicas, nops, nthreads);
+}
+
+#[test]
+fn multi_replica_single_log_mix2() {
+    let nlogs = 1;
+    let nreplicas = 2;
+    let nops = 1000;
+    let nthreads = 8;
+    setup(nlogs, nreplicas, nops, nthreads);
+}
+
+#[test]
+fn multi_replica_multi_log_mix() {
+    let nlogs = 4;
+    let nreplicas = 2;
+    let nops = 1000;
+    let nthreads = 8;
+    setup(nlogs, nreplicas, nops, nthreads);
 }
