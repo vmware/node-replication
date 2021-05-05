@@ -1024,7 +1024,7 @@ where
     }
 }
 
-/*#[cfg(test)]
+#[cfg(test)]
 mod test {
     extern crate std;
 
@@ -1123,10 +1123,12 @@ mod test {
         let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new(1024, 1));
         let repl = Replica::<Data>::new(vec![slog]);
         let mut o = vec![];
+        let mut scan = vec![];
 
-        assert!(repl.make_pending(OpWr(121), 8, 0));
-        assert_eq!(repl.contexts[7].ops(&mut o, 0), 1);
+        assert!(repl.make_pending(OpWr(121), 8, 0, false));
+        assert_eq!(repl.contexts[7].ops(&mut o, &mut scan, 0), 1);
         assert_eq!(o.len(), 1);
+        assert_eq!(scan.len(), 0);
         assert_eq!(o[0], OpWr(121));
     }
 
@@ -1137,7 +1139,7 @@ mod test {
         let repl = Replica::<Data>::new(vec![slog]);
         let _idx = repl.register();
 
-        repl.make_pending(OpWr(121), 1, 0);
+        repl.make_pending(OpWr(121), 1, 0, false);
         repl.try_combine(1, 0);
 
         assert_eq!(repl.logstate[0].combiner.load(Ordering::SeqCst), 0);
@@ -1152,7 +1154,7 @@ mod test {
         let repl = Replica::<Data>::new(vec![slog]);
 
         repl.next.store(9, Ordering::SeqCst);
-        repl.make_pending(OpWr(121), 8, 0);
+        repl.make_pending(OpWr(121), 8, 0, false);
         repl.try_combine(1, 0);
 
         assert_eq!(repl.data.junk.load(Ordering::Relaxed), 1);
@@ -1167,7 +1169,7 @@ mod test {
 
         repl.next.store(9, Ordering::SeqCst);
         repl.logstate[0].combiner.store(8, Ordering::SeqCst);
-        repl.make_pending(OpWr(121), 1, 0);
+        repl.make_pending(OpWr(121), 1, 0, false);
         repl.try_combine(1, 0);
 
         assert_eq!(repl.data.junk.load(Ordering::Relaxed), 0);
@@ -1195,7 +1197,7 @@ mod test {
 
         let op = OpWr(121);
         let hash = op.hash();
-        repl.make_pending(op, 1, hash);
+        repl.make_pending(op, 1, hash, false);
 
         assert_eq!(repl.get_response(1, hash), Ok(107));
     }
@@ -1220,8 +1222,8 @@ mod test {
 
         // Add in operations to the log off the side, not through the replica.
         let o = [OpWr(121), OpWr(212)];
-        slog.append(&o, 2, |_o: OpWr, _i: usize| {});
-        slog.exec(2, &mut |_o: OpWr, _i: usize| {});
+        slog.append(&o, 2, |_o: OpWr, _i: usize, _, _| true);
+        slog.exec(2, &mut |_o: OpWr, _i: usize, _, _| true);
 
         let t1 = repl.register().expect("Failed to register with replica.");
         assert_eq!(Ok(2), repl.execute(OpRd(11), t1));
@@ -1312,7 +1314,7 @@ mod test {
             threads.push(thread::spawn(move || {
                 let t = r.register().unwrap();
                 let hash = t.0 % nlogs;
-                r.make_pending(OpWr(i), t.0, hash);
+                r.make_pending(OpWr(i), t.0, hash, false);
 
                 r.try_combine(t.0, hash);
             }));
@@ -1337,4 +1339,4 @@ mod test {
             assert_eq!(repl.contexts[i].res(), Some(Ok(107)));
         }
     }
-}*/
+}
