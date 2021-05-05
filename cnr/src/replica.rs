@@ -503,7 +503,7 @@ where
         &self,
         op: <D as Dispatch>::WriteOperation,
         thread_id: usize,
-        results: &mut Vec<<D as Dispatch>::Response>,
+        mut results: &mut Vec<<D as Dispatch>::Response>,
     ) {
         let nlogs = self.logstate.len();
 
@@ -528,28 +528,14 @@ where
                         }
                         true => {
                             let depends_on = depends_on.as_ref().unwrap();
-                            match depends_on.len() != self.logstate.len() {
-                                // Leaf log(s) for scan operation.
-                                true => self.logstate[0].slog.is_replica_synced_for_reads(
-                                    self.logstate[0].idx,
-                                    depends_on[0],
-                                ),
-
-                                // Root log for scan operation.
-                                false => {
-                                    self.sync_for_scan(
-                                        thread_id,
-                                        1,
-                                        self.logstate.len(),
-                                        depends_on,
-                                    );
-                                    let resp = self.data.dispatch_mut(o);
-                                    if i == self.logstate[logidx].idx {
-                                        results.push(resp)
-                                    };
-                                    return true;
-                                }
-                            }
+                            return self.handle_scan_op(
+                                o,
+                                thread_id,
+                                logidx,
+                                i,
+                                depends_on,
+                                &mut results,
+                            );
                         }
                     }
                 };
@@ -702,26 +688,6 @@ where
         v(&self.data);
 
         self.logstate[0].combiner.store(0, Ordering::Release);
-    }
-
-    fn sync_for_scan(&self, tid: usize, start: usize, end: usize, tails: &Vec<usize>) {
-        loop {
-            let mut is_synced = true;
-            for logidx in start..end {
-                if !self.logstate[logidx]
-                    .slog
-                    .is_replica_synced_for_reads(self.logstate[logidx].idx, tails[logidx])
-                {
-                    is_synced = false;
-                    self.try_combine(tid, logidx);
-                }
-            }
-
-            // If all the log have reached to until scan entry; return.
-            if is_synced {
-                return;
-            }
-        }
     }
 
     /// This method is useful when a replica stops making progress and some threads
@@ -945,22 +911,14 @@ where
                     }
                     true => {
                         let depends_on = depends_on.as_ref().unwrap();
-                        match depends_on.len() != self.logstate.len() {
-                            // Leaf log(s) for scan operation.
-                            true => self.logstate[0]
-                                .slog
-                                .is_replica_synced_for_reads(self.logstate[0].idx, depends_on[0]),
-
-                            // Root log for scan operation.
-                            false => {
-                                self.sync_for_scan(thread_id, 1, self.logstate.len(), depends_on);
-                                let resp = self.data.dispatch_mut(o);
-                                if i == self.logstate[hashidx].idx {
-                                    results.push(resp)
-                                };
-                                return true;
-                            }
-                        }
+                        return self.handle_scan_op(
+                            o,
+                            thread_id,
+                            hashidx,
+                            i,
+                            depends_on,
+                            &mut results,
+                        );
                     }
                 }
             };
@@ -992,22 +950,14 @@ where
                     }
                     true => {
                         let depends_on = depends_on.as_ref().unwrap();
-                        match depends_on.len() != self.logstate.len() {
-                            // Leaf log(s) for scan operation.
-                            true => self.logstate[0]
-                                .slog
-                                .is_replica_synced_for_reads(self.logstate[0].idx, depends_on[0]),
-
-                            // Root log for scan operation.
-                            false => {
-                                self.sync_for_scan(thread_id, 1, self.logstate.len(), depends_on);
-                                let resp = self.data.dispatch_mut(o);
-                                if i == self.logstate[hashidx].idx {
-                                    results.push(resp)
-                                };
-                                return true;
-                            }
-                        }
+                        return self.handle_scan_op(
+                            o,
+                            thread_id,
+                            hashidx,
+                            i,
+                            depends_on,
+                            &mut results,
+                        );
                     }
                 }
             };
@@ -1037,6 +987,110 @@ where
             self.contexts[scan_tid - 1].enqueue_resps(&results[s..f]);
             operations[scan_tid - 1] = 0;
         }
+    }
+
+    #[inline(always)]
+    fn handle_scan_op(
+        &self,
+        op: <D as Dispatch>::WriteOperation,
+        thread_id: usize,
+        hashidx: usize,
+        replica_id: usize,
+        depends_on: &Vec<usize>,
+        results: &mut Vec<<D as Dispatch>::Response>,
+    ) -> bool {
+        let mut f = |o: <D as Dispatch>::WriteOperation,
+                     _i: usize,
+                     is_scan,
+                     depends_on: Option<Arc<Vec<usize>>>|
+         -> bool {
+            // TODO: Is it okay to execute operation without pusing the response to results?
+            // If someone is waiting for the response then there will be an active combiners,
+            // if there is no active combiner then the operations are to sync replica?
+            match is_scan {
+                false => {
+                    self.data.dispatch_mut(o);
+                    return true;
+                }
+                true => {
+                    let depends_on = depends_on.as_ref().unwrap();
+                    if depends_on.len() != self.logstate.len() {
+                        return self.is_replica_sync_for_logs(0, 1, depends_on);
+                    } else {
+                        if self.is_replica_sync_for_logs(1, self.logstate.len(), depends_on) {
+                            self.data.dispatch_mut(o);
+                            return true;
+                        }
+                        return false;
+                    }
+                }
+            }
+        };
+        let is_root = depends_on.len() == self.logstate.len();
+        match is_root {
+            // Leaf log(s) for scan operation.
+            false => loop {
+                let logidx = 0;
+                match self.logstate[logidx]
+                    .slog
+                    .is_replica_synced_for_reads(self.logstate[logidx].idx, depends_on[logidx])
+                {
+                    true => return true,
+                    false => {
+                        if self.try_combiner_lock(thread_id, logidx) {
+                            self.logstate[logidx]
+                                .slog
+                                .exec(self.logstate[logidx].idx, &mut f);
+                            self.release_combiner_lock(logidx);
+                        }
+                    }
+                }
+            },
+
+            // Root log for scan operation.
+            true => {
+                loop {
+                    let mut is_synced = true;
+                    for logidx in 1..self.logstate.len() {
+                        if !self.logstate[logidx].slog.is_replica_synced_for_reads(
+                            self.logstate[logidx].idx,
+                            depends_on[logidx],
+                        ) {
+                            is_synced = false;
+                            if self.try_combiner_lock(thread_id, logidx) {
+                                self.logstate[logidx]
+                                    .slog
+                                    .exec(self.logstate[logidx].idx, &mut f);
+                                self.release_combiner_lock(logidx);
+                            }
+                        }
+                    }
+
+                    if is_synced {
+                        break;
+                    }
+                }
+
+                let resp = self.data.dispatch_mut(op);
+                if replica_id == self.logstate[hashidx].idx {
+                    results.push(resp)
+                };
+                return true;
+            }
+        }
+    }
+
+    fn is_replica_sync_for_logs(&self, start: usize, end: usize, tails: &Vec<usize>) -> bool {
+        let mut is_synced = true;
+        for logidx in start..end {
+            if !self.logstate[logidx]
+                .slog
+                .is_replica_synced_for_reads(self.logstate[logidx].idx, tails[logidx])
+            {
+                is_synced = false;
+            }
+        }
+        return is_synced;
     }
 }
 
