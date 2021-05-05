@@ -3,6 +3,7 @@
 
 //! Evaluates a virtual address space implementation using node-replication.
 #![feature(test)]
+#![feature(bench_black_box)]
 
 extern crate alloc;
 

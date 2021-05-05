@@ -4,6 +4,7 @@
 //! Defines all default criterion benchmarks we run.
 #![allow(unused)]
 #![feature(test)]
+#![feature(bench_black_box)]
 
 #[macro_use]
 extern crate log;

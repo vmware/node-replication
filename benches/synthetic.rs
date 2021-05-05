@@ -8,6 +8,7 @@
 //!
 //! It evaluates the overhead of the log with an abstracted model of a generic data-structure
 //! to measure the cache-impact.
+#![feature(bench_black_box)]
 
 #![feature(test)]
 use crossbeam_utils::CachePadded;
