@@ -91,7 +91,6 @@ impl Default for SkipListWrapper {
         for i in 0..INITIAL_CAPACITY {
             storage.insert(i as u64, i as u64);
         }
-        log::error!("Default");
         SkipListWrapper(storage)
     }
 }
