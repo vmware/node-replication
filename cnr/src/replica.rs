@@ -71,7 +71,7 @@ const_assert!(
 /// the same underlying log.
 pub struct Replica<'a, D>
 where
-    D: Sized + Default + Dispatch + Sync,
+    D: Sized + Dispatch + Sync,
 {
     /// Idx that will be handed out to the next thread that registers with the replica.
     next: CachePadded<AtomicUsize>,
@@ -123,11 +123,11 @@ where
 
 /// The Replica is Sync. Member variables are protected by a CAS on `combiner`.
 /// Contexts are thread-safe.
-unsafe impl<'a, D> Sync for Replica<'a, D> where D: Sized + Default + Sync + Dispatch {}
+unsafe impl<'a, D> Sync for Replica<'a, D> where D: Sized + Sync + Dispatch {}
 
 impl<'a, D> core::fmt::Debug for Replica<'a, D>
 where
-    D: Sized + Default + Sync + Dispatch,
+    D: Sized + Sync + Dispatch,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         write!(f, "Replica")
@@ -136,7 +136,7 @@ where
 
 impl<'a, D> Replica<'a, D>
 where
-    D: Sized + Default + Dispatch + Sync,
+    D: Sized + Dispatch + Default + Sync,
 {
     /// Constructs an instance of a replicated data structure.
     ///
@@ -209,6 +209,27 @@ where
     pub fn new<'b>(
         logs: Vec<Arc<Log<'b, <D as Dispatch>::WriteOperation>>>,
     ) -> Arc<Replica<'b, D>> {
+        Replica::with_data(logs, Default::default())
+    }
+}
+
+impl<'a, D> Replica<'a, D>
+where
+    D: Sized + Dispatch + Sync,
+{
+    /// Similar to [`Replica<D>::new`], but we pass a pre-initialized
+    /// data-structure as an argument (`d`) rather than relying on the
+    /// [Default](core::default::Default) trait to create one.
+    ///
+    /// # Note
+    /// [`Replica<D>::new`] should be the preferred method to create a Replica.
+    /// If `with_data` is used, care must be taken that the same state is passed
+    /// to every Replica object. If not the resulting operations executed
+    /// against replicas may not give deterministic results.
+    pub fn with_data<'b>(
+        logs: Vec<Arc<Log<'b, <D as Dispatch>::WriteOperation>>>,
+        d: D,
+    ) -> Arc<Replica<'b, D>> {
         let mut uninit_replica: Arc<MaybeUninit<Replica<D>>> = Arc::new_zeroed();
 
         // This is the preferred but unsafe mode of initialization as it avoids
@@ -264,7 +285,7 @@ where
                     nlogs
                 ],
                 slog: logs.clone(),
-                data: CachePadded::new(D::default()),
+                data: CachePadded::new(d),
             });
 
             let mut replica = uninit_replica.assume_init();
