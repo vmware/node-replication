@@ -53,6 +53,9 @@ where
     /// This variable is updated by the combiner, and is read by the thread that owns this context.
     /// We can avoid making it an atomic by assuming we're on x86.
     pub comb: CachePadded<AtomicUsize>,
+
+    /// Identified the context numbers with-in a replica.
+    idx: usize,
 }
 
 impl<T, R> Default for Context<T, R>
@@ -73,6 +76,7 @@ where
             tail: CachePadded::new(AtomicUsize::new(0)),
             head: CachePadded::new(AtomicUsize::new(0)),
             comb: CachePadded::new(AtomicUsize::new(0)),
+            idx: 0,
         }
     }
 }
@@ -82,6 +86,13 @@ where
     T: Sized + Clone,
     R: Sized + Clone,
 {
+    pub fn new(id: usize) -> Context<T, R> {
+        let mut context: Context<T, R> = Default::default();
+        context.idx = id;
+
+        context
+    }
+
     /// Enqueues an operation onto this context's batch of pending operations.
     ///
     /// Returns true if the operation was successfully enqueued. False otherwise.
@@ -111,9 +122,9 @@ where
     /// Enqueues a batch of responses onto this context. This is invoked by the combiner
     /// after it has executed operations (obtained through a call to ops()) against the
     /// replica this thread is registered against.
+    #[allow(dead_code)]
     #[inline(always)]
     pub(crate) fn enqueue_resps(&self, responses: &[R]) {
-        let h = self.comb.load(Ordering::Relaxed);
         let n = responses.len();
 
         // Empty slice passed in; no work to do, so simply return.
@@ -124,13 +135,23 @@ where
         // Starting from `comb`, write all responses into the batch. Assume here that
         // the slice above doesn't cause us to cross the tail of the batch.
         for i in 0..n {
-            let e = self.batch[self.index(h + i)].as_ptr();
-            unsafe {
-                (*e).2 = Some(responses[i].clone());
-            }
+            self.enqueue_resp(responses[i].clone());
+        }
+    }
+
+    /// Enqueues a response onto this context. This is invoked by the combiner
+    /// after it has executed operations (obtained through a call to ops()) against the
+    /// replica this thread is registered against.
+    #[inline(always)]
+    pub(crate) fn enqueue_resp(&self, responses: R) {
+        let h = self.comb.load(Ordering::Relaxed);
+
+        let e = self.batch[self.index(h)].as_ptr();
+        unsafe {
+            (*e).2 = Some(responses);
         }
 
-        self.comb.store(h + n, Ordering::Relaxed);
+        self.comb.store(h + 1, Ordering::Relaxed);
     }
 
     /// Adds any pending operations on this context to a passed in buffer. Returns the

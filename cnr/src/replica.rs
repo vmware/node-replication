@@ -285,9 +285,11 @@ where
 
             let mut replica = uninit_replica.assume_init();
             // Add `MAX_THREADS_PER_REPLICA` contexts
-            for _idx in 0..MAX_THREADS_PER_REPLICA {
+            for idx in 0..MAX_THREADS_PER_REPLICA {
                 let replica_mut = Arc::get_mut(&mut replica).unwrap();
-                replica_mut.contexts.push(Default::default());
+                replica_mut
+                    .contexts
+                    .push(CachePadded::new(Context::new(idx + 1)));
                 replica_mut
                     .offsets
                     .push(RefCell::new(Vec::with_capacity(logs.len())));
