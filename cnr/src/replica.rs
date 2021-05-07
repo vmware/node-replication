@@ -1508,4 +1508,32 @@ mod test {
         let resp = repl1.execute_mut(WriteOp(0), idx1);
         assert_eq!(resp, Ok(nlogs));
     }
+
+    #[test]
+    fn test_outstanding_scan_ops_leaf_log() {
+        let _r = env_logger::try_init();
+        let mut logs = vec![];
+        let nlogs = 4;
+
+        for i in 0..nlogs {
+            logs.push(Arc::new(Log::<<ScanDS as Dispatch>::WriteOperation>::new(
+                4 * 1024 * 1024,
+                i + 1,
+            )));
+        }
+
+        let repl1 = Replica::<ScanDS>::new(logs.clone());
+        let repl2 = Replica::<ScanDS>::new(logs.clone());
+        let idx1 = repl1.register().unwrap();
+        let idx2 = repl2.register().unwrap();
+        let mut results = vec![];
+
+        for i in 0..nlogs {
+            repl2.append_scan(WriteOp(10 + i), idx2.id(), &mut results);
+        }
+        let _ignore = repl2.execute_mut(WriteOp(0), idx2);
+
+        let resp = repl1.execute_mut(WriteOp(3), idx1);
+        assert_eq!(resp, Ok(nlogs));
+    }
 }
