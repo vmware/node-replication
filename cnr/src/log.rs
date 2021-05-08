@@ -437,7 +437,9 @@ where
     /// Adds a scan operation to the shared log.
     #[inline(always)]
     #[doc(hidden)]
-    pub fn try_append_scan<F: FnMut(T, usize, usize, bool, Option<Arc<Vec<usize>>>) -> bool>(
+    pub(crate) fn try_append_scan<
+        F: FnMut(T, usize, usize, bool, Option<Arc<Vec<usize>>>) -> bool,
+    >(
         &self,
         op: &(T, usize),
         idx: usize,
@@ -506,7 +508,7 @@ where
 
     /// Update the depends_on field for scan operation. Replica mainatins the
     /// offset for the scan entry and later it updates the remaining offset there.
-    pub fn fix_scan_entry(&self, op: &(T, usize), idx: usize, offsets: &Vec<usize>) {
+    pub(crate) fn fix_scan_entry(&self, op: &(T, usize), idx: usize, offsets: &Vec<usize>) {
         let entry = offsets[0];
         let e = self.slog[self.index(entry)].as_ptr();
 

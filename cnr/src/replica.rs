@@ -474,11 +474,12 @@ where
 
     fn append_scan(&self, op: (<D as Dispatch>::WriteOperation, usize), thread_id: usize) {
         let nlogs = self.logstate.len();
+        let root_log = 0;
 
         let mut entries = self.offsets[thread_id].borrow_mut();
         entries.clear();
 
-        self.logstate[0].slog.acquire_scan_lock(thread_id);
+        self.logstate[root_log].slog.acquire_scan_lock(thread_id);
         for logidx in 0..nlogs {
             let entry = loop {
                 let f = |o: <D as Dispatch>::WriteOperation,
@@ -514,12 +515,12 @@ where
             };
             entries.push(entry);
         }
-        self.logstate[0].slog.release_scan_lock();
+        self.logstate[root_log].slog.release_scan_lock();
 
         // Update scan entry depends_on.
-        self.logstate[0]
+        self.logstate[root_log]
             .slog
-            .fix_scan_entry(&op, self.logstate[0].idx, &entries);
+            .fix_scan_entry(&op, self.logstate[root_log].idx, &entries);
     }
 
     /// Executes a read-only operation against this replica and returns a response.
@@ -847,6 +848,8 @@ where
         }
     }
 
+    /// This method handles the scan operations; this method is called
+    /// from the combine function closure that is passed to log exec function.
     #[inline(always)]
     fn handle_scan_op(
         &self,
@@ -899,6 +902,15 @@ where
         }
     }
 
+    /// This method checks if the current replica has applied each log upto ltails respectively.
+    ///
+    /// # Arguments
+    /// * `start`: The starting log number.
+    /// * `end`: The ending log number.
+    /// * `ltails`: Local tail for each log from `start` to `end`.
+    ///
+    /// # Return
+    /// Return true if the replica has applied the each log upto respective ltails.
     fn is_replica_sync_for_logs(&self, start: usize, end: usize, tails: &Vec<usize>) -> bool {
         let mut is_synced = true;
         for logidx in start..end {
@@ -1333,5 +1345,95 @@ mod test {
 
         let resp = repl1.execute_mut(WriteOp(3), idx1);
         assert_eq!(resp, Ok(nlogs + 1));
+    }
+
+    #[test]
+    fn test_replica_sync_for_logs() {
+        let mut logs = vec![];
+        let nlogs = 4;
+
+        for i in 0..nlogs {
+            logs.push(Arc::new(Log::<<ScanDS as Dispatch>::WriteOperation>::new(
+                4 * 1024 * 1024,
+                i + 1,
+            )));
+        }
+
+        let repl = Replica::<ScanDS>::new(logs.clone());
+        let idx = repl.register().unwrap();
+
+        for i in 0..nlogs {
+            repl.append_scan((WriteOp(i), idx.id()), idx.id());
+        }
+
+        let ltails = vec![0, 0, 0, 0];
+        assert_eq!(true, repl.is_replica_sync_for_logs(0, 1, &ltails));
+        assert_eq!(true, repl.is_replica_sync_for_logs(1, 2, &ltails));
+        assert_eq!(true, repl.is_replica_sync_for_logs(2, 3, &ltails));
+        assert_eq!(true, repl.is_replica_sync_for_logs(3, 4, &ltails));
+
+        let ltails = vec![1, 1, 1, 1];
+        assert_eq!(false, repl.is_replica_sync_for_logs(0, 1, &ltails));
+        assert_eq!(false, repl.is_replica_sync_for_logs(1, 2, &ltails));
+        assert_eq!(false, repl.is_replica_sync_for_logs(2, 3, &ltails));
+        assert_eq!(false, repl.is_replica_sync_for_logs(3, 4, &ltails));
+    }
+
+    #[test]
+    fn test_execute_mut_scan() {
+        let mut logs = vec![];
+        let nlogs = 4;
+
+        for i in 0..nlogs {
+            logs.push(Arc::new(Log::<<ScanDS as Dispatch>::WriteOperation>::new(
+                4 * 1024 * 1024,
+                i + 1,
+            )));
+        }
+
+        let repl = Replica::<ScanDS>::new(logs.clone());
+        let idx = repl.register().unwrap();
+
+        for i in 0..nlogs {
+            let resp = repl.execute_mut_scan(WriteOp(i), idx);
+            assert_eq!(Ok(i), resp);
+        }
+
+        let ltails = vec![nlogs, nlogs, nlogs, nlogs];
+        assert_eq!(true, repl.is_replica_sync_for_logs(0, 1, &ltails));
+        assert_eq!(true, repl.is_replica_sync_for_logs(1, 2, &ltails));
+        assert_eq!(true, repl.is_replica_sync_for_logs(2, 3, &ltails));
+        assert_eq!(true, repl.is_replica_sync_for_logs(3, 4, &ltails));
+    }
+
+    #[test]
+    fn test_handle_scan_op() {
+        let mut logs = vec![];
+        let nlogs = 4;
+        let hash = 0;
+
+        for i in 0..nlogs {
+            logs.push(Arc::new(Log::<<ScanDS as Dispatch>::WriteOperation>::new(
+                4 * 1024 * 1024,
+                i + 1,
+            )));
+        }
+
+        let repl = Replica::<ScanDS>::new(logs.clone());
+        let idx = repl.register().unwrap();
+
+        let ltails = vec![0, 0, 0, 0];
+        assert_eq!(
+            true,
+            repl.handle_scan_op(
+                WriteOp(0),
+                idx.id(),
+                hash,
+                repl.logstate[0].idx,
+                idx.id(),
+                &ltails,
+            )
+        );
+        assert_eq!(Ok(0), repl.get_response(idx.id(), hash));
     }
 }
