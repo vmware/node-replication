@@ -84,19 +84,10 @@ where
     /// A buffer of operations for flat combining. The combiner stages operations in
     /// here and then batch appends them into the shared log. This helps amortize
     /// the cost of the compare_and_swap() on the tail of the log.
-    buffer: CachePadded<RefCell<Vec<<D as Dispatch>::WriteOperation>>>,
+    buffer: CachePadded<RefCell<Vec<(<D as Dispatch>::WriteOperation, usize)>>>,
 
     /// A buffer of scan type operations for flat combining.
-    scan_buffer: CachePadded<RefCell<Vec<<D as Dispatch>::WriteOperation>>>,
-
-    /// Number of operations collected by the combiner from each thread at any
-    /// given point of time. Index `i` holds the number of operations collected from
-    /// thread with identifier `i + 1`.
-    inflight: CachePadded<RefCell<[usize; MAX_THREADS_PER_REPLICA]>>,
-
-    /// A buffer of results collected after flat combining. With the help of `inflight`,
-    /// the combiner enqueues these results into the appropriate thread context.
-    result: CachePadded<RefCell<Vec<<D as Dispatch>::Response>>>,
+    scan_buffer: CachePadded<RefCell<Vec<(<D as Dispatch>::WriteOperation, usize)>>>,
 }
 
 impl<'a, D> LogState<'a, D>
@@ -122,20 +113,7 @@ where
                         ),
                     ),
                 ),
-            inflight: CachePadded::new(RefCell::new(arr![Default::default(); 256])),
             scan_buffer: CachePadded::new(RefCell::new(Vec::with_capacity(1))),
-            result:
-                CachePadded::new(
-                    RefCell::new(
-                        Vec::with_capacity(
-                            MAX_THREADS_PER_REPLICA
-                                * Context::<
-                                    <D as Dispatch>::WriteOperation,
-                                    <D as Dispatch>::Response,
-                                >::batch_size(),
-                        ),
-                    ),
-                ),
         }
     }
 }
@@ -505,12 +483,7 @@ where
         resp
     }
 
-    fn append_scan(
-        &self,
-        op: <D as Dispatch>::WriteOperation,
-        thread_id: usize,
-        mut results: &mut Vec<<D as Dispatch>::Response>,
-    ) {
+    fn append_scan(&self, op: (<D as Dispatch>::WriteOperation, usize), thread_id: usize) {
         let nlogs = self.logstate.len();
 
         let mut entries = self.offsets[thread_id].borrow_mut();
@@ -520,28 +493,22 @@ where
         for logidx in 0..nlogs {
             let entry = loop {
                 let f = |o: <D as Dispatch>::WriteOperation,
-                         i: usize,
+                         rid: usize,
+                         tid: usize,
                          is_scan,
                          depends_on: Option<Arc<Vec<usize>>>|
                  -> bool {
                     match is_scan {
                         false => {
                             let resp = self.data.dispatch_mut(o);
-                            if i == self.logstate[logidx].idx {
-                                results.push(resp);
+                            if rid == self.logstate[logidx].idx {
+                                self.contexts[tid - 1].enqueue_resp(resp);
                             }
                             return true;
                         }
                         true => {
                             let depends_on = depends_on.as_ref().unwrap();
-                            return self.handle_scan_op(
-                                o,
-                                thread_id,
-                                logidx,
-                                i,
-                                depends_on,
-                                &mut results,
-                            );
+                            return self.handle_scan_op(o, thread_id, logidx, rid, tid, depends_on);
                         }
                     }
                 };
@@ -563,7 +530,7 @@ where
         // Update scan entry depends_on.
         self.logstate[0]
             .slog
-            .fix_scan_entry(&op, self.logstate[0].idx, &entries);
+            .fix_scan_entry(&op.0, self.logstate[0].idx, &entries);
     }
 
     /// Executes a read-only operation against this replica and returns a response.
@@ -684,7 +651,7 @@ where
         }
 
         let mut f =
-            |o: <D as Dispatch>::WriteOperation, _i: usize, _is_scan, _depends_on| -> bool {
+            |o: <D as Dispatch>::WriteOperation, _i: usize, _tid, _is_scan, _depends_on| -> bool {
                 self.data.dispatch_mut(o);
                 true
             };
@@ -877,13 +844,10 @@ where
         //  TODO: may need to be in a per-log state context
         let mut buffer = self.logstate[hashidx].buffer.borrow_mut();
         let mut scan_buffer = self.logstate[hashidx].scan_buffer.borrow_mut();
-        let mut operations = self.logstate[hashidx].inflight.borrow_mut();
-        let mut results = self.logstate[hashidx].result.borrow_mut();
         let pending = &self.logstate[hashidx].pending;
 
         buffer.clear();
         scan_buffer.clear();
-        results.clear();
 
         let next = self.next.load(Ordering::Relaxed);
 
@@ -898,8 +862,7 @@ where
             ) == Ok(true)
             {
                 // pass hash of current op to contexts, only get ops from context that have the same hash/log id
-                operations[tid - 1] =
-                    self.contexts[tid - 1].ops(&mut buffer, &mut scan_buffer, hashidx);
+                self.contexts[tid - 1].ops(&mut buffer, &mut scan_buffer, hashidx);
                 if scan_buffer.len() > 0 {
                     scan_tid = tid;
                 }
@@ -910,28 +873,22 @@ where
         // in here because operations on the log might need to be consumed for GC.
         {
             let f = |o: <D as Dispatch>::WriteOperation,
-                     i: usize,
+                     rid: usize,
+                     tid: usize,
                      is_scan,
                      depends_on: Option<Arc<Vec<usize>>>|
              -> bool {
                 match is_scan {
                     false => {
                         let resp = self.data.dispatch_mut(o);
-                        if i == self.logstate[hashidx].idx {
-                            results.push(resp);
+                        if rid == self.logstate[hashidx].idx {
+                            self.contexts[tid - 1].enqueue_resp(resp);
                         }
                         return true;
                     }
                     true => {
                         let depends_on = depends_on.as_ref().unwrap();
-                        return self.handle_scan_op(
-                            o,
-                            thread_id,
-                            hashidx,
-                            i,
-                            depends_on,
-                            &mut results,
-                        );
+                        return self.handle_scan_op(o, thread_id, hashidx, rid, tid, depends_on);
                     }
                 }
             };
@@ -942,63 +899,35 @@ where
             if scan_tid != 0 {
                 // Only one outstanding scan operation per log is allowed for now.
                 assert_eq!(scan_buffer.len(), 1);
-                self.append_scan(scan_buffer[0].clone(), thread_id, &mut results);
+                self.append_scan(scan_buffer[0].clone(), thread_id);
             }
         }
 
         // Execute any operations on the shared log against this replica.
         {
             let mut f = |o: <D as Dispatch>::WriteOperation,
-                         i: usize,
+                         rid: usize,
+                         tid: usize,
                          is_scan,
                          depends_on: Option<Arc<Vec<usize>>>|
              -> bool {
                 match is_scan {
                     false => {
                         let resp = self.data.dispatch_mut(o);
-                        if i == self.logstate[hashidx].idx {
-                            results.push(resp)
+                        if rid == self.logstate[hashidx].idx {
+                            self.contexts[tid - 1].enqueue_resp(resp);
                         };
                         return true;
                     }
                     true => {
                         let depends_on = depends_on.as_ref().unwrap();
-                        return self.handle_scan_op(
-                            o,
-                            thread_id,
-                            hashidx,
-                            i,
-                            depends_on,
-                            &mut results,
-                        );
+                        return self.handle_scan_op(o, thread_id, hashidx, rid, tid, depends_on);
                     }
                 }
             };
             self.logstate[hashidx]
                 .slog
                 .exec(self.logstate[hashidx].idx, &mut f);
-        }
-
-        // Return/Enqueue responses back into the appropriate thread context(s).
-        let (mut s, mut f) = (0, 0);
-        // TODO: hashing makes this non-linear, need to take into account which operations
-        // belong to our current combiner round...
-        for i in 1..next {
-            if operations[i - 1] == 0 || i == scan_tid {
-                continue;
-            };
-
-            f += operations[i - 1];
-            self.contexts[i - 1].enqueue_resps(&results[s..f]);
-            s += operations[i - 1];
-            operations[i - 1] = 0;
-        }
-
-        // Add scan-op results at the end
-        if scan_tid != 0 {
-            f += operations[scan_tid - 1];
-            self.contexts[scan_tid - 1].enqueue_resps(&results[s..f]);
-            operations[scan_tid - 1] = 0;
         }
     }
 
@@ -1008,12 +937,13 @@ where
         op: <D as Dispatch>::WriteOperation,
         thread_id: usize,
         hashidx: usize,
-        replica_id: usize,
+        rid: usize,
+        tid: usize,
         depends_on: &Vec<usize>,
-        results: &mut Vec<<D as Dispatch>::Response>,
     ) -> bool {
         let mut f = |o: <D as Dispatch>::WriteOperation,
-                     i: usize,
+                     rid: usize,
+                     tid: usize,
                      is_scan,
                      depends_on: Option<Arc<Vec<usize>>>|
          -> bool {
@@ -1022,8 +952,10 @@ where
             // and if there is no active combiner then the operations are to sync replica?
             match is_scan {
                 false => {
-                    assert!(i != self.logstate[0].idx);
-                    self.data.dispatch_mut(o);
+                    let resp = self.data.dispatch_mut(o);
+                    if rid == self.logstate[0].idx {
+                        self.contexts[tid - 1].enqueue_resp(resp);
+                    }
                     return true;
                 }
                 true => {
@@ -1032,7 +964,6 @@ where
                         return self.is_replica_sync_for_logs(0, 1, depends_on);
                     } else {
                         if self.is_replica_sync_for_logs(1, self.logstate.len(), depends_on) {
-                            assert!(i != self.logstate[0].idx);
                             self.data.dispatch_mut(o);
                             return true;
                         }
@@ -1087,8 +1018,8 @@ where
                 }
 
                 let resp = self.data.dispatch_mut(op);
-                if replica_id == self.logstate[hashidx].idx {
-                    results.push(resp)
+                if rid == self.logstate[hashidx].idx {
+                    self.contexts[tid - 1].enqueue_resp(resp);
                 };
                 return true;
             }
@@ -1167,14 +1098,6 @@ mod test {
         assert_eq!(repl.contexts.len(), MAX_THREADS_PER_REPLICA);
         assert_eq!(
             repl.logstate[0].buffer.borrow().capacity(),
-            MAX_THREADS_PER_REPLICA * Context::<u64, Result<u64, ()>>::batch_size()
-        );
-        assert_eq!(
-            repl.logstate[0].inflight.borrow().len(),
-            MAX_THREADS_PER_REPLICA
-        );
-        assert_eq!(
-            repl.logstate[0].result.borrow().capacity(),
             MAX_THREADS_PER_REPLICA * Context::<u64, Result<u64, ()>>::batch_size()
         );
         assert_eq!(repl.data.junk.load(Ordering::Relaxed), 0);

@@ -63,6 +63,9 @@ where
     /// Identifies the replica that issued the above operation.
     replica: usize,
 
+    /// Identifies the replica-local thread-id that issued the operation.
+    thread: usize,
+
     /// Identifies if the operation is of scan type or not.
     is_scan: bool,
 
@@ -240,6 +243,7 @@ where
                     Cell::new(Entry {
                         operation: None,
                         replica: 0usize,
+                        thread: 0usize,
                         is_scan: false,
                         depends_on: None,
                         alivef: AtomicBool::new(false),
@@ -336,9 +340,9 @@ where
     /// as public due to being used by the benchmarking code.
     #[inline(always)]
     #[doc(hidden)]
-    pub fn append<F: FnMut(T, usize, bool, Option<Arc<Vec<usize>>>) -> bool>(
+    pub fn append<F: FnMut(T, usize, usize, bool, Option<Arc<Vec<usize>>>) -> bool>(
         &self,
-        ops: &[T],
+        ops: &[(T, usize)],
         idx: usize,
         mut s: F,
     ) {
@@ -413,8 +417,9 @@ where
                     m = !m;
                 }
 
-                unsafe { (*e).operation = Some(ops[i].clone()) };
+                unsafe { (*e).operation = Some(ops[i].0.clone()) };
                 unsafe { (*e).replica = idx };
+                unsafe { (*e).thread = ops[i].1 };
                 unsafe { (*e).is_scan = false };
                 unsafe { (*e).depends_on = None };
                 unsafe { (*e).alivef.store(m, Ordering::Release) };
@@ -432,9 +437,9 @@ where
     /// Adds a scan operation to the shared log.
     #[inline(always)]
     #[doc(hidden)]
-    pub fn try_append_scan<F: FnMut(T, usize, bool, Option<Arc<Vec<usize>>>) -> bool>(
+    pub fn try_append_scan<F: FnMut(T, usize, usize, bool, Option<Arc<Vec<usize>>>) -> bool>(
         &self,
-        op: &T,
+        op: &(T, usize),
         idx: usize,
         offset: &Vec<usize>,
         mut s: F,
@@ -483,8 +488,9 @@ where
         // Add empty scan op to all the logs but 0. Reserve enrty and exit for 0. Use `fix_scan_entry`
         // to update entry for log-0, as it requires the offsets for all the remaining logs.
         if self.idx != 1 {
-            unsafe { (*e).operation = Some(op.clone()) };
+            unsafe { (*e).operation = Some(op.0.clone()) };
             unsafe { (*e).replica = idx };
+            unsafe { (*e).thread = op.1 };
             unsafe { (*e).is_scan = true };
             unsafe { (*e).depends_on = Some(Arc::new(vec![offset[0]])) };
             unsafe { (*e).alivef.store(m, Ordering::Release) };
@@ -564,7 +570,7 @@ where
     /// The passed in closure is expected to take in two arguments: The operation
     /// from the shared log to be executed and the replica that issued it.
     #[inline(always)]
-    pub(crate) fn exec<F: FnMut(T, usize, bool, Option<Arc<Vec<usize>>>) -> bool>(
+    pub(crate) fn exec<F: FnMut(T, usize, usize, bool, Option<Arc<Vec<usize>>>) -> bool>(
         &self,
         idx: usize,
         d: &mut F,
@@ -616,6 +622,7 @@ where
                 d(
                     (*e).operation.as_ref().unwrap().clone(),
                     (*e).replica,
+                    (*e).thread,
                     (*e).is_scan,
                     depends_on,
                 )
@@ -653,7 +660,7 @@ where
     /// then this method will never return. Accepts a closure that is passed into exec()
     /// to ensure that this replica does not deadlock GC.
     #[inline(always)]
-    fn advance_head<F: FnMut(T, usize, bool, Option<Arc<Vec<usize>>>) -> bool>(
+    fn advance_head<F: FnMut(T, usize, usize, bool, Option<Arc<Vec<usize>>>) -> bool>(
         &self,
         rid: usize,
         mut s: &mut F,
