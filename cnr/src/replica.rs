@@ -113,7 +113,9 @@ where
                         ),
                     ),
                 ),
-            scan_buffer: CachePadded::new(RefCell::new(Vec::with_capacity(1))),
+            scan_buffer: CachePadded::new(RefCell::new(Vec::with_capacity(
+                MAX_THREADS_PER_REPLICA,
+            ))),
         }
     }
 }
@@ -151,10 +153,6 @@ where
 
     /// An instance of per log state maintained by each replica.
     logstate: Vec<CachePadded<LogState<'a, D>>>,
-
-    /// A scan lock, needed to atomically append scan entries in multiple logs;
-    /// otherwise there might be a circular dependency that can cause a deadlock.
-    scanlock: CachePadded<AtomicUsize>,
 }
 
 /// The Replica is Sync. Member variables are protected by a CAS on `combiner`.
@@ -258,7 +256,6 @@ where
                 logstate: Vec::with_capacity(logs.len()),
                 contexts: Vec::with_capacity(MAX_THREADS_PER_REPLICA),
                 offsets: Vec::with_capacity(MAX_THREADS_PER_REPLICA),
-                scanlock: CachePadded::new(AtomicUsize::new(0)),
             });
 
             let mut replica = uninit_replica.assume_init();
@@ -463,22 +460,14 @@ where
         }
 
         let hash = 0; /* Fake hash; scan op is appended to each log.*/
-        // Acquire the scan and combiner lock.
-        self.acquire_scan_lock(idx.0);
-        self.acquire_combiner_lock(idx.0, hash);
-
         // Enqueue the operation onto the thread local batch and then try to flat combine.
         self.make_pending(op.clone(), idx.0, hash, true);
 
         // A thread becomes combiner for operations with hash same as its own operation.
-        self.combine(idx.0, hash);
+        self.try_combine(idx.0, hash);
 
         // Return the response to the caller function.
         let resp = self.get_response(idx.0, hash);
-
-        // Release combiner and scan lock.
-        self.release_combiner_lock(hash);
-        self.release_scan_lock();
 
         resp
     }
@@ -733,53 +722,9 @@ where
         true
     }
 
-    /// Try to acquire the scan lock.
-    fn try_scan_lock(&self, tid: usize) -> bool {
-        for _i in 0..4 {
-            if unsafe {
-                core::ptr::read_volatile(
-                    &self.scanlock
-                        as *const crossbeam_utils::CachePadded<core::sync::atomic::AtomicUsize>
-                        as *const usize,
-                )
-            } != 0
-            {
-                /* someone else has the lock */
-                return false;
-            };
-        }
-
-        if self
-            .scanlock
-            .compare_exchange_weak(0, tid, Ordering::Acquire, Ordering::Acquire)
-            != Ok(0)
-        {
-            /* cas failed, we don't hold the lock */
-            return false;
-        }
-
-        /* successfully acquired the lock */
-        return true;
-    }
-
-    /// Acquire the scan lock.
-    fn acquire_scan_lock(&self, tid: usize) {
-        while !self.try_scan_lock(tid) {
-            // Try to make progress while waiting for scan lock.
-            // Someone is operating on log-0, so work on remaining logs.
-            for logidx in 1..self.logstate.len() {
-                self.try_combine(tid, logidx);
-            }
-        }
-    }
-
-    /// Release the scan lock.
-    fn release_scan_lock(&self) {
-        self.scanlock.store(0, Ordering::Release);
-    }
-
-    /// Try to acquire the combiner lock for `hashidx` log.
-    fn try_combiner_lock(&self, tid: usize, hashidx: usize) -> bool {
+    /// Appends an operation to the log and attempts to perform flat combining.
+    /// Accepts a thread `tid` as an argument. Required to acquire the combiner lock.
+    fn try_combine(&self, tid: usize, hashidx: usize) {
         // First, check if there already is a flat combiner. If there is no active flat combiner
         // then try to acquire the combiner lock. If there is, then just return.
         for _i in 0..4 {
@@ -791,8 +736,7 @@ where
                 )
             } != 0
             {
-                // Someone else has the lock.
-                return false;
+                return;
             };
         }
 
@@ -804,28 +748,6 @@ where
             Ordering::Acquire,
         ) != Ok(0)
         {
-            // CAS failed; unable to acquire the lock.
-            return false;
-        }
-        return true;
-    }
-
-    fn acquire_combiner_lock(&self, tid: usize, hashidx: usize) {
-        while !self.try_combiner_lock(tid, hashidx) {
-            spin_loop();
-        }
-    }
-
-    /// Release the scan lock.
-    fn release_combiner_lock(&self, hashidx: usize) {
-        self.logstate[hashidx].combiner.store(0, Ordering::Release);
-    }
-
-    /// Appends an operation to the log and attempts to perform flat combining.
-    /// Accepts a thread `tid` as an argument. Required to acquire the combiner lock.
-    fn try_combine(&self, tid: usize, hashidx: usize) {
-        // try to acquire combiner lock.
-        if !self.try_combiner_lock(tid, hashidx) {
             return;
         }
 
@@ -835,7 +757,7 @@ where
         // Allow other threads to perform flat combining once we have finished all our work.
         // At this point, we've dropped all mutable references to thread contexts and to
         // the staging buffer as well.
-        self.release_combiner_lock(hashidx);
+        self.logstate[hashidx].combiner.store(0, Ordering::Release);
     }
 
     /// Performs one round of flat combining. Collects, appends and executes operations.
@@ -852,7 +774,6 @@ where
         let next = self.next.load(Ordering::Relaxed);
 
         // Collect operations from each thread registered with this replica.
-        let mut scan_tid = 0;
         for tid in 1..next {
             if pending[tid - 1].compare_exchange_weak(
                 true,
@@ -863,9 +784,6 @@ where
             {
                 // pass hash of current op to contexts, only get ops from context that have the same hash/log id
                 self.contexts[tid - 1].ops(&mut buffer, &mut scan_buffer, hashidx);
-                if scan_buffer.len() > 0 {
-                    scan_tid = tid;
-                }
             }
         }
 
@@ -896,10 +814,8 @@ where
                 .slog
                 .append(&buffer, self.logstate[hashidx].idx, f);
 
-            if scan_tid != 0 {
-                // Only one outstanding scan operation per log is allowed for now.
-                assert_eq!(scan_buffer.len(), 1);
-                self.append_scan(scan_buffer[0].clone(), thread_id);
+            for i in 0..scan_buffer.len() {
+                self.append_scan(scan_buffer[i].clone(), thread_id);
             }
         }
 
@@ -938,44 +854,13 @@ where
         thread_id: usize,
         hashidx: usize,
         rid: usize,
-        tid: usize,
+        issuer_tid: usize,
         depends_on: &Vec<usize>,
     ) -> bool {
-        let mut f = |o: <D as Dispatch>::WriteOperation,
-                     rid: usize,
-                     tid: usize,
-                     is_scan,
-                     depends_on: Option<Arc<Vec<usize>>>|
-         -> bool {
-            // TODO: Is it okay to execute operation without pushing the response to results?
-            // If someone is waiting for the response then there will be an active combiner,
-            // and if there is no active combiner then the operations are to sync replica?
-            match is_scan {
-                false => {
-                    let resp = self.data.dispatch_mut(o);
-                    if rid == self.logstate[0].idx {
-                        self.contexts[tid - 1].enqueue_resp(resp);
-                    }
-                    return true;
-                }
-                true => {
-                    let depends_on = depends_on.as_ref().unwrap();
-                    if depends_on.len() != self.logstate.len() {
-                        return self.is_replica_sync_for_logs(0, 1, depends_on);
-                    } else {
-                        if self.is_replica_sync_for_logs(1, self.logstate.len(), depends_on) {
-                            self.data.dispatch_mut(o);
-                            return true;
-                        }
-                        return false;
-                    }
-                }
-            }
-        };
         let is_root = depends_on.len() == self.logstate.len();
         match is_root {
             // Leaf log(s) for scan operation.
-            false => loop {
+            false => {
                 let logidx = 0;
                 match self.logstate[logidx]
                     .slog
@@ -983,45 +868,33 @@ where
                 {
                     true => return true,
                     false => {
-                        if self.try_combiner_lock(thread_id, logidx) {
-                            self.logstate[logidx]
-                                .slog
-                                .exec(self.logstate[logidx].idx, &mut f);
-                            self.release_combiner_lock(logidx);
-                        }
+                        self.try_combine(thread_id, logidx);
+                        return self.is_replica_sync_for_logs(logidx, logidx + 1, depends_on);
                     }
                 }
-            },
+            }
 
             // Root log for scan operation.
             true => {
-                loop {
-                    let mut is_synced = true;
-                    for logidx in 1..self.logstate.len() {
-                        if !self.logstate[logidx].slog.is_replica_synced_for_reads(
-                            self.logstate[logidx].idx,
-                            depends_on[logidx],
-                        ) {
-                            is_synced = false;
-                            if self.try_combiner_lock(thread_id, logidx) {
-                                self.logstate[logidx]
-                                    .slog
-                                    .exec(self.logstate[logidx].idx, &mut f);
-                                self.release_combiner_lock(logidx);
-                            }
-                        }
-                    }
-
-                    if is_synced {
-                        break;
+                for logidx in 1..self.logstate.len() {
+                    if !self.logstate[logidx]
+                        .slog
+                        .is_replica_synced_for_reads(self.logstate[logidx].idx, depends_on[logidx])
+                    {
+                        self.try_combine(thread_id, logidx);
                     }
                 }
 
-                let resp = self.data.dispatch_mut(op);
-                if rid == self.logstate[hashidx].idx {
-                    self.contexts[tid - 1].enqueue_resp(resp);
-                };
-                return true;
+                match self.is_replica_sync_for_logs(1, self.logstate.len(), depends_on) {
+                    true => {
+                        let resp = self.data.dispatch_mut(op);
+                        if rid == self.logstate[hashidx].idx {
+                            self.contexts[issuer_tid - 1].enqueue_resp(resp);
+                        };
+                        return true;
+                    }
+                    false => return false,
+                }
             }
         }
     }
@@ -1459,6 +1332,6 @@ mod test {
         let _ignore = repl2.execute_mut(WriteOp(0), idx2);
 
         let resp = repl1.execute_mut(WriteOp(3), idx1);
-        assert_eq!(resp, Ok(nlogs));
+        assert_eq!(resp, Ok(nlogs + 1));
     }
 }
