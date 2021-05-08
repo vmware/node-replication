@@ -326,7 +326,7 @@ mod test {
         assert_eq!(c.comb.load(Ordering::Relaxed), 0);
 
         for idx in 0..MAX_PENDING_OPS / 2 {
-            assert_eq!(o[idx], idx * idx)
+            assert_eq!(o[idx].0, idx * idx)
         }
     }
 
@@ -349,7 +349,7 @@ mod test {
         assert_eq!(c.comb.load(Ordering::Relaxed), 0);
 
         for idx in 0..MAX_PENDING_OPS / 2 {
-            assert_eq!(scan[idx], idx * idx)
+            assert_eq!(scan[idx].0, idx * idx)
         }
     }
 
