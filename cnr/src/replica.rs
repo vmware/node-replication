@@ -94,7 +94,7 @@ impl<'a, D> LogState<'a, D>
 where
     D: Sized + Default + Dispatch + Sync,
 {
-    pub fn new(log: Arc<Log<'a, <D as Dispatch>::WriteOperation>>) -> LogState<'a, D> {
+    fn new(log: Arc<Log<'a, <D as Dispatch>::WriteOperation>>) -> LogState<'a, D> {
         let idx = log.register().unwrap();
         LogState {
             slog: log.clone(),
@@ -446,6 +446,72 @@ where
         self.get_response(idx.0, hash)
     }
 
+    /// This method executes an mutable operation against this replica that depends
+    /// on multiple logs and returns a response.
+    ///
+    /// `idx` is an identifier for the thread performing the execute operation.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use cnr::Dispatch;
+    /// use cnr::Log;
+    /// use cnr::LogMapper;
+    /// use cnr::Replica;
+    ///
+    /// use core::sync::atomic::{AtomicUsize, Ordering};
+    /// use std::sync::Arc;
+    ///
+    /// #[derive(Default)]
+    /// struct Data {
+    ///     junk: AtomicUsize,
+    /// }
+    ///
+    /// #[derive(Debug, Eq, PartialEq, Clone, Copy)]
+    /// pub struct OpWr(pub usize);
+    ///
+    /// impl LogMapper for OpWr {
+    ///     // Only one log used for the example, hence returning 0.
+    ///     fn hash(&self) -> usize { 0 }
+    /// }
+    ///
+    /// #[derive(Debug, Eq, PartialEq, Clone, Copy)]
+    /// pub struct OpRd(());
+    ///
+    /// impl LogMapper for OpRd {
+    ///     // Only one log used for the example, hence returning 0.
+    ///     fn hash(&self) -> usize { 0 }
+    /// }
+    ///
+    /// impl Dispatch for Data {
+    ///     type ReadOperation = OpRd;
+    ///     type WriteOperation = OpWr;
+    ///     type Response = Option<usize>;
+    ///
+    ///     fn dispatch(
+    ///         &self,
+    ///         _op: Self::ReadOperation,
+    ///     ) -> Self::Response {
+    ///         Some(self.junk.load(Ordering::Relaxed))
+    ///     }
+    ///
+    ///     fn dispatch_mut(
+    ///         &self,
+    ///         op: Self::WriteOperation,
+    ///     ) -> Self::Response {
+    ///         self.junk.store(op.0, Ordering::Relaxed);
+    ///         Some(op.0)
+    ///     }
+    /// }
+    ///
+    /// let log = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
+    /// let replica = Replica::<Data>::new(vec![log]);
+    /// let idx = replica.register().expect("Failed to register with replica.");
+    ///
+    /// // execute_mut_scan() can be used to write to the replicated data structure
+    /// // through all the logs.
+    /// let res = replica.execute_mut_scan(OpWr(100), idx);
+    /// assert_eq!(Some(100), res);
     pub fn execute_mut_scan(
         &self,
         op: <D as Dispatch>::WriteOperation,
