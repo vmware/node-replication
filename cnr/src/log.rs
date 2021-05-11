@@ -405,24 +405,7 @@ where
 
             // Successfully reserved entries on the shared log. Add the operations in.
             for i in 0..nops {
-                let e = self.slog[self.index(tail + i)].as_ptr();
-                let mut m = self.lmasks[idx - 1].get();
-
-                // This entry was just reserved so it should be dead (!= m). However, if
-                // the log has wrapped around, then the alive mask has flipped. In this
-                // case, we flip the mask we were originally going to write into the
-                // allocated entry. We cannot flip lmasks[idx - 1] because this replica
-                // might still need to execute a few entries before the wrap around.
-                if unsafe { (*e).alivef.load(Ordering::Relaxed) == m } {
-                    m = !m;
-                }
-
-                unsafe { (*e).operation = Some(ops[i].0.clone()) };
-                unsafe { (*e).replica = idx };
-                unsafe { (*e).thread = ops[i].1 };
-                unsafe { (*e).is_scan = false };
-                unsafe { (*e).depends_on = None };
-                unsafe { (*e).alivef.store(m, Ordering::Release) };
+                unsafe { self.update_entry(tail + i, &ops[i], idx, false, None) };
             }
 
             // If needed, advance the head of the log forward to make room on the log.
@@ -480,22 +463,10 @@ where
 
         // Successfully reserved entries on the shared log. Add the operations in.
         log_offset = tail;
-        let e = self.slog[self.index(log_offset)].as_ptr();
-        let mut m = self.lmasks[idx - 1].get();
-
-        if unsafe { (*e).alivef.load(Ordering::Relaxed) == m } {
-            m = !m;
-        }
-
-        // Add empty scan op to all the logs but 0. Reserve enrty and exit for 0. Use `fix_scan_entry`
-        // to update entry for log-0, as it requires the offsets for all the remaining logs.
         if self.idx != 1 {
-            unsafe { (*e).operation = Some(op.0.clone()) };
-            unsafe { (*e).replica = idx };
-            unsafe { (*e).thread = op.1 };
-            unsafe { (*e).is_scan = true };
-            unsafe { (*e).depends_on = Some(Arc::new(vec![offset[0]])) };
-            unsafe { (*e).alivef.store(m, Ordering::Release) };
+            unsafe {
+                self.update_entry(log_offset, op, idx, true, Some(Arc::new(vec![offset[0]])))
+            };
         }
 
         // If needed, advance the head of the log forward to make room on the log.
@@ -509,20 +480,36 @@ where
     /// Update the depends_on field for scan operation. Replica mainatins the
     /// offset for the scan entry and later it updates the remaining offset there.
     pub(crate) fn fix_scan_entry(&self, op: &(T, usize), idx: usize, offsets: &Vec<usize>) {
-        let entry = offsets[0];
-        let e = self.slog[self.index(entry)].as_ptr();
+        unsafe { self.update_entry(offsets[0], op, idx, true, Some(Arc::new(offsets.to_vec()))) };
+    }
 
+    #[inline(always)]
+    unsafe fn update_entry(
+        &self,
+        offset: usize,
+        op: &(T, usize),
+        idx: usize,
+        is_scan: bool,
+        depends_on: Option<Arc<Vec<usize>>>,
+    ) {
+        let e = self.slog[self.index(offset)].as_ptr();
         let mut m = self.lmasks[idx - 1].get();
-        if unsafe { (*e).alivef.load(Ordering::Relaxed) == m } {
+
+        // This entry was just reserved so it should be dead (!= m). However, if
+        // the log has wrapped around, then the alive mask has flipped. In this
+        // case, we flip the mask we were originally going to write into the
+        // allocated entry. We cannot flip lmasks[idx - 1] because this replica
+        // might still need to execute a few entries before the wrap around.
+        if (*e).alivef.load(Ordering::Relaxed) == m {
             m = !m;
         }
 
-        unsafe { (*e).operation = Some(op.0.clone()) };
-        unsafe { (*e).replica = idx };
-        unsafe { (*e).thread = op.1 };
-        unsafe { (*e).is_scan = true };
-        unsafe { (*e).depends_on = Some(Arc::new(offsets.to_vec())) };
-        unsafe { (*e).alivef.store(m, Ordering::Release) };
+        (*e).operation = Some(op.0.clone());
+        (*e).replica = idx;
+        (*e).thread = op.1;
+        (*e).is_scan = is_scan;
+        (*e).depends_on = depends_on;
+        (*e).alivef.store(m, Ordering::Release);
     }
 
     /// Try to acquire the scan lock.
