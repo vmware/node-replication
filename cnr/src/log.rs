@@ -455,7 +455,7 @@ where
         // from the beginning of this loop.
         if self
             .tail
-            .compare_exchange_weak(tail, tail + nops, Ordering::Acquire, Ordering::Acquire)
+            .compare_exchange_weak(tail, tail + nops, Ordering::Acquire, Ordering::Relaxed)
             != Ok(tail)
         {
             return Err(0);
@@ -530,7 +530,7 @@ where
 
         if self
             .scanlock
-            .compare_exchange_weak(0, tid, Ordering::Acquire, Ordering::Acquire)
+            .compare_exchange_weak(0, tid, Ordering::Acquire, Ordering::Relaxed)
             != Ok(0)
         {
             /* cas failed, we don't hold the lock */
