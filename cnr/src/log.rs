@@ -479,8 +479,8 @@ where
 
     /// Update the depends_on field for scan operation. Replica mainatins the
     /// offset for the scan entry and later it updates the remaining offset there.
-    pub(crate) fn fix_scan_entry(&self, op: &(T, usize), idx: usize, offsets: &Vec<usize>) {
-        unsafe { self.update_entry(offsets[0], op, idx, true, Some(Arc::new(offsets.to_vec()))) };
+    pub(crate) fn fix_scan_entry(&self, op: &(T, usize), idx: usize, offsets: Arc<Vec<usize>>) {
+        unsafe { self.update_entry(offsets[0], op, idx, true, Some(offsets)) };
     }
 
     #[inline(always)]

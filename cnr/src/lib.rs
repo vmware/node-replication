@@ -97,6 +97,7 @@
 #![feature(new_uninit)]
 #![feature(get_mut_unchecked)]
 #![feature(negative_impls)]
+#![feature(try_reserve)]
 
 #[cfg(test)]
 extern crate std;

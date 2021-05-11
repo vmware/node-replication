@@ -629,10 +629,18 @@ where
         }
         self.logstate[root_log].slog.release_scan_lock();
 
+        let mut offset = Vec::new();
+        offset
+            .try_reserve_exact(entries.len())
+            .expect("Unable to allocate vector for scan operation");
+        offset.append(&mut entries);
+
         // Update scan entry depends_on.
-        self.logstate[root_log]
-            .slog
-            .fix_scan_entry(&op, self.logstate[root_log].idx, &entries);
+        self.logstate[root_log].slog.fix_scan_entry(
+            &op,
+            self.logstate[root_log].idx,
+            Arc::new(offset),
+        );
     }
 
     /// Executes a read-only operation against this replica and returns a response.
