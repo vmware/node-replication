@@ -178,9 +178,10 @@ pub enum OpWr {
 }
 
 impl LogMapper for OpWr {
-    fn hash(&self) -> usize {
+    fn hash(&self, nlogs: usize, logs: &mut Vec<usize>) {
+        logs.clear();
         match self {
-            OpWr::Put(k, _v) => (unsafe { *k / SPAN as u64 }) as usize,
+            OpWr::Put(k, _v) => logs.push((unsafe { *k / SPAN as u64 }) as usize % nlogs),
         }
     }
 }
@@ -192,9 +193,10 @@ pub enum OpRd {
 }
 
 impl LogMapper for OpRd {
-    fn hash(&self) -> usize {
+    fn hash(&self, nlogs: usize, logs: &mut Vec<usize>) {
+        logs.clear();
         match self {
-            OpRd::Get(k) => (unsafe { *k / SPAN as u64 }) as usize,
+            OpRd::Get(k) => logs.push((unsafe { *k / SPAN as u64 }) as usize % nlogs),
         }
     }
 }
