@@ -41,9 +41,10 @@
 //! /// operations can map to same or different log and conflicting operations
 //! /// must map to same log.
 //! impl LogMapper for Modify {
-//!    fn hash(&self) -> usize {
+//!    fn hash(&self, nlogs: usize, logs: &mut Vec<usize>) {
+//!       logs.clear();
 //!       match self {
-//!          Modify::Put(key, _val) => *key
+//!          Modify::Put(key, _val) => logs.push(*key % nlogs),
 //!       }
 //!    }
 //! }
@@ -58,9 +59,10 @@
 //! /// is used to map the operation to one of the many log. Commutative operations
 //! /// can go to same or different log and conflicts operations must map to same log.
 //! impl LogMapper for Access {
-//!    fn hash(&self) -> usize {
+//!    fn hash(&self, nlogs: usize, logs: &mut Vec<usize>) {
+//!       logs.clear();
 //!       match self {
-//!          Access::Get(key) => *key
+//!          Access::Get(key) => logs.push(*key % nlogs),
 //!       }
 //!    }
 //! }
@@ -117,6 +119,7 @@ mod replica;
 pub use crate::log::Log;
 pub use replica::{Replica, ReplicaToken, MAX_THREADS_PER_REPLICA};
 
+use alloc::vec::Vec;
 use core::fmt::Debug;
 
 /// Every data structure must implement [LogMapper](trait.LogMapper.html) trait
@@ -132,7 +135,7 @@ use core::fmt::Debug;
 /// trait to return a value between 0 and (#logs-1) to avoid the modulo operation.
 pub trait LogMapper {
     /// Method to convert the operation and it's arguments to a log number.
-    fn hash(&self) -> usize;
+    fn hash(&self, nlogs: usize, logs: &mut Vec<usize>);
 }
 
 /// Trait that a data structure must implement to be usable with this library.

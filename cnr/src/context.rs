@@ -54,7 +54,8 @@ where
     /// We can avoid making it an atomic by assuming we're on x86.
     pub comb: CachePadded<AtomicUsize>,
 
-    /// Identified the context numbers with-in a replica.
+    /// Identifies the context number with-in a replica. Id also maps to the thread-id because
+    /// the partitioned nature of the contexts in the replica.
     idx: usize,
 }
 

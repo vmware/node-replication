@@ -20,9 +20,10 @@ enum OpRd {
 }
 
 impl LogMapper for OpRd {
-    fn hash(&self) -> usize {
+    fn hash(&self, nlogs: usize, logs: &mut Vec<usize>) {
+        logs.clear();
         match self {
-            OpRd::Get(k) => *k,
+            OpRd::Get(k) => logs.push(*k % nlogs),
         }
     }
 }
@@ -30,12 +31,19 @@ impl LogMapper for OpRd {
 #[derive(Eq, PartialEq, Clone, Copy, Debug)]
 enum OpWr {
     Put(usize, usize),
+    PutScan(usize, usize),
 }
 
 impl LogMapper for OpWr {
-    fn hash(&self) -> usize {
+    fn hash(&self, nlogs: usize, logs: &mut Vec<usize>) {
+        logs.clear();
         match self {
-            OpWr::Put(k, _v) => *k,
+            OpWr::Put(k, _v) => logs.push(*k % nlogs),
+            OpWr::PutScan(_k, _v) => {
+                for i in 0..nlogs {
+                    logs.push(i);
+                }
+            }
         }
     }
 }
@@ -65,6 +73,7 @@ impl Dispatch for CNRHashmap {
     fn dispatch_mut(&self, op: Self::WriteOperation) -> Self::Response {
         match op {
             OpWr::Put(key, val) => self.hashmap.insert(key, val),
+            OpWr::PutScan(key, val) => self.hashmap.insert(key, val),
         }
     }
 }
@@ -100,7 +109,7 @@ fn setup(nlogs: usize, nreplicas: usize, nops: usize, nthreads: usize) {
 
             for i in 0..nops {
                 match i % 3 {
-                    0 => replica.execute_mut_scan(OpWr::Put(i, idx.id()), idx),
+                    0 => replica.execute_mut_scan(OpWr::PutScan(i, idx.id()), idx),
                     1 => replica.execute_mut(OpWr::Put(i, idx.id()), idx),
                     2 => replica.execute(OpRd::Get(i), idx),
                     _ => unreachable!(),
