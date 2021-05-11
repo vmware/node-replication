@@ -1,4 +1,4 @@
-# node-replication
+# Concurrent Node Replication
 
 CNR (Concurrent Node Replication) library is extension to [Black-box Concurrent Data Structures for NUMA
 Architectures](https://dl.acm.org/citation.cfm?id=3037721) paper.
@@ -30,9 +30,10 @@ pub enum Modify {
 /// in a round-robin fashion. One can change the implementation to improve the 
 /// data locality based on the data sturucture layout in the memory.
 impl LogMapper for Modify {
-   fn hash(&self) -> usize {
+   fn hash(&self, _nlogs: usize, logs: &mut Vec<usize>) {
+      logs.clear();
       match self {
-         Modify::Put(key, _val) => *key
+         Modify::Put(key, _val) => log.push(*key % nlogs),
       }
    }
 }
@@ -47,9 +48,10 @@ pub enum Access {
 /// ensures that the read and write operations for a particular key go to
 /// the same log.
 impl LogMapper for Access {
-   fn hash(&self) -> usize {
+   fn hash(&self, nlogs: usize, logs: &mut Vec<usize>) {
+      logs.clear();
       match self {
-         Access::Get(key) => *key
+         Access::Get(key) => log.push(*key % nlogs),
       }
    }
 }
