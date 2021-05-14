@@ -61,7 +61,7 @@ const_assert!(
 /// An instance of per log state maintained by each replica.
 pub(self) struct LogState<'a, D>
 where
-    D: Sized + Default + Dispatch + Sync,
+    D: Sized + Dispatch + Sync,
 {
     /// References to the shared logs that operations will be appended to and the
     /// data structure will be updated from.
@@ -92,7 +92,7 @@ where
 
 impl<'a, D> LogState<'a, D>
 where
-    D: Sized + Default + Dispatch + Sync,
+    D: Sized + Dispatch + Sync,
 {
     fn new(log: Arc<Log<'a, <D as Dispatch>::WriteOperation>>) -> LogState<'a, D> {
         let idx = log.register().unwrap();
@@ -133,7 +133,7 @@ where
 /// the same underlying log.
 pub struct Replica<'a, D>
 where
-    D: Sized + Default + Dispatch + Sync,
+    D: Sized + Dispatch + Sync,
 {
     /// Idx that will be handed out to the next thread that registers with the replica.
     next: CachePadded<AtomicUsize>,
@@ -160,11 +160,11 @@ where
 
 /// The Replica is Sync. Member variables are protected by a CAS on `combiner`.
 /// Contexts are thread-safe.
-unsafe impl<'a, D> Sync for Replica<'a, D> where D: Sized + Default + Sync + Dispatch {}
+unsafe impl<'a, D> Sync for Replica<'a, D> where D: Sized + Sync + Dispatch {}
 
 impl<'a, D> core::fmt::Debug for Replica<'a, D>
 where
-    D: Sized + Default + Sync + Dispatch,
+    D: Sized + Sync + Dispatch,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         write!(f, "Replica")
@@ -173,7 +173,7 @@ where
 
 impl<'a, D> Replica<'a, D>
 where
-    D: Sized + Default + Dispatch + Sync,
+    D: Sized + Dispatch + Default + Sync,
 {
     /// Constructs an instance of a replicated data structure.
     ///
@@ -254,6 +254,27 @@ where
     pub fn new<'b>(
         logs: Vec<Arc<Log<'b, <D as Dispatch>::WriteOperation>>>,
     ) -> Arc<Replica<'b, D>> {
+        Replica::with_data(logs, Default::default())
+    }
+}
+
+impl<'a, D> Replica<'a, D>
+where
+    D: Sized + Dispatch + Sync,
+{
+    /// Similar to [`Replica<D>::new`], but we pass a pre-initialized
+    /// data-structure as an argument (`d`) rather than relying on the
+    /// [Default](core::default::Default) trait to create one.
+    ///
+    /// # Note
+    /// [`Replica<D>::new`] should be the preferred method to create a Replica.
+    /// If `with_data` is used, care must be taken that the same state is passed
+    /// to every Replica object. If not the resulting operations executed
+    /// against replicas may not give deterministic results.
+    pub fn with_data<'b>(
+        logs: Vec<Arc<Log<'b, <D as Dispatch>::WriteOperation>>>,
+        d: D,
+    ) -> Arc<Replica<'b, D>> {
         let mut uninit_replica: Arc<MaybeUninit<Replica<D>>> = Arc::new_zeroed();
 
         // This is the preferred but unsafe mode of initialization as it avoids
@@ -263,7 +284,7 @@ where
 
             uninit_ptr.write(Replica {
                 next: CachePadded::new(AtomicUsize::new(1)),
-                data: CachePadded::new(D::default()),
+                data: CachePadded::new(d),
                 logstate: Vec::with_capacity(logs.len()),
                 contexts: Vec::with_capacity(MAX_THREADS_PER_REPLICA),
                 offsets: Vec::with_capacity(MAX_THREADS_PER_REPLICA),
@@ -805,7 +826,13 @@ where
     /// No need to run in a loop because the replica will
     /// be synced for log_id if there is an active combiner.
     pub fn sync_log(&self, idx: ReplicaToken, log_id: usize) {
-        self.try_combine(idx.0, log_id - 1);
+        let ctail = self.logstate[log_id - 1].slog.get_ctail();
+        if !self.logstate[log_id - 1]
+            .slog
+            .is_replica_synced_for_reads(self.logstate[log_id - 1].idx, ctail)
+        {
+            self.try_combine(idx.0, log_id - 1);
+        }
     }
 
     /// Issues a read-only operation against the replica and returns a response.
@@ -1251,6 +1278,7 @@ mod test {
         let repl = Replica::<Data>::new(vec![slog.clone()]);
 
         // Add in operations to the log off the side, not through the replica.
+        let _ignore = slog.register().expect("Failed to register with log.");
         let o = [(OpWr(121), 1), (OpWr(212), 1)];
         slog.append(&o, 2, |_o: OpWr, _i: usize, _, _, _| true);
         slog.exec(2, &mut |_o: OpWr, _i: usize, _, _, _| true);
