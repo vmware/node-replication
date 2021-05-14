@@ -4,7 +4,6 @@
 //! Defines a stack data-structure that can be replicated.
 #![allow(unused)]
 #![feature(test)]
-#![feature(bench_black_box)]
 
 use std::cell::RefCell;
 
