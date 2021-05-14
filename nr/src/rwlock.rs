@@ -29,7 +29,7 @@ const_assert!(MAX_READER_THREADS > 0);
 /// Calling `write()` returns a write-guard that can be used to safely mutate `T`.
 pub struct RwLock<T>
 where
-    T: Sized + Default + Sync,
+    T: Sized + Sync,
 {
     /// The writer lock. There can be at most one writer at any given point of time.
     wlock: CachePadded<AtomicBool>,
@@ -43,7 +43,7 @@ where
 
 /// A read-guard that can be used to read the underlying data structure. Writes on
 /// the data structure will be blocked as long as one of these is lying around.
-pub struct ReadGuard<'a, T: ?Sized + Default + Sync + 'a> {
+pub struct ReadGuard<'a, T: Sized + Sync + 'a> {
     /// Id of the thread that acquired this guard. Required at drop time so that
     /// we can release the appropriate read lock.
     tid: usize,
@@ -54,7 +54,7 @@ pub struct ReadGuard<'a, T: ?Sized + Default + Sync + 'a> {
 
 /// A write-guard that can be used to write to the underlying data structure. All
 /// reads will be blocked until this is dropped.
-pub struct WriteGuard<'a, T: ?Sized + Default + Sync + 'a> {
+pub struct WriteGuard<'a, T: Sized + Sync + 'a> {
     /// A reference to the Rwlock wrapping the data-structure.
     lock: &'a RwLock<T>,
 }
@@ -78,8 +78,20 @@ where
 
 impl<T> RwLock<T>
 where
-    T: Sized + Default + Sync,
+    T: Sized + Sync,
 {
+    /// Returns a new instance of a RwLock. Default constructs the
+    /// underlying data structure.
+    pub fn new(t: T) -> Self {
+        use arr_macro::arr;
+
+        Self {
+            wlock: CachePadded::new(AtomicBool::new(false)),
+            rlock: arr![Default::default(); 192],
+            data: UnsafeCell::new(t),
+        }
+    }
+
     /// Locks the underlying data-structure for writes. The caller can retrieve
     /// a mutable reference from the returned `WriteGuard`.
     ///
@@ -197,14 +209,14 @@ where
     }
 }
 
-impl<'rwlock, T: ?Sized + Default + Sync> ReadGuard<'rwlock, T> {
+impl<'rwlock, T: Sized + Sync> ReadGuard<'rwlock, T> {
     /// Returns a read guard over a passed in reader-writer lock.
     unsafe fn new(lock: &'rwlock RwLock<T>, tid: usize) -> ReadGuard<'rwlock, T> {
         ReadGuard { tid, lock }
     }
 }
 
-impl<'rwlock, T: ?Sized + Default + Sync> WriteGuard<'rwlock, T> {
+impl<'rwlock, T: Sized + Sync> WriteGuard<'rwlock, T> {
     /// Returns a write guard over a passed in reader-writer lock.
     unsafe fn new(lock: &'rwlock RwLock<T>) -> WriteGuard<'rwlock, T> {
         WriteGuard { lock }
@@ -214,11 +226,11 @@ impl<'rwlock, T: ?Sized + Default + Sync> WriteGuard<'rwlock, T> {
 /// `Sync` trait allows `RwLock` to be shared between threads. The `read()` and
 /// `write()` logic ensures that we will never have threads writing to and
 /// reading from the underlying data structure simultaneously.
-unsafe impl<T: ?Sized + Default + Sync> Sync for RwLock<T> {}
+unsafe impl<T: Sized + Sync> Sync for RwLock<T> {}
 
 /// This `Deref` trait allows a thread to use T from a ReadGuard.
 /// ReadGuard can only be dereferenced into an immutable reference.
-impl<T: ?Sized + Default + Sync> Deref for ReadGuard<'_, T> {
+impl<T: Sized + Sync> Deref for ReadGuard<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &T {
@@ -228,7 +240,7 @@ impl<T: ?Sized + Default + Sync> Deref for ReadGuard<'_, T> {
 
 /// This `Deref` trait allows a thread to use T from a WriteGuard.
 /// This allows us to dereference an immutable reference.
-impl<T: ?Sized + Default + Sync> Deref for WriteGuard<'_, T> {
+impl<T: Sized + Sync> Deref for WriteGuard<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &T {
@@ -238,7 +250,7 @@ impl<T: ?Sized + Default + Sync> Deref for WriteGuard<'_, T> {
 
 /// This `DerefMut` trait allow a thread to use T from a WriteGuard.
 /// This allows us to dereference a mutable reference.
-impl<T: ?Sized + Default + Sync> DerefMut for WriteGuard<'_, T> {
+impl<T: Sized + Sync> DerefMut for WriteGuard<'_, T> {
     fn deref_mut(&mut self) -> &mut T {
         unsafe { &mut *self.lock.data.get() }
     }
@@ -246,7 +258,7 @@ impl<T: ?Sized + Default + Sync> DerefMut for WriteGuard<'_, T> {
 
 /// This `Drop` trait implements the unlock logic for a reader lock. Once the `ReadGuard`
 /// goes out of scope, the corresponding read lock is marked as released.
-impl<T: ?Sized + Default + Sync> Drop for ReadGuard<'_, T> {
+impl<T: Sized + Sync> Drop for ReadGuard<'_, T> {
     fn drop(&mut self) {
         unsafe {
             let tid = self.tid;
@@ -257,7 +269,7 @@ impl<T: ?Sized + Default + Sync> Drop for ReadGuard<'_, T> {
 
 /// This `Drop` trait implements the unlock logic for a writer lock. Once the `WriteGuard`
 /// goes out of scope, the corresponding write lock is marked as released.
-impl<T: ?Sized + Default + Sync> Drop for WriteGuard<'_, T> {
+impl<T: Sized + Sync> Drop for WriteGuard<'_, T> {
     fn drop(&mut self) {
         unsafe {
             self.lock.write_unlock();
