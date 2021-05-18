@@ -152,7 +152,7 @@ where
     offsets: Vec<RefCell<Vec<usize>>>,
 
     /// It is used to store the log-ids for scan operations.
-    hash: Vec<RefCell<Vec<usize>>>,
+    hash: Vec<CachePadded<RefCell<Vec<usize>>>>,
 
     /// An instance of per log state maintained by each replica.
     logstate: Vec<CachePadded<LogState<'a, D>>>,
@@ -303,7 +303,9 @@ where
                     .push(RefCell::new(Vec::with_capacity(logs.len())));
                 replica_mut
                     .hash
-                    .push(RefCell::new(Vec::with_capacity(logs.len())));
+                    .push(CachePadded::new(RefCell::new(Vec::with_capacity(
+                        logs.len(),
+                    ))));
             }
 
             // Add per-log state
