@@ -661,26 +661,26 @@ where
         #[cfg(feature = "c_nr")]
         {
             use core::sync::atomic::AtomicBool;
-            let func = &|rid: &[AtomicBool], idx: usize| {
-                let stuck = stuck.clone();
-                for replia in 0..192 {
-                    if rid[replia].compare_exchange_weak(
-                        true,
-                        false,
-                        Ordering::Relaxed,
-                        Ordering::Relaxed,
-                    ) == Ok(true)
-                    {
-                        stuck[replia].compare_exchange_weak(
-                            0,
-                            idx,
-                            Ordering::Release,
-                            Ordering::Relaxed,
-                        );
-                    }
-                }
-            };
             for i in 0..nlogs {
+                let stuck = stuck.clone();
+                let func = move |rid: &[AtomicBool; 192], idx: usize| {
+                    for replia in 0..192 {
+                        if rid[replia].compare_exchange_weak(
+                            true,
+                            false,
+                            Ordering::Relaxed,
+                            Ordering::Relaxed,
+                        ) == Ok(true)
+                        {
+                            stuck[replia].compare_exchange_weak(
+                                0,
+                                idx,
+                                Ordering::Release,
+                                Ordering::Relaxed,
+                            );
+                        }
+                    }
+                };
                 unsafe { Arc::get_mut_unchecked(&mut self.log[i]).update_closure(func) };
             }
         }

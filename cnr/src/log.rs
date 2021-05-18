@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use alloc::alloc::{alloc, dealloc, Layout};
+use alloc::prelude::v1::Box;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
@@ -154,7 +155,7 @@ where
     /// replica number for this log. The application can then take action to start the log
     /// consumption on that replica. If the application is proactively taking measures to
     /// consume the log on all the replicas, then the variable can be initialized to default.
-    gc: UnsafeCell<*const dyn FnMut(&[AtomicBool; MAX_REPLICAS], usize)>,
+    gc: UnsafeCell<Box<dyn FnMut(&[AtomicBool; MAX_REPLICAS], usize)>>,
 
     /// Use to append scan op atomically to all the logs.
     scanlock: CachePadded<AtomicUsize>,
@@ -281,7 +282,9 @@ where
             ltails: arr![Default::default(); 192],
             next: CachePadded::new(AtomicUsize::new(1usize)),
             lmasks: fls,
-            gc: UnsafeCell::new(&|_rid: &[AtomicBool; MAX_REPLICAS], _lid: usize| {}),
+            gc: UnsafeCell::new(Box::new(
+                |_rid: &[AtomicBool; MAX_REPLICAS], _lid: usize| {},
+            )),
             scanlock: CachePadded::new(AtomicUsize::new(0)),
             notify_replicas: CachePadded::new(AtomicBool::new(true)),
             dormant_replicas: arr![Default::default(); 192],
@@ -315,13 +318,13 @@ where
     /// let mut l = Log::<Operation>::new(1 * 1024 * 1024, 1);
     ///
     /// // Update the callback function for the log.
-    /// let callback_func = &|rid: &[AtomicBool], idx: usize| {
+    /// let callback_func = |rid: &[AtomicBool; 192], idx: usize| {
     ///     // Take action on log `idx` and replicas in `rid`.
     /// };
     /// l.update_closure(callback_func)
     /// ```
-    pub fn update_closure(&mut self, gc: &dyn FnMut(&[AtomicBool], usize)) {
-        unsafe { *self.gc.get() = core::mem::transmute(gc) };
+    pub fn update_closure(&mut self, gc: impl FnMut(&[AtomicBool; MAX_REPLICAS], usize) + 'static) {
+        unsafe { *self.gc.get() = Box::new(gc) };
     }
 
     /// Registers a replica with the log. Returns an identifier that the replica
@@ -406,9 +409,7 @@ where
                         Ordering::Relaxed,
                     ) == Ok(true)
                 {
-                    let f: &mut dyn FnMut(&[AtomicBool], usize) =
-                        unsafe { &mut *(*self.gc.get() as *mut dyn FnMut(&[AtomicBool], usize)) };
-                    f(&self.dormant_replicas, self.idx);
+                    unsafe { (*self.gc.get())(&self.dormant_replicas, self.idx) };
                 }
             }
 
