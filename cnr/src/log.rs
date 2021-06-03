@@ -70,6 +70,9 @@ where
     /// Identifies if the operation is of scan type or not.
     is_scan: bool,
 
+    /// Identifies if the operation is immutable scan or not.
+    is_read_op: bool,
+
     /// If operation is of scan type, then `depends_on` stores
     /// the offsets in other logs this operation depends on.
     depends_on: Option<Arc<Vec<usize>>>,
@@ -257,6 +260,7 @@ where
                         replica: 0usize,
                         thread: 0usize,
                         is_scan: false,
+                        is_read_op: false,
                         depends_on: None,
                         alivef: AtomicBool::new(false),
                         refcnt: AtomicUsize::new(0),
@@ -360,7 +364,7 @@ where
     #[doc(hidden)]
     pub fn append<F: FnMut(T, usize, usize, bool, Option<Arc<Vec<usize>>>) -> bool>(
         &self,
-        ops: &[(T, usize)],
+        ops: &[(T, usize, bool)],
         idx: usize,
         mut s: F,
     ) {
@@ -471,7 +475,7 @@ where
         F: FnMut(T, usize, usize, bool, Option<Arc<Vec<usize>>>) -> bool,
     >(
         &self,
-        op: &(T, usize),
+        op: &(T, usize, bool),
         idx: usize,
         offset: &Vec<usize>,
         mut s: F,
@@ -526,7 +530,12 @@ where
 
     /// Update the depends_on field for scan operation. Replica mainatins the
     /// offset for the scan entry and later it updates the remaining offset there.
-    pub(crate) fn fix_scan_entry(&self, op: &(T, usize), idx: usize, offsets: Arc<Vec<usize>>) {
+    pub(crate) fn fix_scan_entry(
+        &self,
+        op: &(T, usize, bool),
+        idx: usize,
+        offsets: Arc<Vec<usize>>,
+    ) {
         unsafe { self.update_entry(offsets[0], op, idx, true, Some(offsets)) };
     }
 
@@ -534,7 +543,7 @@ where
     unsafe fn update_entry(
         &self,
         offset: usize,
-        op: &(T, usize),
+        op: &(T, usize, bool),
         idx: usize,
         is_scan: bool,
         depends_on: Option<Arc<Vec<usize>>>,
@@ -556,6 +565,7 @@ where
         (*e).replica = idx;
         (*e).thread = op.1;
         (*e).is_scan = is_scan;
+        (*e).is_read_op = op.2;
         (*e).depends_on = depends_on;
         (*e).refcnt = AtomicUsize::new(num_replicas);
         (*e).alivef.store(m, Ordering::Release);

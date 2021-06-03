@@ -15,7 +15,14 @@ const_assert!(MAX_PENDING_OPS >= 1 && (MAX_PENDING_OPS & (MAX_PENDING_OPS - 1) =
 
 /// A pending operation is a combination of the its op-code (T),
 /// and the corresponding result (R).
-type PendingOperation<T, R> = Cell<(Option<T>, Option<usize>, Option<R>, Option<bool>)>;
+/// Cell contains: Operatio, hash, response, is_scan, is_read_only
+type PendingOperation<T, R> = Cell<(
+    Option<T>,
+    Option<usize>,
+    Option<R>,
+    Option<bool>,
+    Option<bool>,
+)>;
 
 /// Contains all state local to a particular thread.
 ///
@@ -69,7 +76,7 @@ where
         let mut batch: [CachePadded<PendingOperation<T, R>>; MAX_PENDING_OPS] =
             unsafe { ::core::mem::MaybeUninit::zeroed().assume_init() };
         for elem in &mut batch[..] {
-            *elem = CachePadded::new(Cell::new((None, None, None, None)));
+            *elem = CachePadded::new(Cell::new((None, None, None, None, None)));
         }
 
         Context {
@@ -98,7 +105,7 @@ where
     ///
     /// Returns true if the operation was successfully enqueued. False otherwise.
     #[inline(always)]
-    pub(crate) fn enqueue(&self, op: T, hash: usize, is_scan: bool) -> bool {
+    pub(crate) fn enqueue(&self, op: T, hash: usize, is_scan: bool, is_read_only: bool) -> bool {
         let t = self.tail.load(Ordering::Relaxed);
         let h = self.head.load(Ordering::Relaxed);
 
@@ -115,6 +122,7 @@ where
         unsafe { (*e).0 = Some(op) };
         unsafe { (*e).1 = Some(hash) };
         unsafe { (*e).3 = Some(is_scan) };
+        unsafe { (*e).4 = Some(is_read_only) };
 
         self.tail.store(t + 1, Ordering::Relaxed);
         true
@@ -160,8 +168,8 @@ where
     #[inline(always)]
     pub(crate) fn ops(
         &self,
-        buffer: &mut Vec<(T, usize)>,
-        scan_buffer: &mut Vec<(T, usize)>,
+        buffer: &mut Vec<(T, usize, bool)>,
+        scan_buffer: &mut Vec<(T, usize, bool)>,
         hash: usize,
     ) -> usize {
         let mut h = self.comb.load(Ordering::Relaxed);
@@ -186,10 +194,16 @@ where
             let e = self.batch[self.index(i)].as_ptr();
             if unsafe { (*e).1 } == Some(hash) {
                 match unsafe { (*e).3.unwrap() } {
-                    true => {
-                        scan_buffer.push((unsafe { (*e).0.as_ref().unwrap().clone() }, self.idx))
-                    }
-                    false => buffer.push((unsafe { (*e).0.as_ref().unwrap().clone() }, self.idx)),
+                    true => unsafe {
+                        scan_buffer.push((
+                            (*e).0.as_ref().unwrap().clone(),
+                            self.idx,
+                            (*e).4.unwrap(),
+                        ))
+                    },
+                    false => unsafe {
+                        buffer.push(((*e).0.as_ref().unwrap().clone(), self.idx, (*e).4.unwrap()))
+                    },
                 }
 
                 n += 1;

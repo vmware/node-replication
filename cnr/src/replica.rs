@@ -83,11 +83,13 @@ where
 
     /// A buffer of operations for flat combining. The combiner stages operations in
     /// here and then batch appends them into the shared log. This helps amortize
-    /// the cost of the compare_and_swap() on the tail of the log.
-    buffer: CachePadded<RefCell<Vec<(<D as Dispatch>::WriteOperation, usize)>>>,
+    /// the cost of the compare_and_swap() on the tail of the log. Each entry in buffer
+    /// contains the write operation, hash, and is_read(we store scan read ops).
+    buffer: CachePadded<RefCell<Vec<(<D as Dispatch>::WriteOperation, usize, bool)>>>,
 
-    /// A buffer of scan type operations for flat combining.
-    scan_buffer: CachePadded<RefCell<Vec<(<D as Dispatch>::WriteOperation, usize)>>>,
+    /// A buffer of scan type operations for flat combining. Each entry in buffer
+    /// contains the write operation, hash, and is_read(we store scan read ops).
+    scan_buffer: CachePadded<RefCell<Vec<(<D as Dispatch>::WriteOperation, usize, bool)>>>,
 }
 
 impl<'a, D> LogState<'a, D>
@@ -495,7 +497,7 @@ where
         let hash = hash_vec[0];
 
         // Enqueue the operation onto the thread local batch and then try to flat combine.
-        self.make_pending(op.clone(), idx.0, hash, false);
+        self.make_pending(op.clone(), idx.0, hash, false, false);
 
         // A thread becomes combiner for operations with hash same as its own operation.
         self.try_combine(idx.0, hash);
@@ -593,7 +595,7 @@ where
 
         let hash = 0; /* Fake hash; scan op is appended to each log.*/
         // Enqueue the operation onto the thread local batch and then try to flat combine.
-        self.make_pending(op.clone(), idx.0, hash, true);
+        self.make_pending(op.clone(), idx.0, hash, true, false);
 
         // A thread becomes combiner for operations with hash same as its own operation.
         self.try_combine(idx.0, hash);
@@ -604,7 +606,7 @@ where
         resp
     }
 
-    fn append_scan(&self, op: (<D as Dispatch>::WriteOperation, usize), thread_id: usize) {
+    fn append_scan(&self, op: (<D as Dispatch>::WriteOperation, usize, bool), thread_id: usize) {
         let mut hash_vec = self.hash[op.1 - 1].borrow_mut();
         let mut entries = self.offsets[thread_id - 1].borrow_mut();
         entries.clear();
@@ -746,6 +748,106 @@ where
         self.read_only(op, idx.0)
     }
 
+    /// This method executes an mutable operation against this replica that depends
+    /// on multiple logs and returns a response.
+    ///
+    /// `idx` is an identifier for the thread performing the execute operation.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use cnr::Dispatch;
+    /// use cnr::Log;
+    /// use cnr::LogMapper;
+    /// use cnr::Replica;
+    ///
+    /// use core::sync::atomic::{AtomicUsize, Ordering};
+    /// use std::sync::Arc;
+    ///
+    /// #[derive(Default)]
+    /// struct Data {
+    ///     junk: AtomicUsize,
+    /// }
+    ///
+    /// #[derive(Debug, Eq, PartialEq, Clone, Copy)]
+    /// pub struct OpWr(pub usize);
+    ///
+    /// impl LogMapper for OpWr {
+    ///     // Only one log used for the example, hence returning 0.
+    ///     fn hash(&self, _nlogs:usize, logs: &mut Vec<usize>)
+    ///     {
+    ///         logs.clear();
+    ///         logs.push(0);
+    ///     }
+    /// }
+    ///
+    /// #[derive(Debug, Eq, PartialEq, Clone, Copy)]
+    /// pub struct OpRd(());
+    ///
+    /// impl LogMapper for OpRd {
+    ///     // Only one log used for the example, hence returning 0.
+    ///     fn hash(&self, _nlogs:usize, logs: &mut Vec<usize>)
+    ///     {
+    ///         logs.clear();
+    ///         logs.push(0);
+    ///     }
+    /// }
+    ///
+    /// impl Dispatch for Data {
+    ///     type ReadOperation = OpRd;
+    ///     type WriteOperation = OpWr;
+    ///     type Response = Option<usize>;
+    ///
+    ///     fn dispatch(
+    ///         &self,
+    ///         _op: Self::ReadOperation,
+    ///     ) -> Self::Response {
+    ///         Some(self.junk.load(Ordering::Relaxed))
+    ///     }
+    ///
+    ///     fn dispatch_mut(
+    ///         &self,
+    ///         op: Self::WriteOperation,
+    ///     ) -> Self::Response {
+    ///         self.junk.store(op.0, Ordering::Relaxed);
+    ///         Some(op.0)
+    ///     }
+    /// }
+    ///
+    /// let log = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
+    /// let replica = Replica::<Data>::new(vec![log]);
+    /// let idx = replica.register().expect("Failed to register with replica.");
+    ///
+    /// // execute_mut_scan() can be used to write to the replicated data structure
+    /// // through all the logs.
+    /// let res = replica.execute_mut_scan(OpWr(100), idx);
+    /// assert_eq!(Some(100), res);
+    pub fn execute_scan(
+        &self,
+        op: <D as Dispatch>::WriteOperation,
+        idx: ReplicaToken,
+    ) -> <D as Dispatch>::Response {
+        let nlogs = self.logstate.len();
+
+        // If there is only one log in the system, then execute
+        // scan operation as a mutable operations.
+        if nlogs == 1 {
+            return self.execute_mut(op, idx);
+        }
+
+        let hash = 0; /* Fake hash; scan op is appended to each log.*/
+        // Enqueue the operation onto the thread local batch and then try to flat combine.
+        self.make_pending(op.clone(), idx.0, hash, true, true);
+
+        // A thread becomes combiner for operations with hash same as its own operation.
+        self.try_combine(idx.0, hash);
+
+        // Return the response to the caller function.
+        let resp = self.get_response(idx.0, hash);
+
+        resp
+    }
+
     /// Busy waits until a response is available within the thread's context.
     /// `idx` identifies this thread.
     fn get_response(&self, idx: usize, hash: usize) -> <D as Dispatch>::Response {
@@ -873,9 +975,10 @@ where
         tid: usize,
         hash: usize,
         is_scan: bool,
+        is_read_op: bool,
     ) -> bool {
         loop {
-            if self.contexts[tid - 1].enqueue(op.clone(), hash, is_scan) {
+            if self.contexts[tid - 1].enqueue(op.clone(), hash, is_scan, is_read_op) {
                 self.logstate[hash].pending[tid - 1].store(true, Ordering::Release);
                 break;
             }
