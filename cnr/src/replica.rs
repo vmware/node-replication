@@ -622,6 +622,7 @@ where
                          rid: usize,
                          tid: usize,
                          is_scan,
+                         is_read_op,
                          depends_on: Option<Arc<Vec<usize>>>|
                  -> bool {
                     match is_scan {
@@ -893,11 +894,16 @@ where
             spin_loop();
         }
 
-        let mut f =
-            |o: <D as Dispatch>::WriteOperation, _i: usize, _tid, _is_scan, _depends_on| -> bool {
-                self.data.dispatch_mut(o);
-                true
-            };
+        let mut f = |o: <D as Dispatch>::WriteOperation,
+                     _i: usize,
+                     _tid,
+                     _is_scan,
+                     _is_read_op,
+                     _depends_on|
+         -> bool {
+            self.data.dispatch_mut(o);
+            true
+        };
 
         self.logstate[0].slog.exec(self.logstate[0].idx, &mut f);
 
@@ -1058,6 +1064,7 @@ where
                      rid: usize,
                      tid: usize,
                      is_scan,
+                     is_read_op,
                      depends_on: Option<Arc<Vec<usize>>>|
              -> bool {
                 match is_scan {
@@ -1089,6 +1096,7 @@ where
                          rid: usize,
                          tid: usize,
                          is_scan,
+                         is_read_op,
                          depends_on: Option<Arc<Vec<usize>>>|
              -> bool {
                 match is_scan {
@@ -1385,8 +1393,8 @@ mod test {
         // Add in operations to the log off the side, not through the replica.
         let _ignore = slog.register().expect("Failed to register with log.");
         let o = [(OpWr(121), 1, false), (OpWr(212), 1, false)];
-        slog.append(&o, 2, |_o: OpWr, _i: usize, _, _, _| true);
-        slog.exec(2, &mut |_o: OpWr, _i: usize, _, _, _| true);
+        slog.append(&o, 2, |_o: OpWr, _i: usize, _, _, _, _| true);
+        slog.exec(2, &mut |_o: OpWr, _i: usize, _, _, _, _| true);
 
         let t1 = repl.register().expect("Failed to register with replica.");
         assert_eq!(Ok(2), repl.execute(OpRd(11), t1));
