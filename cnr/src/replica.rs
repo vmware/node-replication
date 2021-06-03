@@ -1284,7 +1284,7 @@ mod test {
         let mut scan = vec![];
         let tid = 8;
 
-        assert!(repl.make_pending(OpWr(121), tid, 0, false));
+        assert!(repl.make_pending(OpWr(121), tid, 0, false, false));
         assert_eq!(repl.contexts[tid - 1].ops(&mut o, &mut scan, 0), 1);
         assert_eq!(o.len(), 1);
         assert_eq!(scan.len(), 0);
@@ -1299,7 +1299,7 @@ mod test {
         let repl = Replica::<Data>::new(vec![slog]);
         let _idx = repl.register();
 
-        repl.make_pending(OpWr(121), 1, 0, false);
+        repl.make_pending(OpWr(121), 1, 0, false, false);
         repl.try_combine(1, 0);
 
         assert_eq!(repl.logstate[0].combiner.load(Ordering::SeqCst), 0);
@@ -1314,7 +1314,7 @@ mod test {
         let repl = Replica::<Data>::new(vec![slog]);
 
         repl.next.store(9, Ordering::SeqCst);
-        repl.make_pending(OpWr(121), 8, 0, false);
+        repl.make_pending(OpWr(121), 8, 0, false, false);
         repl.try_combine(1, 0);
 
         assert_eq!(repl.data.junk.load(Ordering::Relaxed), 1);
@@ -1329,7 +1329,7 @@ mod test {
 
         repl.next.store(9, Ordering::SeqCst);
         repl.logstate[0].combiner.store(8, Ordering::SeqCst);
-        repl.make_pending(OpWr(121), 1, 0, false);
+        repl.make_pending(OpWr(121), 1, 0, false, false);
         repl.try_combine(1, 0);
 
         assert_eq!(repl.data.junk.load(Ordering::Relaxed), 0);
@@ -1359,7 +1359,7 @@ mod test {
         let op = OpWr(121);
         op.hash(1, &mut logs);
         let hash = logs[0];
-        repl.make_pending(op, 1, hash, false);
+        repl.make_pending(op, 1, hash, false, false);
 
         assert_eq!(repl.get_response(1, hash), Ok(107));
     }
@@ -1384,7 +1384,7 @@ mod test {
 
         // Add in operations to the log off the side, not through the replica.
         let _ignore = slog.register().expect("Failed to register with log.");
-        let o = [(OpWr(121), 1), (OpWr(212), 1)];
+        let o = [(OpWr(121), 1, false), (OpWr(212), 1, false)];
         slog.append(&o, 2, |_o: OpWr, _i: usize, _, _, _| true);
         slog.exec(2, &mut |_o: OpWr, _i: usize, _, _, _| true);
 
@@ -1477,7 +1477,7 @@ mod test {
             threads.push(thread::spawn(move || {
                 let t = r.register().unwrap();
                 let hash = t.0 % nlogs;
-                r.make_pending(OpWr(i), t.0, hash, false);
+                r.make_pending(OpWr(i), t.0, hash, false, false);
 
                 r.try_combine(t.0, hash);
             }));
@@ -1594,7 +1594,7 @@ mod test {
         let idx2 = repl2.register().unwrap();
 
         for _i in 0..nlogs {
-            repl2.append_scan((WriteOp::SetScan(0), idx2.id()), idx2.id());
+            repl2.append_scan((WriteOp::SetScan(0), idx2.id(), false), idx2.id());
         }
         let resp = repl1.execute_mut(WriteOp::Set(0), idx1);
         assert_eq!(resp, Ok(nlogs));
@@ -1619,7 +1619,7 @@ mod test {
         let idx2 = repl2.register().unwrap();
 
         for i in 0..nlogs {
-            repl2.append_scan((WriteOp::SetScan(10 + i), idx2.id()), idx2.id());
+            repl2.append_scan((WriteOp::SetScan(10 + i), idx2.id(), false), idx2.id());
         }
         let _ignore = repl2.execute_mut(WriteOp::Set(0), idx2);
 
@@ -1643,7 +1643,7 @@ mod test {
         let idx = repl.register().unwrap();
 
         for i in 0..nlogs {
-            repl.append_scan((WriteOp::SetScan(i), idx.id()), idx.id());
+            repl.append_scan((WriteOp::SetScan(i), idx.id(), false), idx.id());
         }
 
         let ltails = vec![0, 0, 0, 0];

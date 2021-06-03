@@ -967,7 +967,7 @@ mod tests {
     #[test]
     fn test_log_append() {
         let l = Log::<Operation>::default();
-        let o = [(Operation::Read, 1)];
+        let o = [(Operation::Read, 1, false)];
         l.append(&o, 1, |_o: Operation, _i: usize, _, _, _| -> bool { true });
 
         assert_eq!(l.head.load(Ordering::Relaxed), 0);
@@ -981,7 +981,10 @@ mod tests {
     #[test]
     fn test_log_append_multiple() {
         let l = Log::<Operation>::default();
-        let o = [(Operation::Read, 1), (Operation::Write(119), 1)];
+        let o = [
+            (Operation::Read, 1, false),
+            (Operation::Write(119), 1, false),
+        ];
         l.append(&o, 1, |_o: Operation, _i: usize, _, _, _| -> bool { true });
 
         assert_eq!(l.head.load(Ordering::Relaxed), 0);
@@ -1007,10 +1010,11 @@ mod tests {
     #[test]
     fn test_log_append_gc() {
         let l = Log::<Operation>::default();
-        let o: [(Operation, usize); 4] = unsafe {
-            let mut a: [(Operation, usize); 4] = ::std::mem::MaybeUninit::zeroed().assume_init();
+        let o: [(Operation, usize, bool); 4] = unsafe {
+            let mut a: [(Operation, usize, bool); 4] =
+                ::std::mem::MaybeUninit::zeroed().assume_init();
             for i in &mut a[..] {
-                ::std::ptr::write(i, (Operation::Read, 1));
+                ::std::ptr::write(i, (Operation::Read, 1, false));
             }
             a
         };
@@ -1029,10 +1033,11 @@ mod tests {
     #[test]
     fn test_log_append_wrap() {
         let l = Log::<Operation>::default();
-        let o: [(Operation, usize); 1024] = unsafe {
-            let mut a: [(Operation, usize); 1024] = ::std::mem::MaybeUninit::zeroed().assume_init();
+        let o: [(Operation, usize, bool); 1024] = unsafe {
+            let mut a: [(Operation, usize, bool); 1024] =
+                ::std::mem::MaybeUninit::zeroed().assume_init();
             for i in &mut a[..] {
-                ::std::ptr::write(i, (Operation::Read, 1));
+                ::std::ptr::write(i, (Operation::Read, 1, false));
             }
             a
         };
@@ -1050,7 +1055,7 @@ mod tests {
     #[test]
     fn test_log_exec() {
         let l = Log::<Operation>::default();
-        let o = [(Operation::Read, 1)];
+        let o = [(Operation::Read, 1, false)];
         let mut f = |op: Operation, i: usize, _, _, _| -> bool {
             assert_eq!(op, Operation::Read);
             assert_eq!(i, 1);
@@ -1086,7 +1091,7 @@ mod tests {
     #[test]
     fn test_log_exec_zero() {
         let l = Log::<Operation>::default();
-        let o = [(Operation::Read, 1)];
+        let o = [(Operation::Read, 1, false)];
         let mut f = |op: Operation, i: usize, _, _, _| -> bool {
             assert_eq!(op, Operation::Read);
             assert_eq!(i, 1);
@@ -1106,7 +1111,10 @@ mod tests {
     #[test]
     fn test_log_exec_multiple() {
         let l = Log::<Operation>::default();
-        let o = [(Operation::Read, 1), (Operation::Write(119), 1)];
+        let o = [
+            (Operation::Read, 1, false),
+            (Operation::Write(119), 1, false),
+        ];
         let mut s = 0;
         let mut f = |op: Operation, _i: usize, _, _, _| -> bool {
             match op {
@@ -1136,10 +1144,11 @@ mod tests {
     #[test]
     fn test_log_exec_wrap() {
         let l = Log::<Operation>::default();
-        let o: [(Operation, usize); 1024] = unsafe {
-            let mut a: [(Operation, usize); 1024] = ::std::mem::MaybeUninit::zeroed().assume_init();
+        let o: [(Operation, usize, bool); 1024] = unsafe {
+            let mut a: [(Operation, usize, bool); 1024] =
+                ::std::mem::MaybeUninit::zeroed().assume_init();
             for i in &mut a[..] {
-                ::std::ptr::write(i, (Operation::Read, 1));
+                ::std::ptr::write(i, (Operation::Read, 1, false));
             }
             a
         };
@@ -1167,10 +1176,11 @@ mod tests {
     #[should_panic]
     fn test_exec_panic() {
         let l = Log::<Operation>::default();
-        let o: [(Operation, usize); 1024] = unsafe {
-            let mut a: [(Operation, usize); 1024] = ::std::mem::MaybeUninit::zeroed().assume_init();
+        let o: [(Operation, usize, bool); 1024] = unsafe {
+            let mut a: [(Operation, usize, bool); 1024] =
+                ::std::mem::MaybeUninit::zeroed().assume_init();
             for i in &mut a[..] {
-                ::std::ptr::write(i, (Operation::Read, 1));
+                ::std::ptr::write(i, (Operation::Read, 1, false));
             }
             a
         };
@@ -1190,8 +1200,8 @@ mod tests {
     #[test]
     fn test_log_change_refcount() {
         let l = Log::<Arc<Operation>>::default();
-        let o1 = [(Arc::new(Operation::Read), 1)];
-        let o2 = [(Arc::new(Operation::Read), 1)];
+        let o1 = [(Arc::new(Operation::Read), 1, false)];
+        let o2 = [(Arc::new(Operation::Read), 1, false)];
         assert_eq!(Arc::strong_count(&o1[0].0), 1);
         assert_eq!(Arc::strong_count(&o2[0].0), 1);
 
@@ -1239,8 +1249,8 @@ mod tests {
         assert_eq!(Log::<Arc<Operation>>::entry_size(), entry_size);
         let size: usize = total_entries * entry_size;
         let l = Log::<Arc<Operation>>::new(size, 1);
-        let o1 = [(Arc::new(Operation::Read), 1)];
-        let o2 = [(Arc::new(Operation::Read), 1)];
+        let o1 = [(Arc::new(Operation::Read), 1, false)];
+        let o2 = [(Arc::new(Operation::Read), 1, false)];
         assert_eq!(Arc::strong_count(&o1[0].0), 1);
         assert_eq!(Arc::strong_count(&o2[0].0), 1);
 
@@ -1278,7 +1288,7 @@ mod tests {
         assert_eq!(one, 1);
         assert_eq!(two, 2);
 
-        let o = [(Operation::Read, 1)];
+        let o = [(Operation::Read, 1, false)];
         let mut f = |op: Operation, i: usize, _, _, _| -> bool {
             assert_eq!(op, Operation::Read);
             assert_eq!(i, 1);

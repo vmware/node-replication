@@ -265,7 +265,7 @@ mod test {
     #[test]
     fn test_context_enqueue() {
         let c = Context::<u64, Result<u64, ()>>::default();
-        assert!(c.enqueue(121, 0, false));
+        assert!(c.enqueue(121, 0, false, true));
         unsafe { assert_eq!((*c.batch[0].as_ptr()).0, Some(121)) };
         assert_eq!(c.tail.load(Ordering::Relaxed), 1);
         assert_eq!(c.head.load(Ordering::Relaxed), 0);
@@ -278,7 +278,7 @@ mod test {
         let c = Context::<u64, Result<u64, ()>>::default();
         c.tail.store(MAX_PENDING_OPS, Ordering::Relaxed);
 
-        assert!(!c.enqueue(100, 0, false));
+        assert!(!c.enqueue(100, 0, false, true));
         assert_eq!(c.tail.load(Ordering::Relaxed), MAX_PENDING_OPS);
         assert_eq!(c.head.load(Ordering::Relaxed), 0);
         assert_eq!(c.comb.load(Ordering::Relaxed), 0);
@@ -330,7 +330,7 @@ mod test {
         let mut scan = vec![];
 
         for idx in 0..MAX_PENDING_OPS / 2 {
-            assert!(c.enqueue(idx * idx, 1, false))
+            assert!(c.enqueue(idx * idx, 1, false, false))
         }
 
         assert_eq!(c.ops(&mut o, &mut scan, 1), MAX_PENDING_OPS / 2);
@@ -353,7 +353,7 @@ mod test {
         let mut scan = vec![];
 
         for idx in 0..MAX_PENDING_OPS / 2 {
-            assert!(c.enqueue(idx * idx, 1, true))
+            assert!(c.enqueue(idx * idx, 1, true, false))
         }
 
         assert_eq!(c.ops(&mut o, &mut scan, 1), MAX_PENDING_OPS / 2);
