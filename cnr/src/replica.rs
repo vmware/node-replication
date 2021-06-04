@@ -635,8 +635,9 @@ where
                         }
                         true => {
                             let depends_on = depends_on.as_ref().unwrap();
-                            return self
-                                .handle_scan_op(o, thread_id, *logidx, rid, tid, depends_on);
+                            return self.handle_scan_op(
+                                o, thread_id, *logidx, rid, tid, is_read_op, depends_on,
+                            );
                         }
                     }
                 };
@@ -833,7 +834,19 @@ where
         // If there is only one log in the system, then execute
         // scan operation as a mutable operations.
         if nlogs == 1 {
-            return self.execute_mut(op, idx);
+            // We can perform the read scan if our replica is synced up against
+            // the shared log. If it isn't, then try to combine until it is synced up.
+            let hash_idx = nlogs - 1;
+            let ctail = self.logstate[hash_idx].slog.get_ctail();
+            while !self.logstate[hash_idx]
+                .slog
+                .is_replica_synced_for_reads(self.logstate[hash_idx].idx, ctail)
+            {
+                self.try_combine(idx.0, hash_idx);
+                spin_loop();
+            }
+
+            return self.data.dispatch_mut(op);
         }
 
         let hash = 0; /* Fake hash; scan op is appended to each log.*/
@@ -1077,7 +1090,9 @@ where
                     }
                     true => {
                         let depends_on = depends_on.as_ref().unwrap();
-                        return self.handle_scan_op(o, thread_id, hashidx, rid, tid, depends_on);
+                        return self.handle_scan_op(
+                            o, thread_id, hashidx, rid, tid, is_read_op, depends_on,
+                        );
                     }
                 }
             };
@@ -1109,7 +1124,9 @@ where
                     }
                     true => {
                         let depends_on = depends_on.as_ref().unwrap();
-                        return self.handle_scan_op(o, thread_id, hashidx, rid, tid, depends_on);
+                        return self.handle_scan_op(
+                            o, thread_id, hashidx, rid, tid, is_read_op, depends_on,
+                        );
                     }
                 }
             };
@@ -1127,10 +1144,17 @@ where
         op: <D as Dispatch>::WriteOperation,
         thread_id: usize,
         hashidx: usize,
-        rid: usize,
+        issuer_rid: usize,
         issuer_tid: usize,
+        is_read_op: bool,
         depends_on: &Vec<usize>,
     ) -> bool {
+        // Return immediately if its an immutable scan op and the
+        // executor replica-id is not same as the issuer replica-id.
+        if is_read_op && issuer_rid != self.logstate[hashidx].idx {
+            return true;
+        }
+
         let is_root = depends_on.len() == self.logstate.len();
         match is_root {
             // Leaf log(s) for scan operation.
@@ -1162,7 +1186,7 @@ where
                 match self.is_replica_sync_for_logs(1, self.logstate.len(), depends_on) {
                     true => {
                         let resp = self.data.dispatch_mut(op);
-                        if rid == self.logstate[hashidx].idx {
+                        if issuer_rid == self.logstate[hashidx].idx {
                             self.contexts[issuer_tid - 1].enqueue_resp(resp);
                         };
                         return true;
@@ -1719,6 +1743,7 @@ mod test {
                 hash,
                 repl.logstate[0].idx,
                 idx.id(),
+                false,
                 &ltails,
             )
         );
