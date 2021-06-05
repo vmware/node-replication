@@ -26,8 +26,8 @@ use crate::replica::MAX_THREADS_PER_REPLICA;
 const DEFAULT_LOG_BYTES: usize = 32 * 1024 * 1024;
 const_assert!(DEFAULT_LOG_BYTES >= 1 && (DEFAULT_LOG_BYTES & (DEFAULT_LOG_BYTES - 1) == 0));
 
-/// The maximum number of replicas that can be used against the log.
-const MAX_REPLICAS: usize = 192;
+/// The maximum number of replicas that can be registered with the log.
+pub const MAX_REPLICAS: usize = 192;
 
 /// Constant required for garbage collection. When the tail and the head are
 /// these many entries apart on the circular buffer, garbage collection will
