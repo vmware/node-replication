@@ -27,7 +27,7 @@ const DEFAULT_LOG_BYTES: usize = 32 * 1024 * 1024;
 const_assert!(DEFAULT_LOG_BYTES >= 1 && (DEFAULT_LOG_BYTES & (DEFAULT_LOG_BYTES - 1) == 0));
 
 /// The maximum number of replicas that can be registered with the log.
-pub const MAX_REPLICAS: usize = 192;
+pub const MAX_REPLICAS_PER_LOG: usize = 192;
 
 /// Constant required for garbage collection. When the tail and the head are
 /// these many entries apart on the circular buffer, garbage collection will
@@ -141,7 +141,7 @@ where
     /// Required for garbage collection; since replicas make progress over the log
     /// independently, we want to make sure that we don't garbage collect operations
     /// that haven't been executed by all replicas.
-    pub ltails: [CachePadded<AtomicUsize>; MAX_REPLICAS],
+    pub ltails: [CachePadded<AtomicUsize>; MAX_REPLICAS_PER_LOG],
 
     /// Identifier that will be allocated to the next replica that registers with
     /// this Log. Also required to correctly index into ltails above.
@@ -150,7 +150,7 @@ where
     /// Array consisting of local alive masks for each registered replica. Required
     /// because replicas make independent progress over the log, so we need to
     /// track log wrap-arounds for each of them separately.
-    lmasks: [CachePadded<Cell<bool>>; MAX_REPLICAS],
+    lmasks: [CachePadded<Cell<bool>>; MAX_REPLICAS_PER_LOG],
 
     /// The application can provide a callback function to the log. The function is invoked
     /// when one or more replicas lag and stop the log to garbage collected the entries.
@@ -158,7 +158,7 @@ where
     /// replica number for this log. The application can then take action to start the log
     /// consumption on that replica. If the application is proactively taking measures to
     /// consume the log on all the replicas, then the variable can be initialized to default.
-    gc: UnsafeCell<Box<dyn FnMut(&[AtomicBool; MAX_REPLICAS], usize)>>,
+    gc: UnsafeCell<Box<dyn FnMut(&[AtomicBool; MAX_REPLICAS_PER_LOG], usize)>>,
 
     /// Use to append scan op atomically to all the logs.
     scanlock: CachePadded<AtomicUsize>,
@@ -169,7 +169,7 @@ where
 
     /// Use this array in GC callback function to notify other replicas to make progress.
     /// Assumes that the callback handler clears the replica-ids which need to do GC.
-    dormant_replicas: [AtomicBool; MAX_REPLICAS],
+    dormant_replicas: [AtomicBool; MAX_REPLICAS_PER_LOG],
 }
 
 impl<'a, T> fmt::Debug for Log<'a, T>
@@ -269,8 +269,8 @@ where
             }
         }
 
-        let fls: [CachePadded<Cell<bool>>; MAX_REPLICAS] = arr![Default::default(); 192];
-        for idx in 0..MAX_REPLICAS {
+        let fls: [CachePadded<Cell<bool>>; MAX_REPLICAS_PER_LOG] = arr![Default::default(); 192];
+        for idx in 0..MAX_REPLICAS_PER_LOG {
             fls[idx].set(true)
         }
 
@@ -287,7 +287,7 @@ where
             next: CachePadded::new(AtomicUsize::new(1usize)),
             lmasks: fls,
             gc: UnsafeCell::new(Box::new(
-                |_rid: &[AtomicBool; MAX_REPLICAS], _lid: usize| {},
+                |_rid: &[AtomicBool; MAX_REPLICAS_PER_LOG], _lid: usize| {},
             )),
             scanlock: CachePadded::new(AtomicUsize::new(0)),
             notify_replicas: CachePadded::new(AtomicBool::new(true)),
@@ -327,7 +327,7 @@ where
     /// };
     /// l.update_closure(callback_func)
     /// ```
-    pub fn update_closure(&mut self, gc: impl FnMut(&[AtomicBool; MAX_REPLICAS], usize) + 'static) {
+    pub fn update_closure(&mut self, gc: impl FnMut(&[AtomicBool; MAX_REPLICAS_PER_LOG], usize) + 'static) {
         unsafe { *self.gc.get() = Box::new(gc) };
     }
 
@@ -339,7 +339,7 @@ where
             let n = self.next.load(Ordering::Relaxed);
 
             // Check if we've exceeded the maximum number of replicas the log can support.
-            if n >= MAX_REPLICAS {
+            if n >= MAX_REPLICAS_PER_LOG {
                 return None;
             };
 
@@ -783,7 +783,7 @@ where
         self.next.store(1, Ordering::SeqCst);
 
         // Next, reset replica-local metadata.
-        for r in 0..MAX_REPLICAS {
+        for r in 0..MAX_REPLICAS_PER_LOG {
             self.ltails[r].store(0, Ordering::Relaxed);
             self.lmasks[r].set(true);
         }
@@ -889,11 +889,11 @@ mod tests {
         assert_eq!(l.next.load(Ordering::Relaxed), 1);
         assert_eq!(l.ctail.load(Ordering::Relaxed), 0);
 
-        for i in 0..MAX_REPLICAS {
+        for i in 0..MAX_REPLICAS_PER_LOG {
             assert_eq!(l.ltails[i].load(Ordering::Relaxed), 0);
         }
 
-        for i in 0..MAX_REPLICAS {
+        for i in 0..MAX_REPLICAS_PER_LOG {
             assert_eq!(l.lmasks[i].get(), true);
         }
     }
@@ -931,11 +931,11 @@ mod tests {
         assert_eq!(l.next.load(Ordering::Relaxed), 1);
         assert_eq!(l.ctail.load(Ordering::Relaxed), 0);
 
-        for i in 0..MAX_REPLICAS {
+        for i in 0..MAX_REPLICAS_PER_LOG {
             assert_eq!(l.ltails[i].load(Ordering::Relaxed), 0);
         }
 
-        for i in 0..MAX_REPLICAS {
+        for i in 0..MAX_REPLICAS_PER_LOG {
             assert_eq!(l.lmasks[i].get(), true);
         }
     }
@@ -959,9 +959,9 @@ mod tests {
     #[test]
     fn test_log_register_none() {
         let l = Log::<Operation>::new(1024, 1);
-        l.next.store(MAX_REPLICAS, Ordering::Relaxed);
+        l.next.store(MAX_REPLICAS_PER_LOG, Ordering::Relaxed);
         assert!(l.register().is_none());
-        assert_eq!(l.next.load(Ordering::Relaxed), MAX_REPLICAS);
+        assert_eq!(l.next.load(Ordering::Relaxed), MAX_REPLICAS_PER_LOG);
     }
 
     // Test that we can correctly append an entry into the log.
