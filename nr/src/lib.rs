@@ -88,7 +88,7 @@ mod log;
 mod replica;
 pub mod rwlock;
 
-pub use crate::log::Log;
+pub use crate::log::{Log, MAX_REPLICAS_PER_LOG};
 pub use replica::{Replica, ReplicaToken, MAX_THREADS_PER_REPLICA};
 
 use core::fmt::Debug;
