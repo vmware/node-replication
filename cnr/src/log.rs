@@ -327,7 +327,10 @@ where
     /// };
     /// l.update_closure(callback_func)
     /// ```
-    pub fn update_closure(&mut self, gc: impl FnMut(&[AtomicBool; MAX_REPLICAS_PER_LOG], usize) + 'static) {
+    pub fn update_closure(
+        &mut self,
+        gc: impl FnMut(&[AtomicBool; MAX_REPLICAS_PER_LOG], usize) + 'static,
+    ) {
         unsafe { *self.gc.get() = Box::new(gc) };
     }
 
