@@ -116,7 +116,7 @@ where
 
 /// The Replica is Sync. Member variables are protected by a CAS on `combiner`.
 /// Contexts are thread-safe.
-unsafe impl<'a, D> Sync for Replica<'a, D> where D: Sized + Default + Sync + Dispatch {}
+unsafe impl<'a, D> Sync for Replica<'a, D> where D: Sized + Sync + Dispatch {}
 
 impl<'a, D> core::fmt::Debug for Replica<'a, D>
 where
