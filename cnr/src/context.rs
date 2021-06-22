@@ -94,11 +94,11 @@ where
     T: Sized + Clone,
     R: Sized + Clone,
 {
-    pub fn new(id: usize) -> Context<T, R> {
-        let mut context: Context<T, R> = Default::default();
-        context.idx = id;
-
-        context
+    pub fn new(idx: usize) -> Context<T, R> {
+        Self {
+            idx,
+            ..Default::default()
+        }
     }
 
     /// Enqueues an operation onto this context's batch of pending operations.
@@ -143,8 +143,8 @@ where
 
         // Starting from `comb`, write all responses into the batch. Assume here that
         // the slice above doesn't cause us to cross the tail of the batch.
-        for i in 0..n {
-            self.enqueue_resp(responses[i].clone());
+        for response in responses.iter().take(n) {
+            self.enqueue_resp(response.clone());
         }
     }
 
@@ -172,7 +172,7 @@ where
         scan_buffer: &mut Vec<(T, usize, bool)>,
         hash: usize,
     ) -> usize {
-        let mut h = self.comb.load(Ordering::Relaxed);
+        let h = self.comb.load(Ordering::Relaxed);
         let t = self.tail.load(Ordering::Relaxed);
 
         // No operations on this thread; return to the caller indicating so.
@@ -207,7 +207,6 @@ where
                 }
 
                 n += 1;
-                h += 1;
             }
         }
 

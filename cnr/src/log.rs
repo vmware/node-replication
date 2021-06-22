@@ -46,6 +46,10 @@ const_assert!(GC_FROM_HEAD >= 1 && (GC_FROM_HEAD & (GC_FROM_HEAD - 1) == 0));
 /// Should be a power of two to avoid divisions.
 const WARN_THRESHOLD: usize = 1 << 28;
 
+/// Callback function which indicates which replicas need to be advanced for GC
+/// to make progress.
+type CallbackFn = dyn FnMut(&[AtomicBool; MAX_REPLICAS_PER_LOG], usize);
+
 /// An entry that sits on the log. Each entry consists of three fields: The operation to
 /// be performed when a thread reaches this entry on the log, the replica that appended
 /// this operation, and a flag indicating whether this entry is valid.
@@ -158,7 +162,7 @@ where
     /// replica number for this log. The application can then take action to start the log
     /// consumption on that replica. If the application is proactively taking measures to
     /// consume the log on all the replicas, then the variable can be initialized to default.
-    gc: UnsafeCell<Box<dyn FnMut(&[AtomicBool; MAX_REPLICAS_PER_LOG], usize)>>,
+    gc: UnsafeCell<Box<CallbackFn>>,
 
     /// Use to append scan op atomically to all the logs.
     scanlock: CachePadded<AtomicUsize>,
@@ -270,8 +274,8 @@ where
         }
 
         let fls: [CachePadded<Cell<bool>>; MAX_REPLICAS_PER_LOG] = arr![Default::default(); 192];
-        for idx in 0..MAX_REPLICAS_PER_LOG {
-            fls[idx].set(true)
+        for element in fls.iter().take(MAX_REPLICAS_PER_LOG) {
+            element.set(true)
         }
 
         Log {
@@ -408,7 +412,7 @@ where
                     }
                 }
 
-                if is_stuck == true
+                if is_stuck
                     && self.notify_replicas.compare_exchange_weak(
                         true,
                         false,
@@ -458,8 +462,8 @@ where
             };
 
             // Successfully reserved entries on the shared log. Add the operations in.
-            for i in 0..nops {
-                unsafe { self.update_entry(tail + i, &ops[i], idx, false, None) };
+            for (i, op) in ops.iter().enumerate().take(nops) {
+                unsafe { self.update_entry(tail + i, op, idx, false, None) };
             }
 
             // If needed, advance the head of the log forward to make room on the log.
@@ -480,7 +484,7 @@ where
         &self,
         op: &(T, usize, bool),
         idx: usize,
-        offset: &Vec<usize>,
+        offset: &[usize],
         mut s: F,
     ) -> Result<usize, usize> {
         let nops = 1;
@@ -600,7 +604,7 @@ where
         }
 
         /* successfully acquired the lock */
-        return true;
+        true
     }
 
     /// Acquire the scan lock.
@@ -628,26 +632,26 @@ where
         d: &mut F,
     ) {
         // Load the logical log offset from which we must execute operations.
-        let l = self.ltails[idx - 1].load(Ordering::Relaxed);
+        let ltail = self.ltails[idx - 1].load(Ordering::Relaxed);
 
         // Check if we have any work to do by comparing our local tail with the log's
         // global tail. If they're equal, then we're done here and can simply return.
-        let t = self.tail.load(Ordering::Relaxed);
-        if l == t {
+        let gtail = self.tail.load(Ordering::Relaxed);
+        if ltail == gtail {
             return;
         }
 
         let h = self.head.load(Ordering::Relaxed);
 
         // Make sure we're within the shared log. If we aren't, then panic.
-        if l > t || l < h {
+        if ltail > gtail || ltail < h {
             panic!("Local tail not within the shared log!")
         };
 
         // Execute all operations from the passed in offset to the shared log's tail. Check if
         // the entry is live first; we could have a replica that has reserved entries, but not
         // filled them into the log yet.
-        for i in l..t {
+        for i in ltail..gtail {
             let mut iteration = 1;
             let e = self.slog[self.index(i)].as_ptr();
 
@@ -701,8 +705,8 @@ where
 
         // Update the completed tail after we've executed these operations.
         // Also update this replica's local tail.
-        self.ctail.fetch_max(t, Ordering::Relaxed);
-        self.ltails[idx - 1].store(t, Ordering::Relaxed);
+        self.ctail.fetch_max(gtail, Ordering::Relaxed);
+        self.ltails[idx - 1].store(gtail, Ordering::Relaxed);
     }
 
     /// Returns a physical index given a logical index into the shared log.

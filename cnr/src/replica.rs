@@ -58,6 +58,9 @@ const_assert!(
     MAX_THREADS_PER_REPLICA >= 1 && (MAX_THREADS_PER_REPLICA & (MAX_THREADS_PER_REPLICA - 1) == 0)
 );
 
+/// Type that has meta-data about either scan or write op while it's in the log.
+type OperationState<D> = (<D as Dispatch>::WriteOperation, usize, bool);
+
 /// An instance of per log state maintained by each replica.
 pub(self) struct LogState<'a, D>
 where
@@ -85,11 +88,11 @@ where
     /// here and then batch appends them into the shared log. This helps amortize
     /// the cost of the compare_and_swap() on the tail of the log. Each entry in buffer
     /// contains the write operation, hash, and is_read(we store scan read ops).
-    buffer: CachePadded<RefCell<Vec<(<D as Dispatch>::WriteOperation, usize, bool)>>>,
+    buffer: CachePadded<RefCell<Vec<OperationState<D>>>>,
 
     /// A buffer of scan type operations for flat combining. Each entry in buffer
     /// contains the write operation, hash, and is_read(we store scan read ops).
-    scan_buffer: CachePadded<RefCell<Vec<(<D as Dispatch>::WriteOperation, usize, bool)>>>,
+    scan_buffer: CachePadded<RefCell<Vec<OperationState<D>>>>,
 }
 
 impl<'a, D> LogState<'a, D>
@@ -253,9 +256,7 @@ where
     /// // Create a replica that uses the above log.
     /// let replica = Replica::<Data>::new(vec![log]);
     /// ```
-    pub fn new<'b>(
-        logs: Vec<Arc<Log<'b, <D as Dispatch>::WriteOperation>>>,
-    ) -> Arc<Replica<'b, D>> {
+    pub fn new(logs: Vec<Arc<Log<'_, <D as Dispatch>::WriteOperation>>>) -> Arc<Replica<'_, D>> {
         Replica::with_data(logs, Default::default())
     }
 }
@@ -273,10 +274,10 @@ where
     /// If `with_data` is used, care must be taken that the same state is passed
     /// to every Replica object. If not the resulting operations executed
     /// against replicas may not give deterministic results.
-    pub fn with_data<'b>(
-        logs: Vec<Arc<Log<'b, <D as Dispatch>::WriteOperation>>>,
+    pub fn with_data(
+        logs: Vec<Arc<Log<'_, <D as Dispatch>::WriteOperation>>>,
         d: D,
-    ) -> Arc<Replica<'b, D>> {
+    ) -> Arc<Replica<'_, D>> {
         let mut uninit_replica: Arc<MaybeUninit<Replica<D>>> = Arc::new_zeroed();
 
         // This is the preferred but unsafe mode of initialization as it avoids
@@ -491,13 +492,14 @@ where
         idx: ReplicaToken,
     ) -> <D as Dispatch>::Response {
         let mut hash_vec = self.hash[idx.0 - 1].borrow_mut();
+        hash_vec.clear();
         // Calculate the hash of the operation to map the operation to a log.
         op.hash(self.logstate.len(), &mut hash_vec);
         assert_eq!(hash_vec.len(), 1);
         let hash = hash_vec[0];
 
         // Enqueue the operation onto the thread local batch and then try to flat combine.
-        self.make_pending(op.clone(), idx.0, hash, false, false);
+        self.make_pending(op, idx.0, hash, false, false);
 
         // A thread becomes combiner for operations with hash same as its own operation.
         self.try_combine(idx.0, hash);
@@ -595,15 +597,13 @@ where
 
         let hash = 0; /* Fake hash; scan op is appended to each log.*/
         // Enqueue the operation onto the thread local batch and then try to flat combine.
-        self.make_pending(op.clone(), idx.0, hash, true, false);
+        self.make_pending(op, idx.0, hash, true, false);
 
         // A thread becomes combiner for operations with hash same as its own operation.
         self.try_combine(idx.0, hash);
 
         // Return the response to the caller function.
-        let resp = self.get_response(idx.0, hash);
-
-        resp
+        self.get_response(idx.0, hash)
     }
 
     fn append_scan(&self, op: (<D as Dispatch>::WriteOperation, usize, bool), thread_id: usize) {
@@ -612,6 +612,7 @@ where
         entries.clear();
 
         let nlogs = self.logstate.len();
+        hash_vec.clear();
         op.0.hash(nlogs, &mut hash_vec);
         let root_log = hash_vec[0];
 
@@ -631,13 +632,13 @@ where
                             if rid == self.logstate[*logidx].idx {
                                 self.contexts[tid - 1].enqueue_resp(resp);
                             }
-                            return true;
+                            true
                         }
                         true => {
                             let depends_on = depends_on.as_ref().unwrap();
-                            return self.handle_scan_op(
+                            self.handle_scan_op(
                                 o, thread_id, *logidx, rid, tid, is_read_op, depends_on,
-                            );
+                            )
                         }
                     }
                 };
@@ -851,15 +852,13 @@ where
 
         let hash = 0; /* Fake hash; scan op is appended to each log.*/
         // Enqueue the operation onto the thread local batch and then try to flat combine.
-        self.make_pending(op.clone(), idx.0, hash, true, true);
+        self.make_pending(op, idx.0, hash, true, true);
 
         // A thread becomes combiner for operations with hash same as its own operation.
         self.try_combine(idx.0, hash);
 
         // Return the response to the caller function.
-        let resp = self.get_response(idx.0, hash);
-
-        resp
+        self.get_response(idx.0, hash)
     }
 
     /// Busy waits until a response is available within the thread's context.
@@ -872,8 +871,8 @@ where
         // times with no luck, try to perform flat combining to make some progress.
         loop {
             let r = self.contexts[idx - 1].res();
-            if r.is_some() {
-                return r.unwrap();
+            if let Some(resp) = r {
+                return resp;
             }
 
             iter += 1;
@@ -966,6 +965,7 @@ where
         tid: usize,
     ) -> <D as Dispatch>::Response {
         let mut hash_vec = self.hash[tid - 1].borrow_mut();
+        hash_vec.clear();
         // Calculate the hash of the operation to map the operation to a log.
         op.hash(self.logstate.len(), &mut hash_vec);
         assert_eq!(hash_vec.len(), 1);
@@ -1086,13 +1086,11 @@ where
                         if rid == self.logstate[hashidx].idx {
                             self.contexts[tid - 1].enqueue_resp(resp);
                         }
-                        return true;
+                        true
                     }
                     true => {
                         let depends_on = depends_on.as_ref().unwrap();
-                        return self.handle_scan_op(
-                            o, thread_id, hashidx, rid, tid, is_read_op, depends_on,
-                        );
+                        self.handle_scan_op(o, thread_id, hashidx, rid, tid, is_read_op, depends_on)
                     }
                 }
             };
@@ -1120,13 +1118,11 @@ where
                         if rid == self.logstate[hashidx].idx {
                             self.contexts[tid - 1].enqueue_resp(resp);
                         };
-                        return true;
+                        true
                     }
                     true => {
                         let depends_on = depends_on.as_ref().unwrap();
-                        return self.handle_scan_op(
-                            o, thread_id, hashidx, rid, tid, is_read_op, depends_on,
-                        );
+                        self.handle_scan_op(o, thread_id, hashidx, rid, tid, is_read_op, depends_on)
                     }
                 }
             };
@@ -1139,6 +1135,7 @@ where
     /// This method handles the scan operations; this method is called
     /// from the combine function closure that is passed to log exec function.
     #[inline(always)]
+    #[allow(clippy::too_many_arguments)]
     fn handle_scan_op(
         &self,
         op: <D as Dispatch>::WriteOperation,
@@ -1147,7 +1144,7 @@ where
         issuer_rid: usize,
         issuer_tid: usize,
         is_read_op: bool,
-        depends_on: &Vec<usize>,
+        depends_on: &[usize],
     ) -> bool {
         // Return immediately if its an immutable scan op and the
         // executor replica-id is not same as the issuer replica-id.
@@ -1164,20 +1161,25 @@ where
                     .slog
                     .is_replica_synced_for_reads(self.logstate[logidx].idx, depends_on[logidx])
                 {
-                    true => return true,
+                    true => true,
                     false => {
                         self.try_combine(thread_id, logidx);
-                        return self.is_replica_sync_for_logs(logidx, logidx + 1, depends_on);
+                        self.is_replica_sync_for_logs(logidx, logidx + 1, depends_on)
                     }
                 }
             }
 
             // Root log for scan operation.
             true => {
-                for logidx in 1..self.logstate.len() {
+                for (logidx, depends_on) in depends_on
+                    .iter()
+                    .enumerate()
+                    .take(self.logstate.len())
+                    .skip(1)
+                {
                     if !self.logstate[logidx]
                         .slog
-                        .is_replica_synced_for_reads(self.logstate[logidx].idx, depends_on[logidx])
+                        .is_replica_synced_for_reads(self.logstate[logidx].idx, *depends_on)
                     {
                         self.try_combine(thread_id, logidx);
                     }
@@ -1189,9 +1191,9 @@ where
                         if issuer_rid == self.logstate[hashidx].idx {
                             self.contexts[issuer_tid - 1].enqueue_resp(resp);
                         };
-                        return true;
+                        true
                     }
-                    false => return false,
+                    false => false,
                 }
             }
         }
@@ -1206,17 +1208,17 @@ where
     ///
     /// # Return
     /// Return true if the replica has applied the each log upto respective ltails.
-    fn is_replica_sync_for_logs(&self, start: usize, end: usize, tails: &Vec<usize>) -> bool {
+    fn is_replica_sync_for_logs(&self, start: usize, end: usize, tails: &[usize]) -> bool {
         let mut is_synced = true;
-        for logidx in start..end {
+        for (logidx, tail) in tails.iter().enumerate().take(end).skip(start) {
             if !self.logstate[logidx]
                 .slog
-                .is_replica_synced_for_reads(self.logstate[logidx].idx, tails[logidx])
+                .is_replica_synced_for_reads(self.logstate[logidx].idx, *tail)
             {
                 is_synced = false;
             }
         }
-        return is_synced;
+        is_synced
     }
 }
 

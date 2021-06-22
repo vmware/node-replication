@@ -134,6 +134,9 @@ use core::fmt::Debug;
 /// [Replica](struct.Replica.html) internally performs a modulo operation on `hash`
 /// return value with the total number of logs. The data structure can implement
 /// trait to return a value between 0 and (#logs-1) to avoid the modulo operation.
+///
+/// When the replica calls `hash`, the implementor can assume that the capacity
+/// of `logs` >= `nlogs` and that `logs` is empty.
 pub trait LogMapper {
     /// Method to convert the operation and it's arguments to a log number.
     fn hash(&self, nlogs: usize, logs: &mut Vec<usize>);
