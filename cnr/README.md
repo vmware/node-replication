@@ -1,18 +1,24 @@
 # Concurrent Node Replication
 
-CNR (Concurrent Node Replication) library is extension to [Black-box Concurrent Data Structures for NUMA
-Architectures](https://dl.acm.org/citation.cfm?id=3037721) paper.
+CNR (Concurrent Node Replication) library is an extension over regular NR.
 
-This library can be used to implement a NUMA-aware concurrent version of any
-concurrent data structure. It takes in a concurrent implementation of said
-data structure, and scales it out to multiple cores and NUMA nodes by combining
-three techniques: commutativity based work partitioning, operation logging, and flat combining.
+Unlike NR, this library is used to implement a NUMA-aware concurrent version of
+a *concurrent* or *partitioned* data structure. It takes a concurrent
+implementation of said data structure, and scales it out to multiple cores and
+NUMA nodes by combining three techniques: commutativity based work partitioning,
+operation logging, and flat combining.
 
 ## How does it work
 
-To replicate a concurrent data structure, one needs to implement `Dispatch` and `LogMapper` (from cnr). `LogMapper` implementation dictates the work partitioning across multiple logs for concurrent execution.
+To replicate a concurrent data structure, one needs to implement `Dispatch` and
+`LogMapper` (from cnr). `LogMapper` implementation dictates the work
+partitioning across multiple logs for concurrent execution.
 
-`LogMapper` implementation is used to map an operation to a log. Two commutative operations can be mapped to same or different log; however, two conflicting operations must map to the same log. As an example, we implement `Dispatch` for the [CHashMap](https://crates.io/crates/chashmap) and `LogMapper` for the supported operations.
+`LogMapper` implementation is used to map an operation to a log. Two commutative
+operations can be mapped to same or different log; however, two conflicting
+operations must map to the same log. As an example, we implement `Dispatch` for
+the [CHashMap](https://crates.io/crates/chashmap) and `LogMapper` for the
+supported operations.
 
 ```rust
 /// The replicated hashmap uses a concurrent hashmap internally.
@@ -27,7 +33,7 @@ pub enum Modify {
 }
 
 /// This `LogMapper` implementation distributes the keys amoung multiple logs
-/// in a round-robin fashion. One can change the implementation to improve the 
+/// in a round-robin fashion. One can change the implementation to improve the
 /// data locality based on the data sturucture layout in the memory.
 impl LogMapper for Modify {
    fn hash(&self, _nlogs: usize, logs: &mut Vec<usize>) {
@@ -117,11 +123,3 @@ You can run the tests by executing: `cargo test`
 
 The benchmarks (and how to execute them) are explained in more detail in the
 [benches](../benches/README.md) folder.
-
-## Contributing
-
-The node-replication project team welcomes contributions from the community. If
-you wish to contribute code and you have not signed our contributor license
-agreement (CLA), our bot will update the issue when you open a Pull Request. For
-any questions about the CLA process, please refer to our
-[FAQ](https://cla.vmware.com/faq).

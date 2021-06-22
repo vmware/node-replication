@@ -14,8 +14,10 @@ Node replication converts a data structure to its NUMA-aware concurrent version.
 This repository contains two crates: one for transforming sequential
 data-structures and one for already concurrent or partitioned data structures.
 
-* [`node-replication`](nr) converts a sequental data structure to its NUMA-aware concurrent version.
-* [`cnr`](cnr) converts a concurrent data structure to its NUMA-aware concurrent version.
+* [`node-replication`](nr) converts a sequental data structure to its NUMA-aware
+  concurrent version.
+* [`cnr`](cnr) converts a concurrent data structure to its NUMA-aware concurrent
+  version.
 
 ## Supported Platforms
 
