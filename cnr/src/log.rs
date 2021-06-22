@@ -2,9 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use alloc::alloc::{alloc, dealloc, Layout};
+use alloc::prelude::v1::Box;
+use alloc::sync::Arc;
+use alloc::vec::Vec;
+
 use core::cell::{Cell, UnsafeCell};
 use core::default::Default;
 use core::fmt;
+use core::hint::spin_loop;
 use core::mem::{align_of, size_of};
 use core::ops::{Drop, FnMut};
 use core::slice::from_raw_parts_mut;
@@ -58,6 +63,19 @@ where
 
     /// Identifies the replica that issued the above operation.
     replica: usize,
+
+    /// Identifies the replica-local thread-id that issued the operation.
+    thread: usize,
+
+    /// Identifies if the operation is of scan type or not.
+    is_scan: bool,
+
+    /// Identifies if the operation is immutable scan or not.
+    is_read_op: bool,
+
+    /// If operation is of scan type, then `depends_on` stores
+    /// the offsets in other logs this operation depends on.
+    depends_on: Option<Arc<Vec<usize>>>,
 
     /// Indicates whether this entry represents a valid operation when on the log.
     alivef: AtomicBool,
@@ -123,7 +141,7 @@ where
     /// Required for garbage collection; since replicas make progress over the log
     /// independently, we want to make sure that we don't garbage collect operations
     /// that haven't been executed by all replicas.
-    ltails: [CachePadded<AtomicUsize>; MAX_REPLICAS],
+    pub ltails: [CachePadded<AtomicUsize>; MAX_REPLICAS],
 
     /// Identifier that will be allocated to the next replica that registers with
     /// this Log. Also required to correctly index into ltails above.
@@ -140,7 +158,10 @@ where
     /// replica number for this log. The application can then take action to start the log
     /// consumption on that replica. If the application is proactively taking measures to
     /// consume the log on all the replicas, then the variable can be initialized to default.
-    gc: UnsafeCell<*const dyn FnMut(&[AtomicBool; MAX_REPLICAS], usize)>,
+    gc: UnsafeCell<Box<dyn FnMut(&[AtomicBool; MAX_REPLICAS], usize)>>,
+
+    /// Use to append scan op atomically to all the logs.
+    scanlock: CachePadded<AtomicUsize>,
 
     /// Check if the log can issue a GC callback; reset
     /// after the GC is done in `advance_head` function.
@@ -237,6 +258,10 @@ where
                     Cell::new(Entry {
                         operation: None,
                         replica: 0usize,
+                        thread: 0usize,
+                        is_scan: false,
+                        is_read_op: false,
+                        depends_on: None,
                         alivef: AtomicBool::new(false),
                         refcnt: AtomicUsize::new(0),
                     }),
@@ -261,7 +286,10 @@ where
             ltails: arr![Default::default(); 192],
             next: CachePadded::new(AtomicUsize::new(1usize)),
             lmasks: fls,
-            gc: UnsafeCell::new(&|_rid: &[AtomicBool; MAX_REPLICAS], _lid: usize| {}),
+            gc: UnsafeCell::new(Box::new(
+                |_rid: &[AtomicBool; MAX_REPLICAS], _lid: usize| {},
+            )),
+            scanlock: CachePadded::new(AtomicUsize::new(0)),
             notify_replicas: CachePadded::new(AtomicBool::new(true)),
             dormant_replicas: arr![Default::default(); 192],
         }
@@ -294,13 +322,13 @@ where
     /// let mut l = Log::<Operation>::new(1 * 1024 * 1024, 1);
     ///
     /// // Update the callback function for the log.
-    /// let callback_func = &|rid: &[AtomicBool], idx: usize| {
+    /// let callback_func = |rid: &[AtomicBool; 192], idx: usize| {
     ///     // Take action on log `idx` and replicas in `rid`.
     /// };
     /// l.update_closure(callback_func)
     /// ```
-    pub fn update_closure(&mut self, gc: &dyn FnMut(&[AtomicBool], usize)) {
-        unsafe { *self.gc.get() = core::mem::transmute(gc) };
+    pub fn update_closure(&mut self, gc: impl FnMut(&[AtomicBool; MAX_REPLICAS], usize) + 'static) {
+        unsafe { *self.gc.get() = Box::new(gc) };
     }
 
     /// Registers a replica with the log. Returns an identifier that the replica
@@ -334,11 +362,15 @@ where
     /// as public due to being used by the benchmarking code.
     #[inline(always)]
     #[doc(hidden)]
-    pub fn append<F: FnMut(T, usize)>(&self, ops: &[T], idx: usize, mut s: F) {
+    pub fn append<F: FnMut(T, usize, usize, bool, bool, Option<Arc<Vec<usize>>>) -> bool>(
+        &self,
+        ops: &[(T, usize, bool)],
+        idx: usize,
+        mut s: F,
+    ) {
         let nops = ops.len();
         let mut iteration = 1;
         let mut waitgc = 1;
-        let num_replicas = self.next.load(Ordering::Relaxed) - 1;
 
         // Keep trying to reserve entries and add operations to the log until
         // we succeed in doing so.
@@ -381,9 +413,7 @@ where
                         Ordering::Relaxed,
                     ) == Ok(true)
                 {
-                    let f: &mut dyn FnMut(&[AtomicBool], usize) =
-                        unsafe { &mut *(*self.gc.get() as *mut dyn FnMut(&[AtomicBool], usize)) };
-                    f(&self.dormant_replicas, self.idx);
+                    unsafe { (*self.gc.get())(&self.dormant_replicas, self.idx) };
                 }
             }
 
@@ -426,22 +456,7 @@ where
 
             // Successfully reserved entries on the shared log. Add the operations in.
             for i in 0..nops {
-                let e = self.slog[self.index(tail + i)].as_ptr();
-                let mut m = self.lmasks[idx - 1].get();
-
-                // This entry was just reserved so it should be dead (!= m). However, if
-                // the log has wrapped around, then the alive mask has flipped. In this
-                // case, we flip the mask we were originally going to write into the
-                // allocated entry. We cannot flip lmasks[idx - 1] because this replica
-                // might still need to execute a few entries before the wrap around.
-                if unsafe { (*e).alivef.load(Ordering::Relaxed) == m } {
-                    m = !m;
-                }
-
-                unsafe { (*e).operation = Some(ops[i].clone()) };
-                unsafe { (*e).replica = idx };
-                unsafe { (*e).refcnt = AtomicUsize::new(num_replicas) };
-                unsafe { (*e).alivef.store(m, Ordering::Release) };
+                unsafe { self.update_entry(tail + i, &ops[i], idx, false, None) };
             }
 
             // If needed, advance the head of the log forward to make room on the log.
@@ -453,6 +468,150 @@ where
         }
     }
 
+    /// Adds a scan operation to the shared log.
+    #[inline(always)]
+    #[doc(hidden)]
+    pub(crate) fn try_append_scan<
+        F: FnMut(T, usize, usize, bool, bool, Option<Arc<Vec<usize>>>) -> bool,
+    >(
+        &self,
+        op: &(T, usize, bool),
+        idx: usize,
+        offset: &Vec<usize>,
+        mut s: F,
+    ) -> Result<usize, usize> {
+        let nops = 1;
+        let log_offset;
+
+        let tail = self.tail.load(Ordering::Relaxed);
+        let head = self.head.load(Ordering::Relaxed);
+
+        // If there are fewer than `GC_FROM_HEAD` entries on the log, then just
+        // try again. The replica that reserved entry (h + self.size - GC_FROM_HEAD)
+        // is currently trying to advance the head of the log. Keep refreshing the
+        // replica against the log to make sure that it isn't deadlocking GC.
+        if tail > head + self.size - GC_FROM_HEAD {
+            self.exec(idx, &mut s);
+            return Err(0);
+        }
+
+        // If on adding in the above entries there would be fewer than `GC_FROM_HEAD`
+        // entries left on the log, then we need to advance the head of the log.
+        let mut advance = false;
+        if tail + nops > head + self.size - GC_FROM_HEAD {
+            advance = true;
+        };
+
+        // Try reserving slots for the operations. If that fails, then restart
+        // from the beginning of this loop.
+        if self
+            .tail
+            .compare_exchange_weak(tail, tail + nops, Ordering::Acquire, Ordering::Relaxed)
+            != Ok(tail)
+        {
+            return Err(0);
+        };
+
+        // Successfully reserved entries on the shared log. Add the operations in.
+        log_offset = tail;
+        if self.idx != 1 {
+            unsafe {
+                self.update_entry(log_offset, op, idx, true, Some(Arc::new(vec![offset[0]])))
+            };
+        }
+
+        // If needed, advance the head of the log forward to make room on the log.
+        if advance {
+            self.advance_head(idx, &mut s);
+        }
+
+        Ok(log_offset)
+    }
+
+    /// Update the depends_on field for scan operation. Replica mainatins the
+    /// offset for the scan entry and later it updates the remaining offset there.
+    pub(crate) fn fix_scan_entry(
+        &self,
+        op: &(T, usize, bool),
+        idx: usize,
+        offsets: Arc<Vec<usize>>,
+    ) {
+        unsafe { self.update_entry(offsets[0], op, idx, true, Some(offsets)) };
+    }
+
+    #[inline(always)]
+    unsafe fn update_entry(
+        &self,
+        offset: usize,
+        op: &(T, usize, bool),
+        idx: usize,
+        is_scan: bool,
+        depends_on: Option<Arc<Vec<usize>>>,
+    ) {
+        let num_replicas = self.next.load(Ordering::Relaxed) - 1;
+        let e = self.slog[self.index(offset)].as_ptr();
+        let mut m = self.lmasks[idx - 1].get();
+
+        // This entry was just reserved so it should be dead (!= m). However, if
+        // the log has wrapped around, then the alive mask has flipped. In this
+        // case, we flip the mask we were originally going to write into the
+        // allocated entry. We cannot flip lmasks[idx - 1] because this replica
+        // might still need to execute a few entries before the wrap around.
+        if (*e).alivef.load(Ordering::Relaxed) == m {
+            m = !m;
+        }
+
+        (*e).operation = Some(op.0.clone());
+        (*e).replica = idx;
+        (*e).thread = op.1;
+        (*e).is_scan = is_scan;
+        (*e).is_read_op = op.2;
+        (*e).depends_on = depends_on;
+        (*e).refcnt = AtomicUsize::new(num_replicas);
+        (*e).alivef.store(m, Ordering::Release);
+    }
+
+    /// Try to acquire the scan lock.
+    fn try_scan_lock(&self, tid: usize) -> bool {
+        for _i in 0..4 {
+            if unsafe {
+                core::ptr::read_volatile(
+                    &self.scanlock
+                        as *const crossbeam_utils::CachePadded<core::sync::atomic::AtomicUsize>
+                        as *const usize,
+                )
+            } != 0
+            {
+                /* someone else has the lock */
+                return false;
+            };
+        }
+
+        if self
+            .scanlock
+            .compare_exchange_weak(0, tid, Ordering::Acquire, Ordering::Relaxed)
+            != Ok(0)
+        {
+            /* cas failed, we don't hold the lock */
+            return false;
+        }
+
+        /* successfully acquired the lock */
+        return true;
+    }
+
+    /// Acquire the scan lock.
+    pub(crate) fn acquire_scan_lock(&self, tid: usize) {
+        while !self.try_scan_lock(tid) {
+            spin_loop();
+        }
+    }
+
+    /// Release the scan lock.
+    pub(crate) fn release_scan_lock(&self) {
+        self.scanlock.store(0, Ordering::Release);
+    }
+
     /// Executes a passed in closure (`d`) on all operations starting from
     /// a replica's local tail on the shared log. The replica is identified through an
     /// `idx` passed in as an argument.
@@ -460,7 +619,11 @@ where
     /// The passed in closure is expected to take in two arguments: The operation
     /// from the shared log to be executed and the replica that issued it.
     #[inline(always)]
-    pub(crate) fn exec<F: FnMut(T, usize)>(&self, idx: usize, d: &mut F) {
+    pub(crate) fn exec<F: FnMut(T, usize, usize, bool, bool, Option<Arc<Vec<usize>>>) -> bool>(
+        &self,
+        idx: usize,
+        d: &mut F,
+    ) {
         // Load the logical log offset from which we must execute operations.
         let l = self.ltails[idx - 1].load(Ordering::Relaxed);
 
@@ -498,12 +661,33 @@ where
                 iteration += 1;
             }
 
+            let mut depends_on = None;
             unsafe {
-                d((*e).operation.as_ref().unwrap().clone(), (*e).replica);
+                if (*e).is_scan {
+                    depends_on = Some((*e).depends_on.as_ref().unwrap().clone());
+                }
+
+                if !d(
+                    (*e).operation.as_ref().unwrap().clone(),
+                    (*e).replica,
+                    (*e).thread,
+                    (*e).is_scan,
+                    (*e).is_read_op,
+                    depends_on,
+                ) {
+                    // if the operation is unable to complete; then update the ctail for
+                    // already executed operations and return. Only happends for scan ops.
+                    self.ctail.fetch_max(i, Ordering::Relaxed);
+                    return;
+                }
                 if (*e).refcnt.fetch_sub(1, Ordering::Release) == 1 {
                     (*e).operation = None;
                 }
             }
+
+            // Increment ltail for each operations, needed for scan
+            // operations as the rubberband is ltail sensitive.
+            self.ltails[idx - 1].fetch_add(1, Ordering::Relaxed);
 
             // Looks like we're going to wrap around now; flip this replica's local mask.
             if self.index(i) == self.size - 1 {
@@ -528,7 +712,11 @@ where
     /// then this method will never return. Accepts a closure that is passed into exec()
     /// to ensure that this replica does not deadlock GC.
     #[inline(always)]
-    fn advance_head<F: FnMut(T, usize)>(&self, rid: usize, mut s: &mut F) {
+    fn advance_head<F: FnMut(T, usize, usize, bool, bool, Option<Arc<Vec<usize>>>) -> bool>(
+        &self,
+        rid: usize,
+        mut s: &mut F,
+    ) {
         // Keep looping until we can advance the head and create some free space
         // on the log. If one of the replicas has stopped making progress, then
         // this method might never return.
@@ -780,8 +968,10 @@ mod tests {
     #[test]
     fn test_log_append() {
         let l = Log::<Operation>::default();
-        let o = [Operation::Read];
-        l.append(&o, 1, |_o: Operation, _i: usize| {});
+        let o = [(Operation::Read, 1, false)];
+        l.append(&o, 1, |_o: Operation, _i: usize, _, _, _, _| -> bool {
+            true
+        });
 
         assert_eq!(l.head.load(Ordering::Relaxed), 0);
         assert_eq!(l.tail.load(Ordering::Relaxed), 1);
@@ -794,8 +984,13 @@ mod tests {
     #[test]
     fn test_log_append_multiple() {
         let l = Log::<Operation>::default();
-        let o = [Operation::Read, Operation::Write(119)];
-        l.append(&o, 1, |_o: Operation, _i: usize| {});
+        let o = [
+            (Operation::Read, 1, false),
+            (Operation::Write(119), 1, false),
+        ];
+        l.append(&o, 1, |_o: Operation, _i: usize, _, _, _, _| -> bool {
+            true
+        });
 
         assert_eq!(l.head.load(Ordering::Relaxed), 0);
         assert_eq!(l.tail.load(Ordering::Relaxed), 2);
@@ -812,7 +1007,9 @@ mod tests {
         l.ltails[2].store(4096, Ordering::Relaxed);
         l.ltails[3].store(799, Ordering::Relaxed);
 
-        l.advance_head(0, &mut |_o: Operation, _i: usize| {});
+        l.advance_head(0, &mut |_o: Operation, _i: usize, _, _, _, _| -> bool {
+            true
+        });
         assert_eq!(l.head.load(Ordering::Relaxed), 224);
     }
 
@@ -820,10 +1017,11 @@ mod tests {
     #[test]
     fn test_log_append_gc() {
         let l = Log::<Operation>::default();
-        let o: [Operation; 4] = unsafe {
-            let mut a: [Operation; 4] = ::std::mem::MaybeUninit::zeroed().assume_init();
+        let o: [(Operation, usize, bool); 4] = unsafe {
+            let mut a: [(Operation, usize, bool); 4] =
+                ::std::mem::MaybeUninit::zeroed().assume_init();
             for i in &mut a[..] {
-                ::std::ptr::write(i, Operation::Read);
+                ::std::ptr::write(i, (Operation::Read, 1, false));
             }
             a
         };
@@ -831,7 +1029,9 @@ mod tests {
         l.next.store(2, Ordering::Relaxed);
         l.tail.store(l.size - GC_FROM_HEAD - 1, Ordering::Relaxed);
         l.ltails[0].store(1024, Ordering::Relaxed);
-        l.append(&o, 1, |_o: Operation, _i: usize| {});
+        l.append(&o, 1, |_o: Operation, _i: usize, _, _, _, _| -> bool {
+            true
+        });
 
         assert_eq!(l.head.load(Ordering::Relaxed), 1024);
         assert_eq!(l.tail.load(Ordering::Relaxed), l.size - GC_FROM_HEAD + 3);
@@ -842,10 +1042,11 @@ mod tests {
     #[test]
     fn test_log_append_wrap() {
         let l = Log::<Operation>::default();
-        let o: [Operation; 1024] = unsafe {
-            let mut a: [Operation; 1024] = ::std::mem::MaybeUninit::zeroed().assume_init();
+        let o: [(Operation, usize, bool); 1024] = unsafe {
+            let mut a: [(Operation, usize, bool); 1024] =
+                ::std::mem::MaybeUninit::zeroed().assume_init();
             for i in &mut a[..] {
-                ::std::ptr::write(i, Operation::Read);
+                ::std::ptr::write(i, (Operation::Read, 1, false));
             }
             a
         };
@@ -853,7 +1054,9 @@ mod tests {
         l.next.store(2, Ordering::Relaxed);
         l.head.store(2 * 8192, Ordering::Relaxed);
         l.tail.store(l.size - 10, Ordering::Relaxed);
-        l.append(&o, 1, |_o: Operation, _i: usize| {});
+        l.append(&o, 1, |_o: Operation, _i: usize, _, _, _, _| -> bool {
+            true
+        });
 
         assert_eq!(l.lmasks[0].get(), true);
         assert_eq!(l.tail.load(Ordering::Relaxed), l.size + 1014);
@@ -863,13 +1066,16 @@ mod tests {
     #[test]
     fn test_log_exec() {
         let l = Log::<Operation>::default();
-        let o = [Operation::Read];
-        let mut f = |op: Operation, i: usize| {
+        let o = [(Operation::Read, 1, false)];
+        let mut f = |op: Operation, i: usize, _, _, _, _| -> bool {
             assert_eq!(op, Operation::Read);
             assert_eq!(i, 1);
+            true
         };
 
-        l.append(&o, 1, |_o: Operation, _i: usize| {});
+        l.append(&o, 1, |_o: Operation, _i: usize, _, _, _, _| -> bool {
+            true
+        });
         l.exec(1, &mut f);
 
         assert_eq!(
@@ -886,8 +1092,9 @@ mod tests {
     #[test]
     fn test_log_exec_empty() {
         let l = Log::<Operation>::default();
-        let mut f = |_o: Operation, _i: usize| {
+        let mut f = |_o: Operation, _i: usize, _, _, _, _| -> bool {
             assert!(false);
+            true
         };
 
         l.exec(1, &mut f);
@@ -897,16 +1104,20 @@ mod tests {
     #[test]
     fn test_log_exec_zero() {
         let l = Log::<Operation>::default();
-        let o = [Operation::Read];
-        let mut f = |op: Operation, i: usize| {
+        let o = [(Operation::Read, 1, false)];
+        let mut f = |op: Operation, i: usize, _, _, _, _| -> bool {
             assert_eq!(op, Operation::Read);
             assert_eq!(i, 1);
+            true
         };
-        let mut g = |_op: Operation, _i: usize| {
+        let mut g = |_op: Operation, _i: usize, _, _, _, _| -> bool {
             assert!(false);
+            true
         };
 
-        l.append(&o, 1, |_o: Operation, _i: usize| {});
+        l.append(&o, 1, |_o: Operation, _i: usize, _, _, _, _| -> bool {
+            true
+        });
         l.exec(1, &mut f);
         l.exec(1, &mut g);
     }
@@ -915,15 +1126,23 @@ mod tests {
     #[test]
     fn test_log_exec_multiple() {
         let l = Log::<Operation>::default();
-        let o = [Operation::Read, Operation::Write(119)];
+        let o = [
+            (Operation::Read, 1, false),
+            (Operation::Write(119), 1, false),
+        ];
         let mut s = 0;
-        let mut f = |op: Operation, _i: usize| match op {
-            Operation::Read => s += 121,
-            Operation::Write(v) => s += v,
-            Operation::Invalid => assert!(false),
+        let mut f = |op: Operation, _i: usize, _, _, _, _| -> bool {
+            match op {
+                Operation::Read => s += 121,
+                Operation::Write(v) => s += v,
+                Operation::Invalid => assert!(false),
+            }
+            true
         };
 
-        l.append(&o, 1, |_o: Operation, _i: usize| {});
+        l.append(&o, 1, |_o: Operation, _i: usize, _, _, _, _| -> bool {
+            true
+        });
         l.exec(1, &mut f);
         assert_eq!(s, 240);
 
@@ -942,23 +1161,29 @@ mod tests {
     #[test]
     fn test_log_exec_wrap() {
         let l = Log::<Operation>::default();
-        let o: [Operation; 1024] = unsafe {
-            let mut a: [Operation; 1024] = ::std::mem::MaybeUninit::zeroed().assume_init();
+        let o: [(Operation, usize, bool); 1024] = unsafe {
+            let mut a: [(Operation, usize, bool); 1024] =
+                ::std::mem::MaybeUninit::zeroed().assume_init();
             for i in &mut a[..] {
-                ::std::ptr::write(i, Operation::Read);
+                ::std::ptr::write(i, (Operation::Read, 1, false));
             }
             a
         };
-        let mut f = |op: Operation, i: usize| {
+        let mut f = |op: Operation, i: usize, _, _, _, _| -> bool {
             assert_eq!(op, Operation::Read);
             assert_eq!(i, 1);
+            true
         };
 
-        l.append(&o, 1, |_o: Operation, _i: usize| {}); // Required for GC to work correctly.
+        l.append(&o, 1, |_o: Operation, _i: usize, _, _, _, _| -> bool {
+            true
+        }); // Required for GC to work correctly.
         l.next.store(2, Ordering::SeqCst);
         l.head.store(2 * 8192, Ordering::SeqCst);
         l.tail.store(l.size - 10, Ordering::SeqCst);
-        l.append(&o, 1, |_o: Operation, _i: usize| {});
+        l.append(&o, 1, |_o: Operation, _i: usize, _, _, _, _| -> bool {
+            true
+        });
 
         l.ltails[0].store(l.size - 10, Ordering::SeqCst);
         l.exec(1, &mut f);
@@ -972,18 +1197,22 @@ mod tests {
     #[should_panic]
     fn test_exec_panic() {
         let l = Log::<Operation>::default();
-        let o: [Operation; 1024] = unsafe {
-            let mut a: [Operation; 1024] = ::std::mem::MaybeUninit::zeroed().assume_init();
+        let o: [(Operation, usize, bool); 1024] = unsafe {
+            let mut a: [(Operation, usize, bool); 1024] =
+                ::std::mem::MaybeUninit::zeroed().assume_init();
             for i in &mut a[..] {
-                ::std::ptr::write(i, Operation::Read);
+                ::std::ptr::write(i, (Operation::Read, 1, false));
             }
             a
         };
-        let mut f = |_op: Operation, _i: usize| {
+        let mut f = |_op: Operation, _i: usize, _, _, _, _| -> bool {
             assert!(false);
+            true
         };
 
-        l.append(&o, 1, |_o: Operation, _i: usize| {});
+        l.append(&o, 1, |_o: Operation, _i: usize, _, _, _, _| -> bool {
+            true
+        });
         l.head.store(8192, Ordering::SeqCst);
 
         l.exec(1, &mut f);
@@ -994,27 +1223,43 @@ mod tests {
     #[test]
     fn test_log_change_refcount() {
         let l = Log::<Arc<Operation>>::default();
-        let o1 = [Arc::new(Operation::Read)];
-        let o2 = [Arc::new(Operation::Read)];
-        assert_eq!(Arc::strong_count(&o1[0]), 1);
-        assert_eq!(Arc::strong_count(&o2[0]), 1);
+        let o1 = [(Arc::new(Operation::Read), 1, false)];
+        let o2 = [(Arc::new(Operation::Read), 1, false)];
+        assert_eq!(Arc::strong_count(&o1[0].0), 1);
+        assert_eq!(Arc::strong_count(&o2[0].0), 1);
 
-        l.append(&o1[..], 1, |_o: Arc<Operation>, _i: usize| {});
-        assert_eq!(Arc::strong_count(&o1[0]), 2);
-        l.append(&o1[..], 1, |_o: Arc<Operation>, _i: usize| {});
-        assert_eq!(Arc::strong_count(&o1[0]), 3);
+        l.append(
+            &o1[..],
+            1,
+            |_o: Arc<Operation>, _i: usize, _, _, _, _| -> bool { true },
+        );
+        assert_eq!(Arc::strong_count(&o1[0].0), 2);
+        l.append(
+            &o1[..],
+            1,
+            |_o: Arc<Operation>, _i: usize, _, _, _, _| -> bool { true },
+        );
+        assert_eq!(Arc::strong_count(&o1[0].0), 3);
 
         unsafe { l.reset() };
 
         // Over here, we overwrite entries that were written to by the two
         // previous appends. This decreases the refcount of o1 and increases
         // the refcount of o2.
-        l.append(&o2[..], 1, |_o: Arc<Operation>, _i: usize| {});
-        assert_eq!(Arc::strong_count(&o1[0]), 2);
-        assert_eq!(Arc::strong_count(&o2[0]), 2);
-        l.append(&o2[..], 1, |_o: Arc<Operation>, _i: usize| {});
-        assert_eq!(Arc::strong_count(&o1[0]), 1);
-        assert_eq!(Arc::strong_count(&o2[0]), 3);
+        l.append(
+            &o2[..],
+            1,
+            |_o: Arc<Operation>, _i: usize, _, _, _, _| -> bool { true },
+        );
+        assert_eq!(Arc::strong_count(&o1[0].0), 2);
+        assert_eq!(Arc::strong_count(&o2[0].0), 2);
+        l.append(
+            &o2[..],
+            1,
+            |_o: Arc<Operation>, _i: usize, _, _, _, _| -> bool { true },
+        );
+        assert_eq!(Arc::strong_count(&o1[0].0), 1);
+        assert_eq!(Arc::strong_count(&o2[0].0), 3);
     }
 
     // Tests that operations are cloned when added to the log, and that
@@ -1027,24 +1272,32 @@ mod tests {
         assert_eq!(Log::<Arc<Operation>>::entry_size(), entry_size);
         let size: usize = total_entries * entry_size;
         let l = Log::<Arc<Operation>>::new(size, 1);
-        let o1 = [Arc::new(Operation::Read)];
-        let o2 = [Arc::new(Operation::Read)];
-        assert_eq!(Arc::strong_count(&o1[0]), 1);
-        assert_eq!(Arc::strong_count(&o2[0]), 1);
+        let o1 = [(Arc::new(Operation::Read), 1, false)];
+        let o2 = [(Arc::new(Operation::Read), 1, false)];
+        assert_eq!(Arc::strong_count(&o1[0].0), 1);
+        assert_eq!(Arc::strong_count(&o2[0].0), 1);
 
         for i in 1..(total_entries + 1) {
-            l.append(&o1[..], 1, |_o: Arc<Operation>, _i: usize| {});
-            assert_eq!(Arc::strong_count(&o1[0]), i + 1);
+            l.append(
+                &o1[..],
+                1,
+                |_o: Arc<Operation>, _i: usize, _, _, _, _| -> bool { true },
+            );
+            assert_eq!(Arc::strong_count(&o1[0].0), i + 1);
         }
-        assert_eq!(Arc::strong_count(&o1[0]), total_entries + 1);
+        assert_eq!(Arc::strong_count(&o1[0].0), total_entries + 1);
 
         for i in 1..(total_entries + 1) {
-            l.append(&o2[..], 1, |_o: Arc<Operation>, _i: usize| {});
-            assert_eq!(Arc::strong_count(&o1[0]), (total_entries + 1) - i);
-            assert_eq!(Arc::strong_count(&o2[0]), i + 1);
+            l.append(
+                &o2[..],
+                1,
+                |_o: Arc<Operation>, _i: usize, _, _, _, _| -> bool { true },
+            );
+            assert_eq!(Arc::strong_count(&o1[0].0), (total_entries + 1) - i);
+            assert_eq!(Arc::strong_count(&o2[0].0), i + 1);
         }
-        assert_eq!(Arc::strong_count(&o1[0]), 1);
-        assert_eq!(Arc::strong_count(&o2[0]), total_entries + 1);
+        assert_eq!(Arc::strong_count(&o1[0].0), 1);
+        assert_eq!(Arc::strong_count(&o2[0].0), total_entries + 1);
     }
 
     // Tests that is_replica_synced_for_read() works correctly; it returns
@@ -1058,13 +1311,16 @@ mod tests {
         assert_eq!(one, 1);
         assert_eq!(two, 2);
 
-        let o = [Operation::Read];
-        let mut f = |op: Operation, i: usize| {
+        let o = [(Operation::Read, 1, false)];
+        let mut f = |op: Operation, i: usize, _, _, _, _| -> bool {
             assert_eq!(op, Operation::Read);
             assert_eq!(i, 1);
+            true
         };
 
-        l.append(&o, one, |_o: Operation, _i: usize| {});
+        l.append(&o, one, |_o: Operation, _i: usize, _, _, _, _| -> bool {
+            true
+        });
         l.exec(one, &mut f);
         assert_eq!(l.is_replica_synced_for_reads(one, l.get_ctail()), true);
         assert_eq!(l.is_replica_synced_for_reads(two, l.get_ctail()), false);

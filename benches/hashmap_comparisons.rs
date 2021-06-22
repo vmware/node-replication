@@ -74,6 +74,14 @@ where
         unsafe { (&mut *self.data_structure.get()).dispatch_mut(op) }
     }
 
+    fn exec_scan(
+        &self,
+        op: <Self::D as Dispatch>::WriteOperation,
+        _idx: ReplicaToken,
+    ) -> <Self::D as Dispatch>::Response {
+        unsafe { (&mut *self.data_structure.get()).dispatch_mut(op) }
+    }
+
     fn exec_ro(
         &self,
         op: <T as Dispatch>::ReadOperation,
@@ -125,6 +133,14 @@ where
     }
 
     fn exec(
+        &self,
+        _op: <Self::D as Dispatch>::WriteOperation,
+        _idx: ReplicaToken,
+    ) -> <Self::D as Dispatch>::Response {
+        unreachable!("All opertations must be read ops")
+    }
+
+    fn exec_scan(
         &self,
         _op: <Self::D as Dispatch>::WriteOperation,
         _idx: ReplicaToken,

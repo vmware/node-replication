@@ -23,17 +23,19 @@ pub enum OpWr {
 }
 
 impl LogMapper for OpRd {
-    fn hash(&self) -> usize {
+    fn hash(&self, nlogs: usize, logs: &mut Vec<usize>) {
+        logs.clear();
         match self {
-            OpRd::FileRead(fd) => (*fd - 1) as usize,
+            OpRd::FileRead(fd) => logs.push((*fd - 1) as usize % nlogs),
         }
     }
 }
 
 impl LogMapper for OpWr {
-    fn hash(&self) -> usize {
+    fn hash(&self, nlogs: usize, logs: &mut Vec<usize>) {
+        logs.clear();
         match self {
-            OpWr::FileWrite(fd) => (*fd - 1) as usize,
+            OpWr::FileWrite(fd) => logs.push((*fd - 1) as usize % nlogs),
         }
     }
 }

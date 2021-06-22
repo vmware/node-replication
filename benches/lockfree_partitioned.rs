@@ -71,6 +71,14 @@ where
         self.data_structure.dispatch_mut(op)
     }
 
+    fn exec_scan(
+        &self,
+        _op: <Self::D as Dispatch>::WriteOperation,
+        _idx: ReplicaToken,
+    ) -> <Self::D as Dispatch>::Response {
+        unreachable!("No scan op for lockfree partitioned DS!");
+    }
+
     fn exec_ro(
         &self,
         op: <Self::D as Dispatch>::ReadOperation,

@@ -10,6 +10,7 @@ use rand::distributions::Distribution;
 use rand::RngCore;
 
 use std::sync;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time;
 
@@ -19,7 +20,7 @@ mod utils;
 use utils::{pin_thread, topology::*};
 
 pub const CAPACITY: usize = 5_000_000;
-static mut SPAN: usize = 0;
+static SPAN: AtomicUsize = AtomicUsize::new(0);
 
 fn main() {
     let args = std::env::args().filter(|e| e != "--bench");
@@ -62,10 +63,8 @@ fn main() {
     let dur = time::Duration::from_secs(5);
     let dur_in_ns = dur.as_secs() * 1_000_000_000_u64 + dur.subsec_nanos() as u64;
     let dur_in_s = dur_in_ns as f64 / 1_000_000_000_f64;
-    unsafe {
-        SPAN = CAPACITY / writers;
-    }
-    let span = unsafe { SPAN };
+    SPAN.store(CAPACITY / writers, Ordering::Release);
+    let span = SPAN.load(Ordering::Acquire);
 
     let stat = |var: &str, op, results: Vec<(_, usize)>| {
         for (i, res) in results.into_iter().enumerate() {
@@ -178,9 +177,11 @@ pub enum OpWr {
 }
 
 impl LogMapper for OpWr {
-    fn hash(&self) -> usize {
+    fn hash(&self, nlogs: usize, logs: &mut Vec<usize>) {
+        logs.clear();
+        let span = SPAN.load(Ordering::Relaxed);
         match self {
-            OpWr::Put(k, _v) => (unsafe { *k / SPAN as u64 }) as usize,
+            OpWr::Put(k, _v) => logs.push((*k as usize / span) % nlogs),
         }
     }
 }
@@ -192,9 +193,11 @@ pub enum OpRd {
 }
 
 impl LogMapper for OpRd {
-    fn hash(&self) -> usize {
+    fn hash(&self, nlogs: usize, logs: &mut Vec<usize>) {
+        logs.clear();
+        let span = SPAN.load(Ordering::Relaxed);
         match self {
-            OpRd::Get(k) => (unsafe { *k / SPAN as u64 }) as usize,
+            OpRd::Get(k) => logs.push((*k as usize / span) % nlogs),
         }
     }
 }

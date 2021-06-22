@@ -91,6 +91,12 @@ pub trait ReplicaTrait {
         idx: ReplicaToken,
     ) -> <Self::D as Dispatch>::Response;
 
+    fn exec_scan(
+        &self,
+        op: <Self::D as Dispatch>::WriteOperation,
+        idx: ReplicaToken,
+    ) -> <Self::D as Dispatch>::Response;
+
     fn exec_ro(
         &self,
         op: <Self::D as Dispatch>::ReadOperation,
@@ -127,6 +133,17 @@ impl<'a, T: Dispatch + Sync + Default> ReplicaTrait for Replica<'a, T> {
         idx: ReplicaToken,
     ) -> <Self::D as Dispatch>::Response {
         self.execute_mut(op, idx)
+    }
+
+    fn exec_scan(
+        &self,
+        op: <Self::D as Dispatch>::WriteOperation,
+        idx: ReplicaToken,
+    ) -> <Self::D as Dispatch>::Response {
+        #[cfg(feature = "nr")]
+        return self.execute_mut(op, idx);
+        #[cfg(feature = "c_nr")]
+        return self.execute_mut_scan(op, idx);
     }
 
     fn exec_ro(
@@ -644,26 +661,26 @@ where
         #[cfg(feature = "c_nr")]
         {
             use core::sync::atomic::AtomicBool;
-            let func = &|rid: &[AtomicBool], idx: usize| {
-                let stuck = stuck.clone();
-                for replia in 0..192 {
-                    if rid[replia].compare_exchange_weak(
-                        true,
-                        false,
-                        Ordering::Relaxed,
-                        Ordering::Relaxed,
-                    ) == Ok(true)
-                    {
-                        stuck[replia].compare_exchange_weak(
-                            0,
-                            idx,
-                            Ordering::Release,
-                            Ordering::Relaxed,
-                        );
-                    }
-                }
-            };
             for i in 0..nlogs {
+                let stuck = stuck.clone();
+                let func = move |rid: &[AtomicBool; 192], idx: usize| {
+                    for replia in 0..192 {
+                        if rid[replia].compare_exchange_weak(
+                            true,
+                            false,
+                            Ordering::Relaxed,
+                            Ordering::Relaxed,
+                        ) == Ok(true)
+                        {
+                            stuck[replia].compare_exchange_weak(
+                                0,
+                                idx,
+                                Ordering::Release,
+                                Ordering::Relaxed,
+                            );
+                        }
+                    }
+                };
                 unsafe { Arc::get_mut_unchecked(&mut self.log[i]).update_closure(func) };
             }
         }

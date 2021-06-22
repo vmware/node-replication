@@ -15,7 +15,14 @@ const_assert!(MAX_PENDING_OPS >= 1 && (MAX_PENDING_OPS & (MAX_PENDING_OPS - 1) =
 
 /// A pending operation is a combination of the its op-code (T),
 /// and the corresponding result (R).
-type PendingOperation<T, R> = Cell<(Option<T>, Option<usize>, Option<R>)>;
+/// Cell contains: Operatio, hash, response, is_scan, is_read_only
+type PendingOperation<T, R> = Cell<(
+    Option<T>,
+    Option<usize>,
+    Option<R>,
+    Option<bool>,
+    Option<bool>,
+)>;
 
 /// Contains all state local to a particular thread.
 ///
@@ -53,6 +60,10 @@ where
     /// This variable is updated by the combiner, and is read by the thread that owns this context.
     /// We can avoid making it an atomic by assuming we're on x86.
     pub comb: CachePadded<AtomicUsize>,
+
+    /// Identifies the context number with-in a replica. Id also maps to the thread-id because
+    /// the partitioned nature of the contexts in the replica.
+    idx: usize,
 }
 
 impl<T, R> Default for Context<T, R>
@@ -65,7 +76,7 @@ where
         let mut batch: [CachePadded<PendingOperation<T, R>>; MAX_PENDING_OPS] =
             unsafe { ::core::mem::MaybeUninit::zeroed().assume_init() };
         for elem in &mut batch[..] {
-            *elem = CachePadded::new(Cell::new((None, None, None)));
+            *elem = CachePadded::new(Cell::new((None, None, None, None, None)));
         }
 
         Context {
@@ -73,6 +84,7 @@ where
             tail: CachePadded::new(AtomicUsize::new(0)),
             head: CachePadded::new(AtomicUsize::new(0)),
             comb: CachePadded::new(AtomicUsize::new(0)),
+            idx: 0,
         }
     }
 }
@@ -82,11 +94,18 @@ where
     T: Sized + Clone,
     R: Sized + Clone,
 {
+    pub fn new(id: usize) -> Context<T, R> {
+        let mut context: Context<T, R> = Default::default();
+        context.idx = id;
+
+        context
+    }
+
     /// Enqueues an operation onto this context's batch of pending operations.
     ///
     /// Returns true if the operation was successfully enqueued. False otherwise.
     #[inline(always)]
-    pub(crate) fn enqueue(&self, op: T, hash: usize) -> bool {
+    pub(crate) fn enqueue(&self, op: T, hash: usize, is_scan: bool, is_read_only: bool) -> bool {
         let t = self.tail.load(Ordering::Relaxed);
         let h = self.head.load(Ordering::Relaxed);
 
@@ -102,6 +121,8 @@ where
         let e = self.batch[self.index(t)].as_ptr();
         unsafe { (*e).0 = Some(op) };
         unsafe { (*e).1 = Some(hash) };
+        unsafe { (*e).3 = Some(is_scan) };
+        unsafe { (*e).4 = Some(is_read_only) };
 
         self.tail.store(t + 1, Ordering::Relaxed);
         true
@@ -110,9 +131,9 @@ where
     /// Enqueues a batch of responses onto this context. This is invoked by the combiner
     /// after it has executed operations (obtained through a call to ops()) against the
     /// replica this thread is registered against.
+    #[allow(dead_code)]
     #[inline(always)]
     pub(crate) fn enqueue_resps(&self, responses: &[R]) {
-        let h = self.comb.load(Ordering::Relaxed);
         let n = responses.len();
 
         // Empty slice passed in; no work to do, so simply return.
@@ -123,19 +144,34 @@ where
         // Starting from `comb`, write all responses into the batch. Assume here that
         // the slice above doesn't cause us to cross the tail of the batch.
         for i in 0..n {
-            let e = self.batch[self.index(h + i)].as_ptr();
-            unsafe {
-                (*e).2 = Some(responses[i].clone());
-            }
+            self.enqueue_resp(responses[i].clone());
+        }
+    }
+
+    /// Enqueues a response onto this context. This is invoked by the combiner
+    /// after it has executed operations (obtained through a call to ops()) against the
+    /// replica this thread is registered against.
+    #[inline(always)]
+    pub(crate) fn enqueue_resp(&self, responses: R) {
+        let h = self.comb.load(Ordering::Relaxed);
+
+        let e = self.batch[self.index(h)].as_ptr();
+        unsafe {
+            (*e).2 = Some(responses);
         }
 
-        self.comb.store(h + n, Ordering::Relaxed);
+        self.comb.store(h + 1, Ordering::Relaxed);
     }
 
     /// Adds any pending operations on this context to a passed in buffer. Returns the
     /// the number of such operations that were added in.
     #[inline(always)]
-    pub(crate) fn ops(&self, buffer: &mut Vec<T>, hash: usize) -> usize {
+    pub(crate) fn ops(
+        &self,
+        buffer: &mut Vec<(T, usize, bool)>,
+        scan_buffer: &mut Vec<(T, usize, bool)>,
+        hash: usize,
+    ) -> usize {
         let mut h = self.comb.load(Ordering::Relaxed);
         let t = self.tail.load(Ordering::Relaxed);
 
@@ -157,7 +193,19 @@ where
             // on the operation is safe.
             let e = self.batch[self.index(i)].as_ptr();
             if unsafe { (*e).1 } == Some(hash) {
-                buffer.push(unsafe { (*e).0.as_ref().unwrap().clone() });
+                match unsafe { (*e).3.unwrap() } {
+                    true => unsafe {
+                        scan_buffer.push((
+                            (*e).0.as_ref().unwrap().clone(),
+                            self.idx,
+                            (*e).4.unwrap(),
+                        ))
+                    },
+                    false => unsafe {
+                        buffer.push(((*e).0.as_ref().unwrap().clone(), self.idx, (*e).4.unwrap()))
+                    },
+                }
+
                 n += 1;
                 h += 1;
             }
@@ -217,7 +265,7 @@ mod test {
     #[test]
     fn test_context_enqueue() {
         let c = Context::<u64, Result<u64, ()>>::default();
-        assert!(c.enqueue(121, 0));
+        assert!(c.enqueue(121, 0, false, true));
         unsafe { assert_eq!((*c.batch[0].as_ptr()).0, Some(121)) };
         assert_eq!(c.tail.load(Ordering::Relaxed), 1);
         assert_eq!(c.head.load(Ordering::Relaxed), 0);
@@ -230,7 +278,7 @@ mod test {
         let c = Context::<u64, Result<u64, ()>>::default();
         c.tail.store(MAX_PENDING_OPS, Ordering::Relaxed);
 
-        assert!(!c.enqueue(100, 0));
+        assert!(!c.enqueue(100, 0, false, true));
         assert_eq!(c.tail.load(Ordering::Relaxed), MAX_PENDING_OPS);
         assert_eq!(c.head.load(Ordering::Relaxed), 0);
         assert_eq!(c.comb.load(Ordering::Relaxed), 0);
@@ -279,20 +327,45 @@ mod test {
     fn test_context_ops() {
         let c = Context::<usize, usize>::default();
         let mut o = vec![];
+        let mut scan = vec![];
 
         for idx in 0..MAX_PENDING_OPS / 2 {
-            assert!(c.enqueue(idx * idx, 1))
+            assert!(c.enqueue(idx * idx, 1, false, false))
         }
 
-        assert_eq!(c.ops(&mut o, 1), MAX_PENDING_OPS / 2);
-        /*assert_eq!(o.len(), MAX_PENDING_OPS / 2);
+        assert_eq!(c.ops(&mut o, &mut scan, 1), MAX_PENDING_OPS / 2);
+        assert_eq!(o.len(), MAX_PENDING_OPS / 2);
+        assert_eq!(scan.len(), 0);
         assert_eq!(c.tail.load(Ordering::Relaxed), MAX_PENDING_OPS / 2);
         assert_eq!(c.head.load(Ordering::Relaxed), 0);
         assert_eq!(c.comb.load(Ordering::Relaxed), 0);
 
         for idx in 0..MAX_PENDING_OPS / 2 {
-            assert_eq!(o[idx], idx * idx)
-        }*/
+            assert_eq!(o[idx].0, idx * idx)
+        }
+    }
+
+    // Tests whether scan ops() can successfully retrieve operations enqueued on this context.
+    #[test]
+    fn test_context_ops_scan() {
+        let c = Context::<usize, usize>::default();
+        let mut o = vec![];
+        let mut scan = vec![];
+
+        for idx in 0..MAX_PENDING_OPS / 2 {
+            assert!(c.enqueue(idx * idx, 1, true, false))
+        }
+
+        assert_eq!(c.ops(&mut o, &mut scan, 1), MAX_PENDING_OPS / 2);
+        assert_eq!(o.len(), 0);
+        assert_eq!(scan.len(), MAX_PENDING_OPS / 2);
+        assert_eq!(c.tail.load(Ordering::Relaxed), MAX_PENDING_OPS / 2);
+        assert_eq!(c.head.load(Ordering::Relaxed), 0);
+        assert_eq!(c.comb.load(Ordering::Relaxed), 0);
+
+        for idx in 0..MAX_PENDING_OPS / 2 {
+            assert_eq!(scan[idx].0, idx * idx)
+        }
     }
 
     // Tests whether ops() returns nothing when we don't have any pending operations.
@@ -300,11 +373,12 @@ mod test {
     fn test_context_ops_empty() {
         let c = Context::<usize, usize>::default();
         let mut o = vec![];
+        let mut scan = vec![];
 
         c.tail.store(8, Ordering::Relaxed);
         c.comb.store(8, Ordering::Relaxed);
 
-        assert_eq!(c.ops(&mut o, 0), 0);
+        assert_eq!(c.ops(&mut o, &mut scan, 0), 0);
         assert_eq!(o.len(), 0);
         assert_eq!(c.tail.load(Ordering::Relaxed), 8);
         assert_eq!(c.head.load(Ordering::Relaxed), 0);
@@ -317,11 +391,12 @@ mod test {
     fn test_context_ops_panic() {
         let c = Context::<usize, usize>::default();
         let mut o = vec![];
+        let mut scan = vec![];
 
         c.tail.store(6, Ordering::Relaxed);
         c.comb.store(9, Ordering::Relaxed);
 
-        assert_eq!(c.ops(&mut o, 0), 0);
+        assert_eq!(c.ops(&mut o, &mut scan, 0), 0);
     }
 
     // Tests whether we can retrieve responses enqueued on this context.
