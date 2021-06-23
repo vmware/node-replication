@@ -4,6 +4,7 @@
 //! Defines a hash-map that can be replicated.
 #![allow(dead_code)]
 #![feature(test)]
+#![feature(bench_black_box)]
 
 use std::collections::HashMap;
 use std::fmt::Debug;

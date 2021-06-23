@@ -3,6 +3,8 @@
 
 //! Implements ReplicaTrait for a bunch of different lockfree DS implementations.
 
+#![feature(bench_black_box)]
+
 use std::convert::TryInto;
 use std::marker::Sync;
 use std::sync::atomic::{AtomicUsize, Ordering};

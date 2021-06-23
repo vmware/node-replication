@@ -3,6 +3,7 @@
 
 //! A in-memory FS benchmark.
 #![feature(test)]
+#![feature(bench_black_box)]
 
 use std::ffi::OsStr;
 use std::sync::Arc;
