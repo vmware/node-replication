@@ -6,7 +6,6 @@
 #![feature(get_mut_unchecked)]
 #![feature(bench_black_box)]
 
-
 use std::fmt::Debug;
 use std::marker::Sync;
 
