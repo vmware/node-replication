@@ -26,6 +26,9 @@ jobs:
     - name: Build NR
       run: cargo build --release --verbose
       working-directory: ./nr
+    - name: Build NR (unstable)
+      run: cargo build --release --verbose --features unstable
+      working-directory: ./nr
     - name: Compile tests
       run: cargo test --release --no-run --verbose
       working-directory: ./nr

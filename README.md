@@ -21,17 +21,8 @@ data-structures and one for already concurrent or partitioned data structures.
 
 ## Supported Platforms
 
-Both the crates currently requires a nightly rust compiler (due to the use of
-`new_uninit`, and `get_mut_unchecked`, `negative_impls` API) and works with
-`no_std`.
-
-```bash
-rustup toolchain install nightly
-rustup default nightly
-```
-
 The code should be treated as an early release and is still work in progress. In
-its current form, the library is only known to work on x86 platforms (other
+its current form, the library is only known to work on x86-64 platforms (other
 platforms will require some changes and are untested).
 
 ## Benchmarks

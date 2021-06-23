@@ -101,14 +101,18 @@ After `x=96`, the remaining hyper-threads are used.
 
 ## Compile the library
 
-The library currently requires a nightly rust compiler (due to the use of
-`new_uninit`, and `get_mut_unchecked`, `negative_impls` API). The library works
-with `no_std`.
+The works with `no_std` and a stable rust compiler.
 
 ```bash
-rustup toolchain install nightly
-rustup default nightly
 cargo build
+```
+
+If you are using a nightly rust compiler, you can compile the linrary to make
+use of some more recent features (`new_uninit`, and `get_mut_unchecked`,
+`negative_impls`):
+
+```bash
+cargo build --features unstable
 ```
 
 As a dependency in your `Cargo.toml`:

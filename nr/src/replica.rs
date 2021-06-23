@@ -3,13 +3,11 @@
 
 use core::cell::RefCell;
 use core::hint::spin_loop;
-use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use arr_macro::arr;
 use crossbeam_utils::CachePadded;
 
 use super::context::Context;
@@ -27,6 +25,7 @@ use super::Dispatch;
 pub struct ReplicaToken(usize);
 
 /// To make it harder to use the same ReplicaToken on multiple threads.
+#[cfg(features = "unstable")]
 impl !Send for ReplicaToken {}
 
 impl ReplicaToken {
@@ -203,10 +202,56 @@ where
         log: &Arc<Log<'b, <D as Dispatch>::WriteOperation>>,
         d: D,
     ) -> Arc<Replica<'b, D>> {
+        let mut contexts = Vec::with_capacity(MAX_THREADS_PER_REPLICA);
+        // Add `MAX_THREADS_PER_REPLICA` contexts
+        for _idx in 0..MAX_THREADS_PER_REPLICA {
+            contexts.push(Default::default());
+        }
+
+        Arc::new(
+            Replica {
+                idx: log.register().unwrap(),
+                combiner: CachePadded::new(AtomicUsize::new(0)),
+                next: CachePadded::new(AtomicUsize::new(1)),
+                contexts,
+                buffer:
+                    RefCell::new(
+                        Vec::with_capacity(
+                            MAX_THREADS_PER_REPLICA
+                                * Context::<
+                                    <D as Dispatch>::WriteOperation,
+                                    <D as Dispatch>::Response,
+                                >::batch_size(),
+                        ),
+                    ),
+                inflight: RefCell::new([0; MAX_THREADS_PER_REPLICA]),
+                result:
+                    RefCell::new(
+                        Vec::with_capacity(
+                            MAX_THREADS_PER_REPLICA
+                                * Context::<
+                                    <D as Dispatch>::WriteOperation,
+                                    <D as Dispatch>::Response,
+                                >::batch_size(),
+                        ),
+                    ),
+                slog: log.clone(),
+                data: CachePadded::new(RwLock::<D>::new(d)),
+            },
+        )
+    }
+
+    /// See `with_data` documentation without unstable feature.
+    #[cfg(features = "unstable")]
+    pub fn with_data<'b>(
+        log: &Arc<Log<'b, <D as Dispatch>::WriteOperation>>,
+        d: D,
+    ) -> Arc<Replica<'b, D>> {
+        use core::mem::MaybeUninit;
         let mut uninit_replica: Arc<MaybeUninit<Replica<D>>> = Arc::new_zeroed();
 
-        // This is the preferred but unsafe mode of initialization as it avoids
-        // putting the (often big) Replica object on the stack first.
+        // This is the preferred (but unsafe) mode of initialization as it avoids
+        // putting the big Replica object on the stack first.
         unsafe {
             let uninit_ptr = Arc::get_mut_unchecked(&mut uninit_replica).as_mut_ptr();
             uninit_ptr.write(Replica {
@@ -224,7 +269,7 @@ where
                                 >::batch_size(),
                         ),
                     ),
-                inflight: RefCell::new(arr![Default::default(); 256]),
+                inflight: RefCell::new([0; MAX_THREADS_PER_REPLICA]),
                 result:
                     RefCell::new(
                         Vec::with_capacity(

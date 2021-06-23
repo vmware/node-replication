@@ -65,9 +65,10 @@
 //! }
 //! ```
 #![no_std]
-#![feature(new_uninit)]
-#![feature(get_mut_unchecked)]
-#![feature(negative_impls)]
+#![cfg_attr(
+    feature = "unstable",
+    feature(new_uninit, get_mut_unchecked, negative_impls)
+)]
 
 #[cfg(test)]
 extern crate std;
