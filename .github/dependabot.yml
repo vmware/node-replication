@@ -1,0 +1,22 @@
+# See
+# https://docs.github.com/en/free-pro-team@latest/github/administering-a-repository/enabling-and-disabling-version-updates
+# for details
+
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "daily"
+  - package-ecosystem: "cargo"
+    directory: "/nr"
+    schedule:
+      interval: "daily"
+  - package-ecosystem: "cargo"
+    directory: "/cnr"
+    schedule:
+      interval: "daily"
+  - package-ecosystem: "cargo"
+    directory: "/benches"
+    schedule:
+      interval: "daily"
