@@ -3,7 +3,6 @@
 
 use core::cell::RefCell;
 use core::hint::spin_loop;
-use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use alloc::sync::Arc;
@@ -27,6 +26,7 @@ use super::LogMapper;
 pub struct ReplicaToken(pub usize);
 
 /// To make it harder to use the same ReplicaToken on multiple threads.
+#[cfg(features = "unstable")]
 impl !Send for ReplicaToken {}
 
 impl ReplicaToken {
@@ -274,10 +274,47 @@ where
     /// If `with_data` is used, care must be taken that the same state is passed
     /// to every Replica object. If not the resulting operations executed
     /// against replicas may not give deterministic results.
+    #[cfg(not(feature = "unstable"))]
     pub fn with_data(
         logs: Vec<Arc<Log<'_, <D as Dispatch>::WriteOperation>>>,
         d: D,
     ) -> Arc<Replica<'_, D>> {
+        let mut contexts = Vec::with_capacity(MAX_THREADS_PER_REPLICA);
+        let mut offsets = Vec::with_capacity(MAX_THREADS_PER_REPLICA);
+        let mut hash = Vec::with_capacity(MAX_THREADS_PER_REPLICA);
+
+        for idx in 0..MAX_THREADS_PER_REPLICA {
+            contexts.push(CachePadded::new(Context::new(idx + 1)));
+            offsets.push(RefCell::new(Vec::with_capacity(logs.len())));
+            hash.push(CachePadded::new(RefCell::new(Vec::with_capacity(
+                logs.len(),
+            ))));
+        }
+
+        // Add per-log state
+        let mut logstate = Vec::with_capacity(logs.len());
+        for log in logs.iter() {
+            logstate.push(CachePadded::new(LogState::new(log.clone())));
+        }
+
+        Arc::new(Replica {
+            next: CachePadded::new(AtomicUsize::new(1)),
+            data: CachePadded::new(d),
+            logstate,
+            contexts,
+            offsets,
+            hash,
+        })
+    }
+
+    /// See `with_data` documentation without unstable feature.
+    #[cfg(feature = "unstable")]
+    pub fn with_data(
+        logs: Vec<Arc<Log<'_, <D as Dispatch>::WriteOperation>>>,
+        d: D,
+    ) -> Arc<Replica<'_, D>> {
+        use core::mem::MaybeUninit;
+
         let mut uninit_replica: Arc<MaybeUninit<Replica<D>>> = Arc::new_zeroed();
 
         // This is the preferred but unsafe mode of initialization as it avoids
@@ -658,9 +695,7 @@ where
         self.logstate[root_log].slog.release_scan_lock();
 
         let mut offset = Vec::new();
-        offset
-            .try_reserve_exact(entries.len())
-            .expect("Unable to allocate vector for scan operation");
+        offset.reserve_exact(entries.len());
         offset.append(&mut entries);
 
         // Update scan entry depends_on.

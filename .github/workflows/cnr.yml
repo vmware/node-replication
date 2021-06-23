@@ -26,6 +26,9 @@ jobs:
     - name: Build CNR
       run: cargo build --release --verbose
       working-directory: ./cnr
+    - name: Build CNR (unstable)
+      run: cargo build --release --verbose --features unstable
+      working-directory: ./cnr
     - name: Compile tests
       run: cargo test --release --no-run --verbose
       working-directory: ./cnr
@@ -41,4 +44,4 @@ jobs:
       uses: actions-rs/clippy-check@v1
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
-        args: --all-features --manifest-path cnr/Cargo.toml
+        args: --manifest-path cnr/Cargo.toml

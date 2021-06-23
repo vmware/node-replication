@@ -1,18 +1,23 @@
 [package]
-name = "cnr"
-version = "0.1.0"
-authors = ["Chinmay Kulkarni <chinmayk@cs.utah.edu>", "Gerd Zellweger <mail@gerdzellweger.com>", "Ankit Bhardwaj <bhrdwj.ankit@gmail.com>", "Irina Calciu <icalciu@vmware.com>"]
-edition = "2018"
-license = "MIT OR Apache-2.0"
-readme = "README.md"
-description = "An operation-log based approach for data replication."
-keywords = ["numa", "log", "x86", "black-box", "replication"]
-categories = ["algorithms", "concurrency", "data-structures", "no-std", "os"]
+authors = [
+  "Chinmay Kulkarni <chinmayk@cs.utah.edu>",
+  "Gerd Zellweger <mail@gerdzellweger.com>",
+  "Ankit Bhardwaj <bhrdwj.ankit@gmail.com>",
+  "Irina Calciu <icalciu@vmware.com>",
+]
 autobenches = false
+categories = ["algorithms", "concurrency", "data-structures", "no-std", "os"]
+description = "An operation-log based approach for scaling concurrent or partitioned data structures."
+edition = "2018"
+keywords = ["numa", "log", "x86", "black-box", "replication"]
+license = "MIT OR Apache-2.0"
+name = "cnr"
+readme = "README.md"
+version = "0.1.0"
 
 [dependencies]
-crossbeam-utils = { version = "0.6", default-features = false }
 arr_macro = "0.1.2"
+crossbeam-utils = {version = "0.6", default-features = false}
 log = "0.4"
 static_assertions = "1.1.0"
 
@@ -24,3 +29,6 @@ debug = true
 chashmap = "2.2"
 crossbeam-queue = "0.3.1"
 env_logger = "0.8.3"
+
+[features]
+unstable = []

@@ -198,6 +198,7 @@ where
     /// If `with_data` is used, care must be taken that the same state is passed
     /// to every Replica object. If not the resulting operations executed
     /// against replicas may not give deterministic results.
+    #[cfg(not(feature = "unstable"))]
     pub fn with_data<'b>(
         log: &Arc<Log<'b, <D as Dispatch>::WriteOperation>>,
         d: D,
@@ -242,7 +243,7 @@ where
     }
 
     /// See `with_data` documentation without unstable feature.
-    #[cfg(features = "unstable")]
+    #[cfg(feature = "unstable")]
     pub fn with_data<'b>(
         log: &Arc<Log<'b, <D as Dispatch>::WriteOperation>>,
         d: D,
