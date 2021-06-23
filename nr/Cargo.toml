@@ -16,8 +16,7 @@ readme = "README.md"
 version = "0.1.0"
 
 [dependencies]
-arr_macro = "0.1.2"
-crossbeam-utils = {version = "0.6", default-features = false}
+crossbeam-utils = {version = "0.8.5", default-features = false}
 log = "0.4"
 static_assertions = "1.1.0"
 

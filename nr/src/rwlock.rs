@@ -19,6 +19,8 @@ use crossbeam_utils::CachePadded;
 const MAX_READER_THREADS: usize = 192;
 const_assert!(MAX_READER_THREADS > 0);
 
+const RLOCK_DEFAULT: CachePadded<AtomicUsize> = CachePadded::new(AtomicUsize::new(0));
+
 /// A scalable reader-writer lock.
 ///
 /// This lock favours reader performance over writers. Each reader thread gets
@@ -66,11 +68,9 @@ where
     /// Returns a new instance of a RwLock. Default constructs the
     /// underlying data structure.
     fn default() -> RwLock<T> {
-        use arr_macro::arr;
-
         RwLock {
             wlock: CachePadded::new(AtomicBool::new(false)),
-            rlock: arr![Default::default(); 192],
+            rlock: [RLOCK_DEFAULT; MAX_READER_THREADS],
             data: UnsafeCell::new(T::default()),
         }
     }
@@ -83,11 +83,9 @@ where
     /// Returns a new instance of a RwLock. Default constructs the
     /// underlying data structure.
     pub fn new(t: T) -> Self {
-        use arr_macro::arr;
-
         Self {
             wlock: CachePadded::new(AtomicBool::new(false)),
-            rlock: arr![Default::default(); 192],
+            rlock: [RLOCK_DEFAULT; MAX_READER_THREADS],
             data: UnsafeCell::new(t),
         }
     }
