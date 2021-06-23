@@ -3,8 +3,6 @@
 
 //! Implements ReplicaTrait for a bunch of different concurrent hashmap implementations.
 
-#![feature(bench_black_box)]
-
 use std::cell::UnsafeCell;
 use std::ffi::c_void;
 use std::marker::Sync;

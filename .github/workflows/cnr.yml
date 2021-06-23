@@ -23,6 +23,7 @@ jobs:
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
         args: --manifest-path cnr/Cargo.toml
+        name: cnr clippy
     - name: Check formatting
       run: cargo fmt -- --check
       working-directory: ./cnr
