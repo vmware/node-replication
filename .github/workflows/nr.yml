@@ -5,6 +5,7 @@ on:
     paths:
       - nr/**
       - benches/**
+      - .github/**
 
 jobs:
   build:
