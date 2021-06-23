@@ -15,9 +15,6 @@ build:
 test:
   stage: test
   script:
-    - cd benches; cargo fmt -- --check; cd ..
-    - cd cnr; cargo fmt -- --check; cd ..
-    - cd nr; cargo fmt -- --check; cd ..
     - cd cnr; timeout 1h cargo test; cd ..
     - cd nr; timeout 1h cargo test; cd ..
     - cd benches; cargo bench --no-run; cd ..

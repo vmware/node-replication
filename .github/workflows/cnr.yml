@@ -15,14 +15,20 @@ jobs:
     steps:
     - name: Install dependencies
       run: sudo apt-get update && sudo apt-get install -y libhwloc-dev gnuplot libfuse-dev liburcu-dev liburcu6
-    - name: Update URCI
-      run: |
-        wget http://mirrors.kernel.org/ubuntu/pool/main/libu/liburcu/liburcu6_0.11.1-2_amd64.deb
-        wget http://mirrors.kernel.org/ubuntu/pool/main/libu/liburcu/liburcu-dev_0.11.1-2_amd64.deb
-        sudo dpkg -i liburcu-dev_0.11.1-2_amd64.deb liburcu6_0.11.1-2_amd64.deb
     - uses: actions/checkout@v1
     - name: Install rust toolchain
       run: rustup show
+    - name: Run clippy
+      uses: actions-rs/clippy-check@v1
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        args: --manifest-path cnr/Cargo.toml
+    - name: Check formatting
+      run: cargo fmt -- --check
+      working-directory: ./cnr
+    - name: Check formatting (benches)
+      run: cargo fmt -- --check
+      working-directory: ./benches
     - name: Build CNR
       run: cargo build --release --verbose
       working-directory: ./cnr
@@ -40,8 +46,3 @@ jobs:
     - name: Try the stack example
       run: RUST_BACKTRACE=1 RUST_LOG='trace' cargo run --release --example stack -- -t1,2 --nop 100000 -l 1 -m sequential
       working-directory: ./cnr
-    - name: Run clippy
-      uses: actions-rs/clippy-check@v1
-      with:
-        token: ${{ secrets.GITHUB_TOKEN }}
-        args: --manifest-path cnr/Cargo.toml
