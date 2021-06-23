@@ -101,7 +101,7 @@ cargo build
 
 If you are using a nightly rust compiler, you can compile the library to make
 use of some more recent features (`new_uninit`, and `get_mut_unchecked`,
-`negative_impls`):
+`negative_impls`, `core_instrinsics`):
 
 ```bash
 cargo build --features unstable

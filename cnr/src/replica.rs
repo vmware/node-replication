@@ -3,6 +3,8 @@
 
 use core::cell::RefCell;
 use core::hint::spin_loop;
+#[cfg(feature = "unstable")]
+use core::intrinsics::unlikely;
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use alloc::sync::Arc;
@@ -14,6 +16,12 @@ use super::context::Context;
 use super::log::Log;
 use super::Dispatch;
 use super::LogMapper;
+
+#[cfg(not(feature = "unstable"))]
+#[inline]
+fn unlikely(b: bool) -> bool {
+    b
+}
 
 /// A token handed out to threads registered with replicas.
 ///
@@ -664,20 +672,15 @@ where
                          is_read_op,
                          depends_on: Option<Arc<Vec<usize>>>|
                  -> bool {
-                    match is_scan {
-                        false => {
-                            let resp = self.data.dispatch_mut(o);
-                            if rid == self.logstate[*logidx].idx {
-                                self.contexts[tid - 1].enqueue_resp(resp);
-                            }
-                            true
+                    if unlikely(is_scan) {
+                        let depends_on = depends_on.as_ref().unwrap();
+                        self.handle_scan_op(o, thread_id, *logidx, rid, tid, is_read_op, depends_on)
+                    } else {
+                        let resp = self.data.dispatch_mut(o);
+                        if rid == self.logstate[*logidx].idx {
+                            self.contexts[tid - 1].enqueue_resp(resp);
                         }
-                        true => {
-                            let depends_on = depends_on.as_ref().unwrap();
-                            self.handle_scan_op(
-                                o, thread_id, *logidx, rid, tid, is_read_op, depends_on,
-                            )
-                        }
+                        true
                     }
                 };
 
@@ -1148,18 +1151,15 @@ where
                          is_read_op,
                          depends_on: Option<Arc<Vec<usize>>>|
              -> bool {
-                match is_scan {
-                    false => {
-                        let resp = self.data.dispatch_mut(o);
-                        if rid == self.logstate[hashidx].idx {
-                            self.contexts[tid - 1].enqueue_resp(resp);
-                        };
-                        true
-                    }
-                    true => {
-                        let depends_on = depends_on.as_ref().unwrap();
-                        self.handle_scan_op(o, thread_id, hashidx, rid, tid, is_read_op, depends_on)
-                    }
+                if unlikely(is_scan) {
+                    let depends_on = depends_on.as_ref().unwrap();
+                    self.handle_scan_op(o, thread_id, hashidx, rid, tid, is_read_op, depends_on)
+                } else {
+                    let resp = self.data.dispatch_mut(o);
+                    if rid == self.logstate[hashidx].idx {
+                        self.contexts[tid - 1].enqueue_resp(resp);
+                    };
+                    true
                 }
             };
             self.logstate[hashidx]
@@ -1189,47 +1189,42 @@ where
         }
 
         let is_root = depends_on.len() == self.logstate.len();
-        match is_root {
-            // Leaf log(s) for scan operation.
-            false => {
-                let logidx = 0;
-                match self.logstate[logidx]
+        if is_root {
+            // Root log for scan operation.
+            for (logidx, depends_on) in depends_on
+                .iter()
+                .enumerate()
+                .take(self.logstate.len())
+                .skip(1)
+            {
+                if !self.logstate[logidx]
                     .slog
-                    .is_replica_synced_for_reads(self.logstate[logidx].idx, depends_on[logidx])
+                    .is_replica_synced_for_reads(self.logstate[logidx].idx, *depends_on)
                 {
-                    true => true,
-                    false => {
-                        self.try_combine(thread_id, logidx);
-                        self.is_replica_sync_for_logs(logidx, logidx + 1, depends_on)
-                    }
+                    self.try_combine(thread_id, logidx);
                 }
             }
 
-            // Root log for scan operation.
-            true => {
-                for (logidx, depends_on) in depends_on
-                    .iter()
-                    .enumerate()
-                    .take(self.logstate.len())
-                    .skip(1)
-                {
-                    if !self.logstate[logidx]
-                        .slog
-                        .is_replica_synced_for_reads(self.logstate[logidx].idx, *depends_on)
-                    {
-                        self.try_combine(thread_id, logidx);
-                    }
-                }
-
-                match self.is_replica_sync_for_logs(1, self.logstate.len(), depends_on) {
-                    true => {
-                        let resp = self.data.dispatch_mut(op);
-                        if issuer_rid == self.logstate[hashidx].idx {
-                            self.contexts[issuer_tid - 1].enqueue_resp(resp);
-                        };
-                        true
-                    }
-                    false => false,
+            if self.is_replica_sync_for_logs(1, self.logstate.len(), depends_on) {
+                let resp = self.data.dispatch_mut(op);
+                if issuer_rid == self.logstate[hashidx].idx {
+                    self.contexts[issuer_tid - 1].enqueue_resp(resp);
+                };
+                true
+            } else {
+                false
+            }
+        } else {
+            // Leaf log(s) for scan operation.
+            let logidx = 0;
+            match self.logstate[logidx]
+                .slog
+                .is_replica_synced_for_reads(self.logstate[logidx].idx, depends_on[logidx])
+            {
+                true => true,
+                false => {
+                    self.try_combine(thread_id, logidx);
+                    self.is_replica_sync_for_logs(logidx, logidx + 1, depends_on)
                 }
             }
         }

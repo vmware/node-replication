@@ -96,7 +96,7 @@
 #![no_std]
 #![cfg_attr(
     feature = "unstable",
-    feature(new_uninit, get_mut_unchecked, negative_impls)
+    feature(new_uninit, get_mut_unchecked, negative_impls, core_intrinsics)
 )]
 
 #[cfg(test)]
