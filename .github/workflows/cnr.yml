@@ -1,4 +1,4 @@
-name: Compile and Test CNR
+name: Compilation and static checks CNR
 
 on:
   push:
@@ -9,7 +9,7 @@ on:
 
 jobs:
   build:
-    name: Build and test
+    name: Build and check
     runs-on: ubuntu-latest
 
     steps:
