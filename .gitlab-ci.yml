@@ -1,6 +1,5 @@
 stages:
   - build
-  - test
   - bench
 
 build:
@@ -12,23 +11,12 @@ build:
     - cd cnr; cargo build; cd ..
     - cd nr; cargo build; cd ..
 
-test:
-  stage: test
-  script:
-    - cd cnr; timeout 1h cargo test; cd ..
-    - cd nr; timeout 1h cargo test; cd ..
-    - cd benches; cargo bench --no-run; cd ..
-  dependencies:
-    - build
-  variables:
-    GIT_STRATEGY: fetch
-
 benchmark:skylake2x:
   stage: bench
   script:
     - bash scripts/ci.bash
   dependencies:
-    - test
+    - build
   variables:
     GIT_STRATEGY: fetch
   tags:
@@ -39,7 +27,7 @@ benchmark:skylake4x:
   script:
     - bash scripts/ci.bash
   dependencies:
-    - test
+    - build
   variables:
     GIT_STRATEGY: fetch
   tags:
