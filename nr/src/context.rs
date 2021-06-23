@@ -120,10 +120,10 @@ where
 
         // Starting from `comb`, write all responses into the batch. Assume here that
         // the slice above doesn't cause us to cross the tail of the batch.
-        for i in 0..n {
+        for (i, response) in responses.iter().enumerate().take(n) {
             let e = self.batch[self.index(h + i)].as_ptr();
             unsafe {
-                (*e).1 = Some(responses[i].clone());
+                (*e).1 = Some(response.clone());
             }
         }
 

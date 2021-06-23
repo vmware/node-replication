@@ -8,13 +8,8 @@ on:
 
 jobs:
   build:
-    name: Build and test on ${{ matrix.os }} with rustc ${{ matrix.rust }}
-    runs-on: ${{ matrix.os }}
-
-    strategy:
-      matrix:
-        os: [ubuntu-latest]
-        rust: [nightly]
+    name: Build and test
+    runs-on: ubuntu-latest
 
     steps:
     - name: Install dependencies
@@ -24,18 +19,16 @@ jobs:
         wget http://mirrors.kernel.org/ubuntu/pool/main/libu/liburcu/liburcu6_0.11.1-2_amd64.deb
         wget http://mirrors.kernel.org/ubuntu/pool/main/libu/liburcu/liburcu-dev_0.11.1-2_amd64.deb
         sudo dpkg -i liburcu-dev_0.11.1-2_amd64.deb liburcu6_0.11.1-2_amd64.deb
-    - name: Set up a Rust toolchain
-      uses: hecrj/setup-rust-action@v1.0.2
-      with:
-        rust-version: ${{ matrix.rust }}
     - uses: actions/checkout@v1
-    - name: Build
+    - name: Install rust toolchain
+      run: rustup show
+    - name: Build NR
       run: cargo build --release --verbose
       working-directory: ./nr
-    - name: Try to compile tests
+    - name: Compile tests
       run: cargo test --release --no-run --verbose
       working-directory: ./nr
-    - name: Try to compile benchmarks
+    - name: Compile benchmarks
       run: |
         cargo bench --bench log --features="nr" --no-run --verbose
         cargo bench --bench synthetic --features="nr" --no-run --verbose
@@ -43,6 +36,11 @@ jobs:
         cargo bench --bench hashmap --features="nr" --no-run --verbose
         cargo bench --bench vspace --features="nr" --no-run --verbose
       working-directory: ./benches
-    - name: Try stack example
+    - name: Try the stack example
       run: RUST_BACKTRACE=1 RUST_LOG='trace' cargo run --release --example stack -- -t1,2 --nop 100000 -l 1 -m sequential
       working-directory: ./nr
+    - name: Run clippy
+      uses: actions-rs/clippy-check@v1
+      working-directory: ./nr
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}

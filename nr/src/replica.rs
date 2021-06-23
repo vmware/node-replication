@@ -440,8 +440,8 @@ where
         // times with no luck, try to perform flat combining to make some progress.
         loop {
             let r = self.contexts[idx - 1].res();
-            if r.is_some() {
-                return r.unwrap();
+            if let Some(resp) = r {
+                return resp;
             }
 
             iter += 1;

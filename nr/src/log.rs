@@ -223,8 +223,8 @@ where
         }
 
         let fls: [CachePadded<Cell<bool>>; MAX_REPLICAS_PER_LOG] = arr![Default::default(); 192];
-        for idx in 0..MAX_REPLICAS_PER_LOG {
-            fls[idx].set(true)
+        for element in fls.iter().take(MAX_REPLICAS_PER_LOG) {
+            element.set(true)
         }
 
         Log {
@@ -399,7 +399,7 @@ where
             };
 
             // Successfully reserved entries on the shared log. Add the operations in.
-            for i in 0..nops {
+            for (i, op) in ops.iter().enumerate().take(nops) {
                 let e = self.slog[self.index(tail + i)].as_ptr();
                 let mut m = self.lmasks[idx - 1].get();
 
@@ -412,7 +412,7 @@ where
                     m = !m;
                 }
 
-                unsafe { (*e).operation = Some(ops[i].clone()) };
+                unsafe { (*e).operation = Some(op.clone()) };
                 unsafe { (*e).replica = idx };
                 unsafe { (*e).alivef.store(m, Ordering::Release) };
             }
@@ -472,26 +472,26 @@ where
     #[inline(always)]
     pub(crate) fn exec<F: FnMut(T, usize)>(&self, idx: usize, d: &mut F) {
         // Load the logical log offset from which we must execute operations.
-        let l = self.ltails[idx - 1].load(Ordering::Relaxed);
+        let ltail = self.ltails[idx - 1].load(Ordering::Relaxed);
 
         // Check if we have any work to do by comparing our local tail with the log's
         // global tail. If they're equal, then we're done here and can simply return.
-        let t = self.tail.load(Ordering::Relaxed);
-        if l == t {
+        let gtail = self.tail.load(Ordering::Relaxed);
+        if ltail == gtail {
             return;
         }
 
         let h = self.head.load(Ordering::Relaxed);
 
         // Make sure we're within the shared log. If we aren't, then panic.
-        if l > t || l < h {
+        if ltail > gtail || ltail < h {
             panic!("Local tail not within the shared log!")
         };
 
         // Execute all operations from the passed in offset to the shared log's tail. Check if
         // the entry is live first; we could have a replica that has reserved entries, but not
         // filled them into the log yet.
-        for i in l..t {
+        for i in ltail..gtail {
             let mut iteration = 1;
             let e = self.slog[self.index(i)].as_ptr();
 
@@ -519,8 +519,8 @@ where
 
         // Update the completed tail after we've executed these operations.
         // Also update this replica's local tail.
-        self.ctail.fetch_max(t, Ordering::Relaxed);
-        self.ltails[idx - 1].store(t, Ordering::Relaxed);
+        self.ctail.fetch_max(gtail, Ordering::Relaxed);
+        self.ltails[idx - 1].store(gtail, Ordering::Relaxed);
     }
 
     /// Returns a physical index given a logical index into the shared log.
