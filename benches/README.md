@@ -22,7 +22,7 @@ If you are on Ubuntu 19.04 or older you need to get a newer version of URCU:
 ```bash
 wget http://mirrors.kernel.org/ubuntu/pool/main/libu/liburcu/liburcu6_0.11.1-2_amd64.deb
 wget http://mirrors.kernel.org/ubuntu/pool/main/libu/liburcu/liburcu-dev_0.11.1-2_amd64.deb
-dpkg -i liburcu-dev_0.11.1-2_amd64.deb liburcu6_0.11.1-2_amd64.deb
+sudo dpkg -i liburcu-dev_0.11.1-2_amd64.deb liburcu6_0.11.1-2_amd64.deb
 ```
 
 ## Install Benchmark/Test dependencies on MacOS
