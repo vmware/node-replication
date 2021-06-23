@@ -19,6 +19,7 @@ use crossbeam_utils::CachePadded;
 const MAX_READER_THREADS: usize = 192;
 const_assert!(MAX_READER_THREADS > 0);
 
+#[allow(clippy::declare_interior_mutable_const)]
 const RLOCK_DEFAULT: CachePadded<AtomicUsize> = CachePadded::new(AtomicUsize::new(0));
 
 /// A scalable reader-writer lock.

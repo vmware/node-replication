@@ -107,6 +107,7 @@ where
     D: Sized + Dispatch + Sync,
 {
     fn new(log: Arc<Log<'a, <D as Dispatch>::WriteOperation>>) -> LogState<'a, D> {
+        #[allow(clippy::declare_interior_mutable_const)]
         const PENDING_DEFAULT: CachePadded<AtomicBool> = CachePadded::new(AtomicBool::new(false));
 
         let idx = log.register().unwrap();

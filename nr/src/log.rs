@@ -207,7 +207,7 @@ where
         let raw = unsafe { from_raw_parts_mut(mem as *mut Cell<Entry<T>>, num) };
 
         // Initialize all log entries by calling the default constructor.
-        for e in &mut raw[..] {
+        for e in raw.iter_mut() {
             unsafe {
                 ::core::ptr::write(
                     e,
@@ -220,7 +220,9 @@ where
             }
         }
 
+        #[allow(clippy::declare_interior_mutable_const)]
         const LMASK_DEFAULT: CachePadded<Cell<bool>> = CachePadded::new(Cell::new(true));
+        #[allow(clippy::declare_interior_mutable_const)]
         const LTAIL_DEFAULT: CachePadded<AtomicUsize> = CachePadded::new(AtomicUsize::new(0));
 
         Log {
