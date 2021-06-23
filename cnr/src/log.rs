@@ -223,8 +223,6 @@ where
     /// This method also allocates memory for the log upfront. No further allocations
     /// will be performed once this method returns.
     pub fn new<'b>(bytes: usize, idx: usize) -> Log<'b, T> {
-        use arr_macro::arr;
-
         // Calculate the number of entries that will go into the log, and retrieve a
         // slice to it from the allocated region of memory.
         let mut num = bytes / Log::<T>::entry_size();
@@ -273,11 +271,9 @@ where
             }
         }
 
-        let fls: [CachePadded<Cell<bool>>; MAX_REPLICAS_PER_LOG] = arr![Default::default(); 192];
-        for element in fls.iter().take(MAX_REPLICAS_PER_LOG) {
-            element.set(true)
-        }
-
+        const LTAIL_DEFAULT: CachePadded<AtomicUsize> = CachePadded::new(AtomicUsize::new(0));
+        const LMASK_DEFAULT: CachePadded<Cell<bool>> = CachePadded::new(Cell::new(true));
+        const DORMANT_DEFAULT: AtomicBool = AtomicBool::new(false);
         Log {
             rawp: mem,
             rawb: b,
@@ -287,15 +283,15 @@ where
             head: CachePadded::new(AtomicUsize::new(0usize)),
             tail: CachePadded::new(AtomicUsize::new(0usize)),
             ctail: CachePadded::new(AtomicUsize::new(0usize)),
-            ltails: arr![Default::default(); 192],
+            ltails: [LTAIL_DEFAULT; MAX_REPLICAS_PER_LOG],
             next: CachePadded::new(AtomicUsize::new(1usize)),
-            lmasks: fls,
+            lmasks: [LMASK_DEFAULT; MAX_REPLICAS_PER_LOG],
             gc: UnsafeCell::new(Box::new(
                 |_rid: &[AtomicBool; MAX_REPLICAS_PER_LOG], _lid: usize| {},
             )),
             scanlock: CachePadded::new(AtomicUsize::new(0)),
             notify_replicas: CachePadded::new(AtomicBool::new(true)),
-            dormant_replicas: arr![Default::default(); 192],
+            dormant_replicas: [DORMANT_DEFAULT; MAX_REPLICAS_PER_LOG],
         }
     }
 

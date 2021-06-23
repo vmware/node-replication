@@ -8,7 +8,6 @@ use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use arr_macro::arr;
 use crossbeam_utils::CachePadded;
 
 use super::context::Context;
@@ -100,12 +99,14 @@ where
     D: Sized + Dispatch + Sync,
 {
     fn new(log: Arc<Log<'a, <D as Dispatch>::WriteOperation>>) -> LogState<'a, D> {
+        const PENDING_DEFAULT: CachePadded<AtomicBool> = CachePadded::new(AtomicBool::new(false));
+
         let idx = log.register().unwrap();
         LogState {
             slog: log.clone(),
             idx,
             combiner: CachePadded::new(AtomicUsize::new(0)),
-            pending: arr![CachePadded::new(AtomicBool::new(false)); 256],
+            pending: [PENDING_DEFAULT; MAX_THREADS_PER_REPLICA],
             buffer:
                 CachePadded::new(
                     RefCell::new(
