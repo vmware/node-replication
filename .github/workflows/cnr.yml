@@ -38,6 +38,6 @@ jobs:
       working-directory: ./cnr
     - name: Run clippy
       uses: actions-rs/clippy-check@v1
-      working-directory: ./cnr
+      args: --all-features --manifest-path cnr/Cargo.toml
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
