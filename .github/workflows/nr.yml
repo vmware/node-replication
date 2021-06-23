@@ -47,6 +47,9 @@ jobs:
         cargo bench --bench hashmap --features="nr" --no-run --verbose
         cargo bench --bench vspace --features="nr" --no-run --verbose
       working-directory: ./benches
+    - name: Execute unit-tests
+      run: cargo test
+      working-directory: ./nr
     - name: Try the stack example
       run: RUST_BACKTRACE=1 RUST_LOG='trace' cargo run --release --example stack -- -t1,2 --nop 100000 -l 1 -m sequential
       working-directory: ./nr
