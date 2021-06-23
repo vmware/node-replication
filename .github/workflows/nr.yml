@@ -41,6 +41,6 @@ jobs:
       working-directory: ./nr
     - name: Run clippy
       uses: actions-rs/clippy-check@v1
-      args: --all-features --manifest-path nr/Cargo.toml
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
+        args: --all-features --manifest-path nr/Cargo.toml
