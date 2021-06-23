@@ -107,7 +107,7 @@ The works with `no_std` and a stable rust compiler.
 cargo build
 ```
 
-If you are using a nightly rust compiler, you can compile the linrary to make
+If you are using a nightly rust compiler, you can compile the library to make
 use of some more recent features (`new_uninit`, and `get_mut_unchecked`,
 `negative_impls`):
 
