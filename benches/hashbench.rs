@@ -85,7 +85,10 @@ fn main() {
 
     let versions: Vec<&str> = match matches.values_of("compare") {
         Some(iter) => iter.collect(),
+        #[cfg(feature = "exhaustive")]
         None => vec!["std", "chashmap", "urcu", "nr", "evmap", "flurry"],
+        #[cfg(not(feature = "exhaustive"))]
+        None => vec!["urcu", "nr"],
     };
 
     let stat = |var: &str, op, results: Vec<(_, usize)>| {
@@ -129,7 +132,7 @@ fn main() {
     }
 
     // then, benchmark Arc<flurry::HashMap>
-    if versions.contains(&"std") {
+    if versions.contains(&"flurry") {
         let map: flurry::HashMap<u64, u64> = flurry::HashMap::with_capacity(5_000_000);
         let map = sync::Arc::new(map);
         let start = time::Instant::now();
