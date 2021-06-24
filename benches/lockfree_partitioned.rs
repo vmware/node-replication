@@ -1,8 +1,6 @@
 // Copyright © VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-#![feature(bench_black_box)]
-
 //! Implements ReplicaTrait for a bunch of different lockfree DS implementations.
 use std::marker::Sync;
 use std::sync::atomic::{AtomicUsize, Ordering};
