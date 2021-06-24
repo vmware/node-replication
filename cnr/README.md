@@ -21,6 +21,9 @@ the [CHashMap](https://crates.io/crates/chashmap) and `LogMapper` for the
 supported operations.
 
 ```rust
+use chashmap::CHashMap;
+use cnr::{Dispatch, LogMapper};
+
 /// The replicated hashmap uses a concurrent hashmap internally.
 pub struct CNRHashMap {
    storage: CHashMap<usize, usize>,
@@ -36,10 +39,12 @@ pub enum Modify {
 /// in a round-robin fashion. One can change the implementation to improve the
 /// data locality based on the data sturucture layout in the memory.
 impl LogMapper for Modify {
-   fn hash(&self, _nlogs: usize, logs: &mut Vec<usize>) {
-      logs.clear();
+   fn hash(&self, nlogs: usize, logs: &mut Vec<usize>) {
+      debug_assert!(logs.capacity() >= nlogs, "guarantee on logs capacity");
+      debug_assert!(logs.is_empty(), "guarantee on logs content");
+
       match self {
-         Modify::Put(key, _val) => log.push(*key % nlogs),
+         Modify::Put(key, _val) => logs.push(*key % nlogs),
       }
    }
 }
@@ -56,10 +61,10 @@ pub enum Access {
 impl LogMapper for Access {
    fn hash(&self, nlogs: usize, logs: &mut Vec<usize>) {
       debug_assert!(logs.capacity() >= nlogs, "guarantee on logs capacity");
-      debug_assert!(logs.is_empty() >= nlogs, "guarantee on logs content");
+      debug_assert!(logs.is_empty(), "guarantee on logs content");
 
       match self {
-         Access::Get(key) => log.push(*key % nlogs),
+         Access::Get(key) => logs.push(*key % nlogs),
       }
    }
 }

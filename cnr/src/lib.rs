@@ -20,7 +20,7 @@
 //! [examples](https://github.com/vmware/node-replication/tree/master/cnr/examples/hashmap.rs)
 //! folder.
 //!
-//! ```
+//! ```rust
 //! use cnr::Dispatch;
 //! use cnr::LogMapper;
 //! use chashmap::CHashMap;
@@ -171,4 +171,16 @@ pub trait Dispatch {
     /// Method on the data structure that allows a write operation to be
     /// executed against it.
     fn dispatch_mut(&self, op: Self::WriteOperation) -> Self::Response;
+}
+
+#[cfg(doctest)]
+mod test_readme {
+    macro_rules! external_doc_test {
+        ($x:expr) => {
+            #[doc = $x]
+            extern "C" {}
+        };
+    }
+
+    external_doc_test!(include_str!("../README.md"));
 }

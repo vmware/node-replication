@@ -15,6 +15,9 @@ To replicate a single-threaded data structure, one needs to implement `Dispatch`
 single-threaded HashMap from `std`.
 
 ```rust
+use std::collections::HashMap;
+use node_replication::Dispatch;
+
 /// The node-replicated hashmap uses a std hashmap internally.
 #[derive(Default)]
 struct NrHashMap {
