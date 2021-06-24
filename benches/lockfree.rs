@@ -245,11 +245,10 @@ where
     let sockets = topology.sockets();
     let cores_on_socket = topology.cpus_on_socket(sockets[0]).len();
 
-    let increment = if topology.cores() > 120 { 8 } else { 4 };
-
+    let increment = cores_on_socket;
     let mut nlog = 0;
     while nlog <= cores_on_socket {
-        let logs = if nlog == 0 { 1 } else { nlog };
+        let logs = std::cmp::min(1, nlog);
         let bench_name = format!("{}{}-scaleout-wr{}", name, logs, write_ratio);
 
         mkbench::ScaleBenchBuilder::<R>::new(ops.clone())
@@ -266,12 +265,6 @@ where
                         replica.exec_ro(*op, rid);
                     }
                     Operation::WriteOperation(op) => {
-                        /*let op = match op {
-                            OpWr::Push(k, v) => {
-                                let key = *k + (rid.0 * 25_000_000) as u64;
-                                OpWr::Push(key, *v)
-                            }
-                        };*/
                         replica.exec(*op, rid);
                     }
                 },
