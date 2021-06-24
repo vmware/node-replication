@@ -324,7 +324,12 @@ fn main() {
     utils::disable_dvfs();
 
     let mut harness = Default::default();
-    let write_ratios = vec![0, 10, 20, 40, 60, 80, 100];
+
+    let write_ratios = if cfg!(feature = "exhaustive") {
+        vec![0, 10, 20, 40, 60, 80, 100]
+    } else {
+        vec![0, 10, 100]
+    };
 
     unsafe {
         urcu_sys::rcu_init();

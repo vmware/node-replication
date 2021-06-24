@@ -23,7 +23,7 @@ use zipf::ZipfDistribution;
 mod mkbench;
 mod utils;
 
-use mkbench::ReplicaTrait;
+use mkbench::{ReplicaStrategy, ReplicaTrait, ThreadMapping};
 
 use utils::benchmark::*;
 use utils::Operation;
@@ -61,7 +61,9 @@ fn log_scale_bench(c: &mut TestHarness) {
     }
 
     mkbench::ScaleBenchBuilder::<Replica<Nop>>::new(operations)
-        .machine_defaults()
+        .thread_defaults()
+        .thread_mapping(ThreadMapping::Sequential)
+        .replica_strategy(ReplicaStrategy::One)
         .log_size(LOG_SIZE_BYTES)
         .log_strategy(mkbench::LogStrategy::One)
         .update_batch(8)

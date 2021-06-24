@@ -289,23 +289,30 @@ fn main() {
     utils::disable_dvfs();
 
     let mut harness = Default::default();
-    let write_ratios = vec![0, 10, 80, 100];
+    let write_ratios = if cfg!(feature = "exhaustive") {
+        vec![0, 10, 80, 100]
+    } else {
+        vec![0, 10, 100]
+    };
 
     for write_ratio in write_ratios.into_iter() {
-        /*concurrent_ds_scale_out::<SegQueueWrapper>(
+        #[cfg(feature = "cmp")]
+        concurrent_ds_scale_out::<SegQueueWrapper>(
             &mut harness,
             "segqueue",
             write_ratio,
             Box::new(move || generate_qops_concurrent(NOP, write_ratio, KEY_SPACE)),
-        );*/
+        );
 
-        /*concurrent_ds_scale_out::<SkipListWrapper>(
+        #[cfg(feature = "cmp")]
+        concurrent_ds_scale_out::<SkipListWrapper>(
             &mut harness,
             "skiplist",
             write_ratio,
             Box::new(move || generate_sops_concurrent(NOP, write_ratio, KEY_SPACE)),
-        );*/
+        );
 
+        #[cfg(feature = "cmp")]
         concurrent_ds_scale_out::<lockfree_partitioned::SkipListWrapper>(
             &mut harness,
             "skiplist-partinput",

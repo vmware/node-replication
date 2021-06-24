@@ -1045,8 +1045,10 @@ where
     /// Configures the builder automatically based on the underlying machine properties.
     pub fn machine_defaults(&mut self) -> &mut Self {
         self.thread_mapping(ThreadMapping::Sequential);
+        #[cfg(feature = "exhaustive")]
         self.replica_strategy(ReplicaStrategy::One);
         self.replica_strategy(ReplicaStrategy::Socket);
+        #[cfg(feature = "exhaustive")]
         self.replica_strategy(ReplicaStrategy::L1);
         self.thread_defaults()
     }

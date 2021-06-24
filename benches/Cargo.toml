@@ -107,5 +107,7 @@ cnr = { path = "../cnr" }
 [features]
 smokebench = []
 cmp = []
+# Very exhaustive parameter sweep (may take a day to run on a big machine)
+exhaustive = []
 nr = []
 c_nr = []
