@@ -16,8 +16,8 @@ data-structures and one for already concurrent or partitioned data structures.
 
 * [`node-replication`](nr) converts a sequental data structure to its NUMA-aware
   concurrent version.
-* [`cnr`](cnr) converts a concurrent data structure to its NUMA-aware concurrent
-  version.
+* [`cnr`](cnr) converts a concurrent (or partitioned) data structure to its
+  NUMA-aware concurrent version.
 
 ## Supported Platforms
 
