@@ -248,7 +248,7 @@ where
     let increment = cores_on_socket;
     let mut nlog = 0;
     while nlog <= cores_on_socket {
-        let logs = std::cmp::min(1, nlog);
+        let logs = std::cmp::max(1, nlog);
         let bench_name = format!("{}{}-scaleout-wr{}", name, logs, write_ratio);
 
         mkbench::ScaleBenchBuilder::<R>::new(ops.clone())
