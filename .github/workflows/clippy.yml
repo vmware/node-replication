@@ -6,6 +6,7 @@ on:
       - 'dependabot/**'
     paths:
       - nr/**
+      - cnr/**
       - benches/**
       - .github/**
 
