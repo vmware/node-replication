@@ -25,18 +25,19 @@ jobs:
       run: cargo fmt -- --check
       working-directory: ./benches
     - name: Build CNR
-      run: cargo build --release --verbose
+      run: cargo build --release
       working-directory: ./cnr
     - name: Build CNR (unstable)
-      run: cargo build --release --verbose --features unstable
+      run: cargo build --release --features unstable
       working-directory: ./cnr
     - name: Compile tests
-      run: cargo test --release --no-run --verbose
+      run: cargo test --release --no-run
       working-directory: ./cnr
     - name: Compile benchmarks
       run: |
-        cargo bench --bench nrfs --features="c_nr" --no-run --verbose
-        cargo bench --bench lockfree --features="c_nr" --no-run --verbose
+        cargo bench --bench chashbench --features="c_nr" --no-run
+        cargo bench --bench nrfs --features="c_nr" --no-run
+        cargo bench --bench lockfree --features="c_nr" --no-run
       working-directory: ./benches
     - name: Execute unit-tests
       run: cargo test

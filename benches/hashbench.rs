@@ -301,7 +301,7 @@ fn drive<B: Backend>(
     let zipf = zipf::ZipfDistribution::new(span, 1.03).unwrap();
     while time::Instant::now() < end {
         // generate both so that overhead is always the same
-        let id_uniform: u64 = t_rng.gen_range(0, span as u64);
+        let id_uniform: u64 = t_rng.gen_range(0..span as u64);
         let id_skewed = zipf.sample(&mut t_rng) as u64;
         let id = if skewed { id_skewed } else { id_uniform };
         if write {

@@ -301,13 +301,13 @@ fn generate_fs_operations(nop: usize, write_ratio: usize) -> Vec<Operation<(), O
             ops.push(Operation::WriteOperation(OperationWr::Write {
                 ino: 5, // XXX: hard-coded ino of file `00000001`
                 fh: 0,
-                offset: rng.gen_range(0, 4096 - 256),
+                offset: rng.gen_range(0..4096 - 256),
                 data: &[3; 128],
                 flags: 0,
             }))
         } else {
-            let offset = rng.gen_range(0, 4096 - 256);
-            let size = rng.gen_range(0, 128);
+            let offset = rng.gen_range(0..4096 - 256);
+            let size = rng.gen_range(0..128);
 
             ops.push(Operation::WriteOperation(OperationWr::Read {
                 ino: 5, // XXX: hard-coded ino of file `00000001`

@@ -148,7 +148,7 @@ pub fn generate_operations(
             zipf.sample(&mut t_rng) as u64
         } else {
             // uniform
-            t_rng.gen_range(0, span as u64)
+            t_rng.gen_range(0..span as u64)
         };
 
         if idx % 100 < write_ratio {
@@ -188,7 +188,7 @@ pub fn generate_operations_concurrent(
             zipf.sample(&mut t_rng) as u64
         } else {
             // uniform
-            t_rng.gen_range(0, span as u64)
+            t_rng.gen_range(0..span as u64)
         };
 
         if idx % 100 < write_ratio {

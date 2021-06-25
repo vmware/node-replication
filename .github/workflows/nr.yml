@@ -25,21 +25,24 @@ jobs:
       run: cargo fmt -- --check
       working-directory: ./benches
     - name: Build NR
-      run: cargo build --release --verbose
+      run: cargo build --release
       working-directory: ./nr
     - name: Build NR (unstable)
-      run: cargo build --release --verbose --features unstable
+      run: cargo build --release --features unstable
       working-directory: ./nr
     - name: Compile tests
-      run: cargo test --release --no-run --verbose
+      run: cargo test --release --no-run
       working-directory: ./nr
     - name: Compile benchmarks
       run: |
-        cargo bench --bench log --features="nr" --no-run --verbose
-        cargo bench --bench synthetic --features="nr" --no-run --verbose
-        cargo bench --bench stack --features="nr" --no-run --verbose
-        cargo bench --bench hashmap --features="nr" --no-run --verbose
-        cargo bench --bench vspace --features="nr" --no-run --verbose
+        cargo bench --bench log --features="nr" --no-run
+        cargo bench --bench rwlockbench --features="nr" --no-run
+        cargo bench --bench synthetic --features="nr" --no-run
+        cargo bench --bench stack --features="nr" --no-run
+        cargo bench --bench hashmap --features="nr" --no-run
+        cargo bench --bench vspace --features="nr" --no-run
+        cargo bench --bench hashbench --features="nr" --no-run
+        cargo bench --bench memfs --features="nr" --no-run
       working-directory: ./benches
     - name: Execute unit-tests
       run: cargo test
