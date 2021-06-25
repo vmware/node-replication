@@ -91,7 +91,7 @@ core_affinity = "0.5.10"
 parking_lot = "0.11.1"
 serde = { version = "1", features = ["derive"] }
 clap = { version = "2", features = ["yaml"] }
-rand = { version = "0.7", features = ["small_rng"] }
+rand = { version = "0.8", features = ["small_rng"] }
 dashmap = "3.11.1"
 lazy_static = "1.4"
 crossbeam = { git = "https://github.com/crossbeam-rs/crossbeam" }
