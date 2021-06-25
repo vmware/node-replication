@@ -2,8 +2,15 @@ name: Compilation and static checks CNR
 
 on:
   push:
+    branches-ignore:
+      - 'dependabot/**'
     paths:
       - cnr/**
+      - benches/**
+      - .github/**
+  pull_request_target:
+    paths:
+      - nr/**
       - benches/**
       - .github/**
 
