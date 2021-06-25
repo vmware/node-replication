@@ -97,7 +97,7 @@ lazy_static = "1.4"
 crossbeam = { git = "https://github.com/crossbeam-rs/crossbeam" }
 crossbeam-skiplist = { git = "https://github.com/crossbeam-rs/crossbeam" }
 nrfs = { git = "https://github.com/ankit-iitb/nrfs" }
-rand_xorshift = "0.2.0"
+rand_xorshift = "0.3.0"
 crossbeam-utils = { version = "0.8", default-features = false }
 arr_macro = "0.1.2"
 static_assertions = "1.1.0"
