@@ -11,11 +11,9 @@ use std::marker::Sync;
 
 use rand::seq::SliceRandom;
 use rand::{Rng, RngCore};
-//use zipf::ZipfDistribution;
 
 use cnr::{Dispatch, LogMapper, Replica};
 
-//mod lockfree_comparisons;
 mod lockfree_partitioned;
 mod mkbench;
 mod utils;
@@ -289,22 +287,6 @@ fn main() {
     };
 
     for write_ratio in write_ratios.into_iter() {
-        #[cfg(feature = "cmp")]
-        concurrent_ds_scale_out::<SegQueueWrapper>(
-            &mut harness,
-            "segqueue",
-            write_ratio,
-            Box::new(move || generate_qops_concurrent(NOP, write_ratio, KEY_SPACE)),
-        );
-
-        #[cfg(feature = "cmp")]
-        concurrent_ds_scale_out::<SkipListWrapper>(
-            &mut harness,
-            "skiplist",
-            write_ratio,
-            Box::new(move || generate_sops_concurrent(NOP, write_ratio, KEY_SPACE)),
-        );
-
         #[cfg(feature = "cmp")]
         concurrent_ds_scale_out::<lockfree_partitioned::SkipListWrapper>(
             &mut harness,

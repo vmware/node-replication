@@ -37,7 +37,7 @@ jobs:
       run: |
         cargo bench --bench chashbench --features="c_nr" --no-run
         cargo bench --bench nrfs --features="c_nr" --no-run
-        cargo bench --bench lockfree --features="c_nr" --no-run
+        cargo bench --bench lockfree --features="c_nr cmp" --no-run
       working-directory: ./benches
     - name: Execute unit-tests
       run: cargo test
