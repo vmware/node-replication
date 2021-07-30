@@ -1,0 +1,211 @@
+#lang ivy1.7
+
+################################################################################
+#
+# Module describing a ring topology.
+#
+# The module includes an anti-reflexive ternary btw relation.
+#
+# The module also includes get_next and get_prev actions.
+#
+# In this module, the ring topology is arbitrary and fixed.
+#
+################################################################################
+
+module ring_topology(carrier) = {
+    relation btw(X:carrier,Y:carrier, Z:carrier) # Y is on the acyclic path from X to Z
+    # Axioms defining the btw relation - note it's not reflexive
+    axiom btw(W,X,Y) & btw(W,Y,Z) -> btw(W,X,Z)  # transitive
+    axiom btw(W,X,Y) -> ~btw(W,Y,X)  # acyclic
+    axiom btw(W,X,Y) | btw(W,Y,X) | W=X | W=Y | X=Y  # total
+    axiom btw(X,Y,Z) -> btw(Y,Z,X)  # cyclic permutations
+
+    action get_next(x:carrier) returns (y:carrier) = {
+        assume x ~= y & ((Z ~= x & Z ~= y) -> btw(x,y,Z))
+    }
+
+    action get_prev(y:carrier) returns (x:carrier) = {
+        assume y ~= x & ((Z ~= y & Z ~= x) -> btw(y,x,Z))
+    }
+}
+
+################################################################################
+#
+# Module for a fifo channel
+#
+################################################################################
+
+module list(m_t) = {
+    relation le(X:m_t,Y:m_t)  # partial order representing the list of
+                              # unique elements. append adds a new
+                              # largest element.
+
+    invariant le(X, Y) & le(Y, Z) -> le(X, Z)  # Transitivity
+    invariant le(X, Y) & le(Y, X) -> X = Y  # Anti-symmetry
+    invariant le(X, Y) -> le(X, X) & le(Y, Y)  # Partial reflexivity
+    invariant le(X, X) & le(Y, Y) -> le(X, Y) | le(Y, X)  # Partial Totality
+
+    after init {
+        le(X, Y) := false;
+    }
+
+    action append(m: m_t) = {
+        # insert m as a new largest element
+        require ~le(m, m);
+        le(m, m) := true;
+        le(X, m) := le(X,X);
+    }
+
+}
+
+################################################################################
+#
+# NROS's log
+#
+################################################################################
+
+type index
+type logentry
+type replica
+
+instantiate ring : ring_topology(index)  # immutable
+individual start: index # immutable
+individual end: index  # immutable
+axiom ring.btw(start,I,end) | I = start | I = end
+
+instantiate locallog(R: replica) : list(logentry)
+relation log(I: index, E: logentry)
+relation logbit(I: index)
+relation localbit(R: replica)
+individual head: index
+individual tail: index
+individual ctail: index
+function localtail(R: replica): index
+
+instantiate alllog : list(logentry)
+
+after init {
+    log(I, E) := false;
+    logbit(I) := false;
+    localbit(R) := false;
+    head := start;
+    tail := start;
+    ctail := start;
+    localtail(R) := start;
+}
+
+export action exec(r: replica, e: logentry) = {
+    # note: this is too atomic, should be split
+    # were now atomically reading: head, tail, logbit(i), log(i)
+    var i := localtail(r);
+    require ring.btw(head, i, tail) | (head ~= tail & head = localtail(r));
+    require logbit(i) = localbit(r);
+    require log(i,e);
+    call locallog(r).append(e);
+    localtail(r) := ring.get_next(i);
+    if i = end {
+        localbit(r) := ~localbit(r);
+    }
+}
+
+export action step_ctail = {
+    # note: this is too atomic, reads all localtail's at once
+    require forall R. ring.btw(ctail, localtail(R), tail) | localtail(R) = tail;
+    require ring.btw(head, ctail, tail) | (head ~= tail & head = ctail);
+    ctail := ring.get_next(ctail);
+}
+
+export action advance_head = {
+    # note: this is too atomic, reads: head, tail, ctail
+    require ring.btw(head, ctail, tail) | (head ~= tail & ctail = tail);
+#    require exists E. log(head, E); # comes from an inexpressible invariant saying log(head..tail) is full
+#    require exists E. log(ring.get_next(head), E); # comes from an inexpressible invariant saying log(head..tail) is full
+    head := ring.get_next(head);
+}
+
+# append reads: head, tail, logbit; writes: tail, log, logbit
+individual append_head: index
+individual append_tail: index
+relation append_bit
+type append_pc_t = {append_pc_0, append_pc_1, append_pc_2, append_pc_3}
+individual append_pc : append_pc_t
+after init {
+    append_pc := append_pc_0;
+}
+export action append_0 = {
+    require append_pc = append_pc_0;
+    append_head := head;
+    append_pc := append_pc_1;
+}
+export action append_1 = {
+    require append_pc = append_pc_1;
+    append_tail := tail;
+    if ring.get_next(append_tail) ~= append_head {
+        append_pc := append_pc_2;
+    } else {
+        append_pc := append_pc_0;
+    }
+}
+export action append_2 = {
+    require append_pc = append_pc_2;
+    if append_tail ~= start {
+        append_bit := logbit(start);
+    } else {
+        append_bit := ~logbit(start);
+    };
+    append_pc := append_pc_3;
+}
+export action append_3(e: logentry) = {
+    require append_pc = append_pc_3;
+    require ~alllog.le(e,e);
+    tail := ring.get_next(append_tail);
+    log(append_tail,E) := E = e;
+    call alllog.append(e);
+    logbit(append_tail) := append_bit;
+    append_pc := append_pc_0;
+
+}
+
+# safety spec: every locallog is a prefix of alllog
+invariant locallog(R).le(E1,E2) -> alllog.le(E1,E2)
+invariant alllog.le(E1,E2) & locallog(R).le(E2,E2) -> locallog(R).le(E1,E2)
+
+# safety spec: if head=tail then all local logs are the same as alllog
+invariant head = tail -> (locallog(R).le(E1,E2) <-> alllog.le(E1,E2))
+
+# proof:
+
+# log(head..tail) is a suffix of alllog
+invariant (ring.btw(head, I, tail) | (head ~= tail & head = I)) &
+          (ring.btw(head, J, tail) | (head ~= tail & head = J)) &
+          (ring.btw(I, J, tail) | I = J) &
+          log(I,E1) &
+          log(J,E2) ->
+          alllog.le(E1,E2)
+invariant (exists I. (ring.btw(head, I, tail) | (head ~= tail & head = I)) & log(I,E1)) & alllog.le(E1,E2) ->
+          (exists J. (ring.btw(head, J, tail) | (head ~= tail & head = J)) & log(J,E2))
+invariant (ring.btw(head, I, tail) | (head ~= tail & head = I)) &
+          (ring.btw(head, J, tail) | (head ~= tail & head = J)) &
+          log(I,E) &
+          log(J,E) -> I = J
+
+# invariant (ring.btw(head, I, tail) | (head ~= tail & head = I)) -> exists E. log(I, E)
+
+# simple orderings
+invariant ring.btw(head,ctail,tail) | ctail = head | ctail = tail
+invariant ring.btw(head,localtail(R),tail) | localtail(R) = head | localtail(R) = tail
+invariant ring.btw(ctail, localtail(R), tail) | localtail(R) = tail | localtail(R) = ctail
+
+# locallog(R) concat log(localtail(R)..tail) = alllog:
+invariant locallog(R).le(E,E) & (ring.btw(localtail(R),I,tail) | (localtail(R)  ~= tail & I = localtail(R))) -> ~log(I,E)
+invariant localtail(R) ~= tail & alllog.le(E1,E2) & E1 ~= E2 & log(localtail(R),E2) -> locallog(R).le(E1,E1)
+invariant localtail(R) = tail & alllog.le(E,E) -> locallog(R).le(E,E)
+
+# invariants for non-atomic append
+invariant append_pc = append_pc_1 -> (append_head = head | ring.btw(append_head, head, tail) | head = tail)
+invariant append_pc = append_pc_2 -> (append_head = head | ring.btw(append_head, head, tail) | head = tail) & append_tail = tail
+invariant append_pc = append_pc_2 -> exists I. ring.btw(tail,I,append_head) | tail = head
+invariant append_pc = append_pc_3 -> (append_head = head | ring.btw(append_head, head, tail) | head = tail) & append_tail = tail
+invariant append_pc = append_pc_3 -> exists I. ring.btw(tail,I,append_head) | tail = head
+invariant append_pc = append_pc_3 & append_tail ~= start -> append_bit = logbit(start)
+invariant append_pc = append_pc_3 & append_tail = start -> append_bit = ~logbit(start)
