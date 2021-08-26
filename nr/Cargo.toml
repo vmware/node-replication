@@ -20,6 +20,10 @@ crossbeam-utils = {version = "0.8.5", default-features = false}
 log = "0.4"
 static_assertions = "1.1.0"
 
+[target.'cfg(loom)'.dependencies]
+loom = "0.5"
+arr_macro = "0.1.3"
+
 # Add debug symbols on the release build so that we can debug performance issues
 [profile.release]
 debug = true

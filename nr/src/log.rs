@@ -9,7 +9,11 @@ use core::fmt;
 use core::mem::{align_of, size_of};
 use core::ops::{Drop, FnMut};
 use core::slice::from_raw_parts_mut;
+
+#[cfg(not(loom))]
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+#[cfg(loom)]
+pub use loom::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use crossbeam_utils::CachePadded;
 
@@ -222,20 +226,41 @@ where
 
         #[allow(clippy::declare_interior_mutable_const)]
         const LMASK_DEFAULT: CachePadded<Cell<bool>> = CachePadded::new(Cell::new(true));
-        #[allow(clippy::declare_interior_mutable_const)]
-        const LTAIL_DEFAULT: CachePadded<AtomicUsize> = CachePadded::new(AtomicUsize::new(0));
 
-        Log {
-            rawp: mem,
-            rawb: b,
-            size: num,
-            slog: raw,
-            head: CachePadded::new(AtomicUsize::new(0usize)),
-            tail: CachePadded::new(AtomicUsize::new(0usize)),
-            ctail: CachePadded::new(AtomicUsize::new(0usize)),
-            ltails: [LTAIL_DEFAULT; MAX_REPLICAS_PER_LOG],
-            next: CachePadded::new(AtomicUsize::new(1usize)),
-            lmasks: [LMASK_DEFAULT; MAX_REPLICAS_PER_LOG],
+        // AtomicUsize::new is not const in loom, can be removed once https://github.com/tokio-rs/loom/issues/170 is fixed
+        #[cfg(not(loom))]
+        {
+            #[allow(clippy::declare_interior_mutable_const)]
+            const LTAIL_DEFAULT: CachePadded<AtomicUsize> = CachePadded::new(AtomicUsize::new(0));
+
+            return Log {
+                rawp: mem,
+                rawb: b,
+                size: num,
+                slog: raw,
+                head: CachePadded::new(AtomicUsize::new(0usize)),
+                tail: CachePadded::new(AtomicUsize::new(0usize)),
+                ctail: CachePadded::new(AtomicUsize::new(0usize)),
+                ltails: [LTAIL_DEFAULT; MAX_REPLICAS_PER_LOG],
+                next: CachePadded::new(AtomicUsize::new(1usize)),
+                lmasks: [LMASK_DEFAULT; MAX_REPLICAS_PER_LOG],
+            };
+        }
+        #[cfg(loom)]
+        {
+            use arr_macro::arr;
+            Log {
+                rawp: mem,
+                rawb: b,
+                size: num,
+                slog: raw,
+                head: CachePadded::new(AtomicUsize::new(0usize)),
+                tail: CachePadded::new(AtomicUsize::new(0usize)),
+                ctail: CachePadded::new(AtomicUsize::new(0usize)),
+                ltails: arr![CachePadded::new(AtomicUsize::new(0)); 192], // MAX_REPLICAS_PER_LOG
+                next: CachePadded::new(AtomicUsize::new(1usize)),
+                lmasks: [LMASK_DEFAULT; MAX_REPLICAS_PER_LOG],
+            }
         }
     }
 
@@ -703,7 +728,7 @@ where
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(loom)))]
 mod tests {
     // Import std so that we have an allocator for our unit tests.
     extern crate std;
