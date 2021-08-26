@@ -3,7 +3,10 @@
 
 use core::cell::RefCell;
 use core::hint::spin_loop;
+#[cfg(not(loom))]
 use core::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(loom)]
+use loom::sync::atomic::{AtomicUsize, Ordering};
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -12,8 +15,12 @@ use crossbeam_utils::CachePadded;
 
 use super::context::Context;
 use super::log::Log;
-use super::rwlock::RwLock;
 use super::Dispatch;
+
+#[cfg(not(loom))]
+use super::rwlock::RwLock;
+#[cfg(loom)]
+use loom::sync::RwLock;
 
 /// A token handed out to threads registered with replicas.
 ///
@@ -519,8 +526,10 @@ where
         {
             spin_loop();
         }
-
+        #[cfg(not(loom))]
         let mut data = self.data.write(self.next.load(Ordering::Relaxed));
+        #[cfg(loom)]
+        let mut data = self.data.write().unwrap();
 
         let mut f = |o: <D as Dispatch>::WriteOperation, _i: usize| {
             data.dispatch_mut(o);
@@ -560,7 +569,11 @@ where
             spin_loop();
         }
 
-        self.data.read(tid - 1).dispatch(op)
+        #[cfg(not(loom))]
+        return self.data.read(tid - 1).dispatch(op);
+
+        #[cfg(loom)]
+        return self.data.read().unwrap().dispatch(op);
     }
 
     /// Enqueues an operation inside a thread local context. Returns a boolean
@@ -576,6 +589,7 @@ where
         // First, check if there already is a flat combiner. If there is no active flat combiner
         // then try to acquire the combiner lock. If there is, then just return.
         for _i in 0..4 {
+            #[cfg(not(loom))]
             if unsafe {
                 core::ptr::read_volatile(
                     &self.combiner
@@ -585,7 +599,11 @@ where
             } != 0
             {
                 return;
-            };
+            }
+            #[cfg(loom)]
+            if self.combiner.load(Ordering::Relaxed) != 0 {
+                return;
+            }
         }
 
         // Try to become the combiner here. If this fails, then simply return.
@@ -627,7 +645,10 @@ where
         // in here because operations on the log might need to be consumed for GC.
         {
             let f = |o: <D as Dispatch>::WriteOperation, i: usize| {
+                #[cfg(not(loom))]
                 let resp = self.data.write(next).dispatch_mut(o);
+                #[cfg(loom)]
+                let resp = self.data.write().unwrap().dispatch_mut(o);
                 if i == self.idx {
                     results.push(resp);
                 }
@@ -637,7 +658,11 @@ where
 
         // Execute any operations on the shared log against this replica.
         {
+            #[cfg(not(loom))]
             let mut data = self.data.write(next);
+            #[cfg(loom)]
+            let mut data = self.data.write().unwrap();
+
             let mut f = |o: <D as Dispatch>::WriteOperation, i: usize| {
                 let resp = data.dispatch_mut(o);
                 if i == self.idx {
@@ -662,7 +687,7 @@ where
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(loom)))]
 mod test {
     extern crate std;
 

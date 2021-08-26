@@ -3,6 +3,7 @@
 
 //! Various tests for node-replication with the help of a stack.
 
+#![cfg(not(loom))]
 extern crate rand;
 extern crate std;
 
