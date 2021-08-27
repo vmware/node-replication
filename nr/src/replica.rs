@@ -8,7 +8,11 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(loom)]
 use loom::sync::atomic::{AtomicUsize, Ordering};
 
+#[cfg(not(loom))]
 use alloc::sync::Arc;
+#[cfg(loom)]
+use loom::sync::Arc;
+
 use alloc::vec::Vec;
 
 use crossbeam_utils::CachePadded;
@@ -59,7 +63,12 @@ impl ReplicaToken {
 /// # Important
 /// If this number is adjusted due to the use of the `arr_macro::arr` macro we
 /// have to adjust the `256` literals in the `new` constructor of `Replica`.
+#[cfg(not(loom))]
 pub const MAX_THREADS_PER_REPLICA: usize = 256;
+
+#[cfg(loom)]
+pub const MAX_THREADS_PER_REPLICA: usize = 16;
+
 const_assert!(
     MAX_THREADS_PER_REPLICA >= 1 && (MAX_THREADS_PER_REPLICA & (MAX_THREADS_PER_REPLICA - 1) == 0)
 );
@@ -364,6 +373,8 @@ where
                 .compare_exchange_weak(idx, idx + 1, Ordering::SeqCst, Ordering::SeqCst)
                 != Ok(idx)
             {
+                #[cfg(loom)]
+                loom::thread::yield_now();
                 continue;
             };
 
@@ -524,6 +535,8 @@ where
             Ordering::Acquire,
         ) != Ok(0)
         {
+            #[cfg(loom)]
+            loom::thread::yield_now();
             spin_loop();
         }
         #[cfg(not(loom))]
@@ -644,11 +657,16 @@ where
         // Append all collected operations into the shared log. We pass a closure
         // in here because operations on the log might need to be consumed for GC.
         {
+            #[cfg(not(loom))]
+            let mut data = self.data.write(next);
+            #[cfg(loom)]
+            let mut data = self.data.write().unwrap();
+
             let f = |o: <D as Dispatch>::WriteOperation, i: usize| {
                 #[cfg(not(loom))]
-                let resp = self.data.write(next).dispatch_mut(o);
+                let resp = data.dispatch_mut(o);
                 #[cfg(loom)]
-                let resp = self.data.write().unwrap().dispatch_mut(o);
+                let resp = data.dispatch_mut(o);
                 if i == self.idx {
                     results.push(resp);
                 }
