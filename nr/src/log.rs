@@ -30,7 +30,7 @@ const_assert!(DEFAULT_LOG_BYTES >= 1 && (DEFAULT_LOG_BYTES & (DEFAULT_LOG_BYTES 
 #[cfg(not(loom))]
 pub const MAX_REPLICAS_PER_LOG: usize = 192;
 #[cfg(loom)] // Otherwise uses too much stack space wich crashes in loom...
-pub const MAX_REPLICAS_PER_LOG: usize = 8;
+pub const MAX_REPLICAS_PER_LOG: usize = 3;
 
 /// Constant required for garbage collection. When the tail and the head are
 /// these many entries apart on the circular buffer, garbage collection will
@@ -103,6 +103,9 @@ where
     /// Size of the underlying log in bytes. Required for dealloc.
     rawb: usize,
 
+    /// the initial argument to new...
+    bytes: usize,
+
     /// The maximum number of entries that can be held inside the log.
     size: usize,
 
@@ -135,6 +138,37 @@ where
     /// because replicas make independent progress over the log, so we need to
     /// track log wrap-arounds for each of them separately.
     lmasks: [CachePadded<Cell<bool>>; MAX_REPLICAS_PER_LOG],
+}
+
+impl<'a, T> core::clone::Clone for Log<'a, T>
+where
+    T: Sized + Clone,
+{
+    fn clone(&self) -> Self {
+        // make new log
+        let mut new_log = Log::new(self.bytes);
+
+        //new_log.rawp
+        //new_log.rawb
+        //new_log.bytes
+        //new_log.size
+        //new_log.slog
+
+        new_log.head = CachePadded::new(AtomicUsize::new(self.head.load(Ordering::SeqCst)));
+        new_log.tail = CachePadded::new(AtomicUsize::new(self.tail.load(Ordering::SeqCst)));
+        new_log.ctail = CachePadded::new(AtomicUsize::new(self.ctail.load(Ordering::SeqCst)));
+        for (i, ltail) in self.ltails.iter().enumerate() {
+            let ltail = AtomicUsize::new(ltail.load(Ordering::SeqCst));
+            new_log.ltails[i] = CachePadded::new(ltail);
+        }
+        new_log.next = CachePadded::new(AtomicUsize::new(self.next.load(Ordering::SeqCst)));
+        for (i, lmask) in self.lmasks.iter().enumerate() {
+            let lmask = lmask.get();
+            new_log.lmasks[i] = CachePadded::new(Cell::new(lmask));
+        }
+
+        new_log
+    }
 }
 
 impl<'a, T> fmt::Debug for Log<'a, T>
@@ -239,6 +273,7 @@ where
             return Log {
                 rawp: mem,
                 rawb: b,
+                bytes: bytes,
                 size: num,
                 slog: raw,
                 head: CachePadded::new(AtomicUsize::new(0usize)),
@@ -255,20 +290,44 @@ where
             Log {
                 rawp: mem,
                 rawb: b,
+                bytes: bytes,
                 size: num,
                 slog: raw,
                 head: CachePadded::new(AtomicUsize::new(0usize)),
                 tail: CachePadded::new(AtomicUsize::new(0usize)),
                 ctail: CachePadded::new(AtomicUsize::new(0usize)),
-                ltails: arr![CachePadded::new(AtomicUsize::new(0)); 8], // MAX_REPLICAS_PER_LOG
+                ltails: arr![CachePadded::new(AtomicUsize::new(0)); 3], // MAX_REPLICAS_PER_LOG
                 next: CachePadded::new(AtomicUsize::new(1usize)),
                 lmasks: [LMASK_DEFAULT; MAX_REPLICAS_PER_LOG],
             }
         }
     }
 
+    pub fn layout(bytes: usize) -> Layout {
+        // Calculate the number of entries that will go into the log, and retrieve a
+        // slice to it from the allocated region of memory.
+        let mut num = bytes / Log::<T>::entry_size();
+
+        // Make sure the log is large enough to allow for periodic garbage collection.
+        if num < 2 * GC_FROM_HEAD {
+            num = 2 * GC_FROM_HEAD;
+        }
+
+        // Round off to the next power of two if required. If we overflow, then set
+        // the number of entries to the minimum required for GC. This is unlikely since
+        // we'd need a log size > 2^63 entries for this to happen.
+        if !num.is_power_of_two() {
+            num = num.checked_next_power_of_two().unwrap_or(2 * GC_FROM_HEAD)
+        };
+
+        // Now that we have the actual number of entries, allocate the log.
+        let b = num * Log::<T>::entry_size();
+        Layout::from_size_align(b, align_of::<Cell<Entry<T>>>())
+            .expect("Alignment error while allocating the shared log!")
+    }
+
     /// Returns the size of an entry in bytes.
-    fn entry_size() -> usize {
+    pub fn entry_size() -> usize {
         size_of::<Cell<Entry<T>>>()
     }
 
@@ -403,6 +462,8 @@ where
                     );
                 }
                 waitgc += 1;
+                //unreachable!("we're doing gc");
+
                 #[cfg(loom)]
                 loom::thread::yield_now();
 
