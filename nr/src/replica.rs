@@ -65,9 +65,8 @@ impl ReplicaToken {
 /// have to adjust the `256` literals in the `new` constructor of `Replica`.
 #[cfg(not(loom))]
 pub const MAX_THREADS_PER_REPLICA: usize = 256;
-
 #[cfg(loom)]
-pub const MAX_THREADS_PER_REPLICA: usize = 16;
+pub const MAX_THREADS_PER_REPLICA: usize = 2;
 
 const_assert!(
     MAX_THREADS_PER_REPLICA >= 1 && (MAX_THREADS_PER_REPLICA & (MAX_THREADS_PER_REPLICA - 1) == 0)
@@ -563,6 +562,10 @@ where
         let ctail = self.slog.get_ctail();
         while !self.slog.is_replica_synced_for_reads(self.idx, ctail) {
             self.try_combine(idx.0);
+
+            #[cfg(loom)]
+            loom::thread::yield_now();
+
             spin_loop();
         }
     }
@@ -579,6 +582,10 @@ where
         let ctail = self.slog.get_ctail();
         while !self.slog.is_replica_synced_for_reads(self.idx, ctail) {
             self.try_combine(tid);
+
+            #[cfg(loom)]
+            loom::thread::yield_now();
+
             spin_loop();
         }
 
@@ -657,16 +664,11 @@ where
         // Append all collected operations into the shared log. We pass a closure
         // in here because operations on the log might need to be consumed for GC.
         {
-            #[cfg(not(loom))]
-            let mut data = self.data.write(next);
-            #[cfg(loom)]
-            let mut data = self.data.write().unwrap();
-
             let f = |o: <D as Dispatch>::WriteOperation, i: usize| {
                 #[cfg(not(loom))]
-                let resp = data.dispatch_mut(o);
+                let resp = self.data.write(next).dispatch_mut(o);
                 #[cfg(loom)]
-                let resp = data.dispatch_mut(o);
+                let resp = self.data.write().unwrap().dispatch_mut(o);
                 if i == self.idx {
                     results.push(resp);
                 }
