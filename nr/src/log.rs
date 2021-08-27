@@ -27,7 +27,10 @@ const DEFAULT_LOG_BYTES: usize = 32 * 1024 * 1024;
 const_assert!(DEFAULT_LOG_BYTES >= 1 && (DEFAULT_LOG_BYTES & (DEFAULT_LOG_BYTES - 1) == 0));
 
 /// The maximum number of replicas that can be registered with the log.
+#[cfg(not(loom))]
 pub const MAX_REPLICAS_PER_LOG: usize = 192;
+#[cfg(loom)] // Otherwise uses too much stack space wich crashes in loom...
+pub const MAX_REPLICAS_PER_LOG: usize = 8;
 
 /// Constant required for garbage collection. When the tail and the head are
 /// these many entries apart on the circular buffer, garbage collection will
@@ -257,7 +260,7 @@ where
                 head: CachePadded::new(AtomicUsize::new(0usize)),
                 tail: CachePadded::new(AtomicUsize::new(0usize)),
                 ctail: CachePadded::new(AtomicUsize::new(0usize)),
-                ltails: arr![CachePadded::new(AtomicUsize::new(0)); 192], // MAX_REPLICAS_PER_LOG
+                ltails: arr![CachePadded::new(AtomicUsize::new(0)); 8], // MAX_REPLICAS_PER_LOG
                 next: CachePadded::new(AtomicUsize::new(1usize)),
                 lmasks: [LMASK_DEFAULT; MAX_REPLICAS_PER_LOG],
             }
@@ -307,6 +310,8 @@ where
                 .compare_exchange_weak(n, n + 1, Ordering::SeqCst, Ordering::SeqCst)
                 != Ok(n)
             {
+                #[cfg(loom)]
+                loom::thread::yield_now();
                 continue;
             };
 
@@ -398,6 +403,9 @@ where
                     );
                 }
                 waitgc += 1;
+                #[cfg(loom)]
+                loom::thread::yield_now();
+
                 self.exec(idx, &mut s);
                 continue;
             }
@@ -418,6 +426,9 @@ where
                 Ordering::Acquire,
             ) != Ok(tail)
             {
+                #[cfg(loom)]
+                loom::thread::yield_now();
+
                 continue;
             };
 
@@ -528,6 +539,9 @@ where
                         self.lmasks[idx - 1].get()
                     );
                 }
+                #[cfg(loom)]
+                loom::thread::yield_now();
+
                 iteration += 1;
             }
 
@@ -585,6 +599,10 @@ where
                 }
                 iteration += 1;
                 self.exec(rid, &mut s);
+
+                #[cfg(loom)]
+                loom::thread::yield_now();
+
                 continue;
             }
 

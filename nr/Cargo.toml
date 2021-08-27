@@ -21,7 +21,7 @@ log = "0.4"
 static_assertions = "1.1.0"
 
 [target.'cfg(loom)'.dependencies]
-loom = "0.5"
+loom = { version = "0.5", features = ["checkpoint"] }
 arr_macro = "0.1.3"
 
 # Add debug symbols on the release build so that we can debug performance issues
