@@ -63,9 +63,9 @@ impl ReplicaToken {
 /// # Important
 /// If this number is adjusted due to the use of the `arr_macro::arr` macro we
 /// have to adjust the `256` literals in the `new` constructor of `Replica`.
-#[cfg(not(loom))]
+#[cfg(not(any(loom, feature = "small-const")))]
 pub const MAX_THREADS_PER_REPLICA: usize = 256;
-#[cfg(loom)]
+#[cfg(any(loom, feature = "small-const"))]
 pub const MAX_THREADS_PER_REPLICA: usize = 2;
 
 const_assert!(
@@ -534,8 +534,8 @@ where
             Ordering::Acquire,
         ) != Ok(0)
         {
-            #[cfg(loom)]
-            loom::thread::yield_now();
+            //#[cfg(loom)]
+            //loom::thread::yield_now();
             spin_loop();
         }
         #[cfg(not(loom))]
@@ -563,8 +563,8 @@ where
         while !self.slog.is_replica_synced_for_reads(self.idx, ctail) {
             self.try_combine(idx.0);
 
-            #[cfg(loom)]
-            loom::thread::yield_now();
+            //#[cfg(loom)]
+            //loom::thread::yield_now();
 
             spin_loop();
         }
@@ -582,10 +582,8 @@ where
         let ctail = self.slog.get_ctail();
         while !self.slog.is_replica_synced_for_reads(self.idx, ctail) {
             self.try_combine(tid);
-
             #[cfg(loom)]
             loom::thread::yield_now();
-
             spin_loop();
         }
 
@@ -608,7 +606,7 @@ where
     fn try_combine(&self, tid: usize) {
         // First, check if there already is a flat combiner. If there is no active flat combiner
         // then try to acquire the combiner lock. If there is, then just return.
-        for _i in 0..4 {
+        /*for _i in 0..4 {
             #[cfg(not(loom))]
             if unsafe {
                 core::ptr::read_volatile(
@@ -622,9 +620,12 @@ where
             }
             #[cfg(loom)]
             if self.combiner.load(Ordering::Relaxed) != 0 {
+                #[cfg(loom)]
+                loom::thread::yield_now();
+
                 return;
             }
-        }
+        }*/
 
         // Try to become the combiner here. If this fails, then simply return.
         if self
@@ -632,6 +633,9 @@ where
             .compare_exchange_weak(0, tid, Ordering::Acquire, Ordering::Acquire)
             != Ok(0)
         {
+            #[cfg(loom)]
+            loom::thread::yield_now();
+
             return;
         }
 
@@ -663,12 +667,32 @@ where
 
         // Append all collected operations into the shared log. We pass a closure
         // in here because operations on the log might need to be consumed for GC.
+        #[cfg(feature = "buggy")]
         {
             let f = |o: <D as Dispatch>::WriteOperation, i: usize| {
                 #[cfg(not(loom))]
                 let resp = self.data.write(next).dispatch_mut(o);
                 #[cfg(loom)]
                 let resp = self.data.write().unwrap().dispatch_mut(o);
+                if i == self.idx {
+                    results.push(resp);
+                }
+            };
+            self.slog.append(&buffer, self.idx, f);
+        }
+
+        #[cfg(not(feature = "buggy"))]
+        {
+            #[cfg(not(loom))]
+            let mut data = self.data.write(next);
+            #[cfg(loom)]
+            let mut data = self.data.write().unwrap();
+
+            let f = |o: <D as Dispatch>::WriteOperation, i: usize| {
+                #[cfg(not(loom))]
+                let resp = data.dispatch_mut(o);
+                #[cfg(loom)]
+                let resp = data.dispatch_mut(o);
                 if i == self.idx {
                     results.push(resp);
                 }
