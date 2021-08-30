@@ -11,11 +11,9 @@
 // Run with:
 // RUSTFLAGS="--cfg loom" cargo test --test ctail_bug1 --release -- --nocapture
 
-#![cfg(loom)]
-
-use loom::sync::atomic::{AtomicBool, Ordering};
-use loom::sync::Arc;
-use loom::thread;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::thread;
 
 use node_replication::Dispatch;
 use node_replication::Log;
@@ -61,82 +59,13 @@ impl Dispatch for TheCounter {
     }
 }
 
-#[test]
-fn test_read_linearizes2() {
-    let b = loom::model::Builder::new();
-
-    b.check(move || {
-        let log = Arc::new(Log::<<TheCounter as Dispatch>::WriteOperation>::new(4096));
-        let r1 = Arc::new(Replica::<TheCounter>::new(&log));
-        let r2 = Replica::<TheCounter>::new(&log);
-        let (tx, rx) = loom::sync::mpsc::channel::<usize>();
-
-        let mut threads = Vec::new();
-
-        {
-            let r1a = r1.clone();
-            let child = thread::spawn(move || {
-                let idx = r1a.register().expect("Failed to register with Replica.");
-
-                let cntr_val = r1a.execute_mut(OpWr::Increment, idx);
-
-                assert_eq!(cntr_val, 1);
-            });
-            threads.push(child);
-        }
-
-        {
-            let child = thread::spawn(move || {
-                let idx = r1.register().expect("Failed to register with Replica.");
-
-                let cntr_val = r1.execute(OpRd::Get, idx);
-                assert!(cntr_val == 1 || cntr_val == 0);
-
-                tx.send(cntr_val).unwrap();
-            });
-            threads.push(child);
-        }
-
-        {
-            let child = thread::spawn(move || {
-                let idx = r2.register().expect("Failed to register with Replica.");
-
-                let observed_val = rx.recv().unwrap();
-                let cntr_val = r2.execute(OpRd::Get, idx);
-
-                assert!(
-                    cntr_val >= observed_val,
-                    "we read cntr_val={}, but we received observed_val={} from t2",
-                    cntr_val,
-                    observed_val
-                );
-            });
-            threads.push(child);
-        }
-
-        for _i in 0..threads.len() {
-            let _retval = threads
-                .pop()
-                .unwrap()
-                .join()
-                .expect("Thread didn't finish successfully.");
-        }
-    });
-}
-
 // Kinda the same as `test_read_linearizes`, but we make sure we have to do gc
 // during `execute_mut`.
-//
-// To execute just this test, do:
-// RUSTFLAGS="--cfg loom" cargo test --test read_linearizes --release -- --nocapture test_read_linearizes_with_gc
 #[test]
 fn test_read_linearizes_with_gc() {
-    let mut b = loom::model::Builder::new();
-    //b.max_branches = 225_000;
-    //b.max_permutations = Some(225_000);
-    //b.preemption_bound = Some(200);
+    let _r = env_logger::try_init().ok();
 
-    b.check(move || {
+    for _i in 0..100_000 {
         // Make a log with just 4 entries, on adding a second entry, we start GC
         let mut log = Log::<<TheCounter as Dispatch>::WriteOperation>::new(256);
         log.append(&[OpWr::Noop, OpWr::Noop], 2, |op, idx| {
@@ -147,22 +76,23 @@ fn test_read_linearizes_with_gc() {
 
         let r1 = Arc::new(Replica::<TheCounter>::new(&log));
         let r2 = Replica::<TheCounter>::new(&log);
-        let (tx, rx) = loom::sync::mpsc::channel::<usize>();
+        let (tx, rx) = std::sync::mpsc::channel::<usize>();
 
         let mut threads = Vec::new();
 
-        let done = Arc::new(AtomicBool::new(false));
+        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
         {
             let done = done.clone();
-            let r1 = r1.clone();
+            let r1a = r1.clone();
             let child = thread::spawn(move || {
-                let idx = r1.register().expect("Failed to register with Replica.");
-
-                let cntr_val = r1.execute_mut(OpWr::Increment, idx);
+                let idx = r1a.register().expect("Failed to register with Replica.");
+                log::info!("1.1");
+                let cntr_val = r1a.execute_mut(OpWr::Increment, idx);
+                log::info!("1.2");
 
                 assert_eq!(cntr_val, 1);
-                done.store(true, Ordering::SeqCst);
+                done.store(true, std::sync::atomic::Ordering::SeqCst);
             });
             threads.push(child);
         }
@@ -171,16 +101,19 @@ fn test_read_linearizes_with_gc() {
             let done = done.clone();
             let child = thread::spawn(move || {
                 let idx = r1.register().expect("Failed to register with Replica.");
+                log::info!("2.1");
 
                 let cntr_val = r1.execute(OpRd::Get, idx);
                 assert!(cntr_val == 1 || cntr_val == 0);
+                log::info!("2.2");
 
                 tx.send(cntr_val).unwrap();
 
                 while !done.load(Ordering::SeqCst) {
                     let cntr_val = r1.execute(OpRd::Get, idx);
-                    loom::thread::yield_now();
+                    std::thread::yield_now();
                 }
+                log::info!("2.3");
             });
             threads.push(child);
         }
@@ -189,21 +122,43 @@ fn test_read_linearizes_with_gc() {
             let done = done.clone();
             let child = thread::spawn(move || {
                 let idx = r2.register().expect("Failed to register with Replica.");
+                log::info!("3.1");
 
-                let observed_val = rx.recv().unwrap();
+                /*let observed_val = rx.recv().unwrap();
                 let cntr_val = r2.execute(OpRd::Get, idx);
+                log::info!("3.2");
 
                 assert!(
                     cntr_val >= observed_val,
                     "we read cntr_val={}, but we received observed_val={} from t2",
                     cntr_val,
                     observed_val
-                );
+                );*/
+
+                loop {
+                    if let Ok(observed_val) = rx.try_recv() {
+                        //let observed_val = rx.recv().unwrap();
+                        let cntr_val = r2.execute(OpRd::Get, idx);
+                        log::info!("3.2");
+
+                        assert!(
+                            cntr_val >= observed_val,
+                            "we read cntr_val={}, but we received observed_val={} from t2",
+                            cntr_val,
+                            observed_val
+                        );
+                        break;
+                    } else {
+                        let cntr_val = r2.execute(OpRd::Get, idx);
+                        continue;
+                    }
+                }
 
                 while !done.load(Ordering::SeqCst) {
                     let cntr_val = r2.execute(OpRd::Get, idx);
-                    loom::thread::yield_now();
+                    std::thread::yield_now();
                 }
+                log::info!("3.3");
             });
             threads.push(child);
         }
@@ -215,5 +170,5 @@ fn test_read_linearizes_with_gc() {
                 .join()
                 .expect("Thread didn't finish successfully.");
         }
-    });
+    }
 }

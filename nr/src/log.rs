@@ -27,9 +27,9 @@ const DEFAULT_LOG_BYTES: usize = 32 * 1024 * 1024;
 const_assert!(DEFAULT_LOG_BYTES >= 1 && (DEFAULT_LOG_BYTES & (DEFAULT_LOG_BYTES - 1) == 0));
 
 /// The maximum number of replicas that can be registered with the log.
-#[cfg(not(loom))]
+#[cfg(not(any(loom, feature = "small-const")))]
 pub const MAX_REPLICAS_PER_LOG: usize = 192;
-#[cfg(loom)] // Otherwise uses too much stack space wich crashes in loom...
+#[cfg(any(loom, feature = "small-const"))] // Otherwise uses too much stack space wich crashes in loom...
 pub const MAX_REPLICAS_PER_LOG: usize = 3;
 
 /// Constant required for garbage collection. When the tail and the head are
@@ -464,10 +464,10 @@ where
                 waitgc += 1;
                 //unreachable!("we're doing gc");
 
+                self.exec(idx, &mut s);
+
                 #[cfg(loom)]
                 loom::thread::yield_now();
-
-                self.exec(idx, &mut s);
                 continue;
             }
 
@@ -489,7 +489,6 @@ where
             {
                 #[cfg(loom)]
                 loom::thread::yield_now();
-
                 continue;
             };
 
@@ -518,6 +517,35 @@ where
             }
 
             return;
+        }
+    }
+
+    pub fn append_no_gc<F: FnMut(T, usize)>(&self, ops: &[T], idx: usize, mut s: F) {
+        let nops = ops.len();
+        let tail = 0;
+        let head = 0;
+
+        // Try reserving slots for the operations. If that fails, then restart
+        // from the beginning of this loop.
+        self.tail.store(tail + nops, Ordering::SeqCst);
+
+        // Successfully reserved entries on the shared log. Add the operations in.
+        for (i, op) in ops.iter().enumerate().take(nops) {
+            let e = self.slog[self.index(tail + i)].as_ptr();
+            let mut m = self.lmasks[idx - 1].get();
+
+            // This entry was just reserved so it should be dead (!= m). However, if
+            // the log has wrapped around, then the alive mask has flipped. In this
+            // case, we flip the mask we were originally going to write into the
+            // allocated entry. We cannot flip lmasks[idx - 1] because this replica
+            // might still need to execute a few entries before the wrap around.
+            if unsafe { (*e).alivef.load(Ordering::Relaxed) == m } {
+                m = !m;
+            }
+
+            unsafe { (*e).operation = Some(op.clone()) };
+            unsafe { (*e).replica = idx };
+            unsafe { (*e).alivef.store(m, Ordering::SeqCst) };
         }
     }
 
@@ -600,13 +628,19 @@ where
                         self.lmasks[idx - 1].get()
                     );
                 }
+                iteration += 1;
+
                 #[cfg(loom)]
                 loom::thread::yield_now();
-
-                iteration += 1;
             }
 
             unsafe { d((*e).operation.as_ref().unwrap().clone(), (*e).replica) };
+
+            #[cfg(feature = "small-const")]
+            {
+                extern crate std;
+                std::thread::yield_now();
+            }
 
             // Looks like we're going to wrap around now; flip this replica's local mask.
             if self.index(i) == self.size - 1 {
@@ -663,7 +697,6 @@ where
 
                 #[cfg(loom)]
                 loom::thread::yield_now();
-
                 continue;
             }
 
@@ -677,6 +710,8 @@ where
                 return;
             } else {
                 self.exec(rid, &mut s);
+                #[cfg(loom)]
+                loom::thread::yield_now();
             }
         }
     }
