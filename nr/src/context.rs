@@ -9,9 +9,9 @@ use crossbeam_utils::CachePadded;
 
 /// The maximum number of operations that can be batched inside this context.
 /// NOTE: This constant must be a power of two for index() to work.
-#[cfg(not(any(loom, feature = "small-const")))]
+#[cfg(not(loom))]
 pub(crate) const MAX_PENDING_OPS: usize = 32;
-#[cfg(any(loom, feature = "small-const"))]
+#[cfg(loom)]
 pub(crate) const MAX_PENDING_OPS: usize = 1;
 const_assert!(MAX_PENDING_OPS >= 1 && (MAX_PENDING_OPS & (MAX_PENDING_OPS - 1) == 0));
 

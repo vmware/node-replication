@@ -9,7 +9,7 @@
 //! See also: https://github.com/tokio-rs/loom
 
 // Run with:
-// RUSTFLAGS="--cfg loom" cargo test --test ctail_bug1 --release -- --nocapture
+// RUSTFLAGS="--cfg loom" cargo test --test read_linearizes --release -- --nocapture
 
 #![cfg(loom)]
 
@@ -32,7 +32,8 @@ enum OpRd {
     Get,
 }
 
-// Our data-structure is a silly, replicated counter
+// Our data-structure is a silly, replicated counter that monotonically
+// increases.
 #[derive(Eq, PartialEq, Clone, Copy, Debug, Default)]
 struct TheCounter {
     pub counter: usize,
@@ -61,11 +62,11 @@ impl Dispatch for TheCounter {
     }
 }
 
+// This is a simple variant of the test that ensures reads linearize in the
+// default case when there is no GC.
 #[test]
-fn test_read_linearizes2() {
-    let b = loom::model::Builder::new();
-
-    b.check(move || {
+fn test_read_linearizes_no_gc() {
+    loom::model(move || {
         let log = Arc::new(Log::<<TheCounter as Dispatch>::WriteOperation>::new(4096));
         let r1 = Arc::new(Replica::<TheCounter>::new(&log));
         let r2 = Replica::<TheCounter>::new(&log);
@@ -125,21 +126,29 @@ fn test_read_linearizes2() {
 }
 
 // Kinda the same as `test_read_linearizes`, but we make sure we have to do gc
-// during `execute_mut`.
+// during `execute_mut` on the first thread.
 //
-// To execute just this test, do:
-// RUSTFLAGS="--cfg loom" cargo test --test read_linearizes --release -- --nocapture test_read_linearizes_with_gc
+// This triggered a bug in the past where reads could sneak by from another
+// thread on the same replica and see a value that could not yet be observed by
+// another replica for some thread interleavings.
+//
+// Unfortunately, loom can't check this model exhaustively (AFAICT due to the
+// try_recv) so we have a max. duration of 30s for this test. It was enough to
+// trigger the bug but not enough to prove the absence of bugs.
+//
+// To execute just this test, run: `RUSTFLAGS="--cfg loom" cargo test --test
+// read_linearizes --release -- --nocapture test_read_linearizes_with_gc`
 #[test]
 fn test_read_linearizes_with_gc() {
+    let _r = env_logger::try_init().ok();
+
     let mut b = loom::model::Builder::new();
-    //b.max_branches = 225_000;
-    //b.max_permutations = Some(225_000);
-    //b.preemption_bound = Some(200);
+    b.max_duration = Some(core::time::Duration::from_secs(10));
 
     b.check(move || {
         // Make a log with just 4 entries, on adding a second entry, we start GC
-        let mut log = Log::<<TheCounter as Dispatch>::WriteOperation>::new(256);
-        log.append(&[OpWr::Noop, OpWr::Noop], 2, |op, idx| {
+        let log = Log::<<TheCounter as Dispatch>::WriteOperation>::new(256);
+        log.append(&[OpWr::Noop, OpWr::Noop], 2, |_op, _idx| {
             panic!("We're doing GC but we don't want to do it just yet...");
         });
 
@@ -155,14 +164,12 @@ fn test_read_linearizes_with_gc() {
 
         {
             let done = done.clone();
-            let r1 = r1.clone();
+            let r1a = r1.clone();
             let child = thread::spawn(move || {
-                let idx = r1.register().expect("Failed to register with Replica.");
-
-                let cntr_val = r1.execute_mut(OpWr::Increment, idx);
-
+                let idx = r1a.register().expect("Failed to register with Replica.");
+                let cntr_val = r1a.execute_mut(OpWr::Increment, idx);
                 assert_eq!(cntr_val, 1);
-                done.store(true, Ordering::SeqCst);
+                done.store(true, std::sync::atomic::Ordering::SeqCst);
             });
             threads.push(child);
         }
@@ -171,14 +178,12 @@ fn test_read_linearizes_with_gc() {
             let done = done.clone();
             let child = thread::spawn(move || {
                 let idx = r1.register().expect("Failed to register with Replica.");
-
                 let cntr_val = r1.execute(OpRd::Get, idx);
                 assert!(cntr_val == 1 || cntr_val == 0);
-
                 tx.send(cntr_val).unwrap();
 
                 while !done.load(Ordering::SeqCst) {
-                    let cntr_val = r1.execute(OpRd::Get, idx);
+                    let _cntr_val = r1.execute(OpRd::Get, idx);
                     loom::thread::yield_now();
                 }
             });
@@ -186,23 +191,30 @@ fn test_read_linearizes_with_gc() {
         }
 
         {
-            let done = done.clone();
             let child = thread::spawn(move || {
                 let idx = r2.register().expect("Failed to register with Replica.");
-
-                let observed_val = rx.recv().unwrap();
-                let cntr_val = r2.execute(OpRd::Get, idx);
-
-                assert!(
-                    cntr_val >= observed_val,
-                    "we read cntr_val={}, but we received observed_val={} from t2",
-                    cntr_val,
-                    observed_val
-                );
-
-                while !done.load(Ordering::SeqCst) {
-                    let cntr_val = r2.execute(OpRd::Get, idx);
-                    loom::thread::yield_now();
+                loop {
+                    // In this case (since we do GC here) we need to make sure
+                    // our test case does not deadlock. Why? Assume t1 tries to
+                    // do GC (so it waits for replica 2 to advance (by
+                    // processing the entries)). Now t2 (correctly) can't read
+                    // so it doesn't make progress; because t3 (on replica 2)
+                    // never receives a value and won't execute the read on r2
+                    // (which would let t1 resume from advance_log/GC)
+                    if let Ok(observed_val) = rx.try_recv() {
+                        let cntr_val = r2.execute(OpRd::Get, idx);
+                        assert!(
+                            cntr_val >= observed_val,
+                            "we read cntr_val={}, but we received observed_val={} from t2",
+                            cntr_val,
+                            observed_val
+                        );
+                        break;
+                    } else {
+                        loom::thread::yield_now();
+                        let _cntr_val = r2.execute(OpRd::Get, idx);
+                        continue;
+                    }
                 }
             });
             threads.push(child);
