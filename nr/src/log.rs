@@ -401,8 +401,6 @@ where
                     );
                 }
                 waitgc += 1;
-                //unreachable!("we're doing gc");
-
                 self.exec(idx, &mut s);
 
                 #[cfg(loom)]
