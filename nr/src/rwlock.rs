@@ -11,8 +11,8 @@
 //!
 //! We're not using loom in this module because we use UnsafeCell and loom's
 //! UnsafeCell exposes a different API. Luckily, loom provides it's own RwLock
-//! implementation which (with some modifications) we can use in the replica
-//! code.
+//! implementation which (with some modifications, see `loom_rwlock.rs`) we can
+//! use in the replica code.
 
 use core::cell::UnsafeCell;
 use core::default::Default;
@@ -23,11 +23,7 @@ use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use crossbeam_utils::CachePadded;
 
 /// Maximum number of reader threads that this lock supports.
-
-#[cfg(not(loom))]
 const MAX_READER_THREADS: usize = 192;
-#[cfg(loom)]
-const MAX_READER_THREADS: usize = 2;
 const_assert!(MAX_READER_THREADS > 0);
 
 #[allow(clippy::declare_interior_mutable_const)]
@@ -171,7 +167,6 @@ where
         // We perform a small optimization. Before attempting to acquire a read lock, we issue
         // naked reads to the write lock and wait until it is free. For that, we retrieve a
         // raw pointer to the write lock over here.
-        #[cfg(not(loom))]
         let ptr = unsafe {
             &*(&self.wlock as *const crossbeam_utils::CachePadded<core::sync::atomic::AtomicBool>
                 as *const bool)
@@ -180,15 +175,10 @@ where
         loop {
             // First, wait until the write lock is free. This is the small
             // optimization spoken of earlier.
-            #[cfg(not(loom))]
             unsafe {
                 while core::ptr::read_volatile(ptr) {
                     spin_loop();
                 }
-            }
-            #[cfg(loom)]
-            while self.wlock.load(Ordering::Relaxed) {
-                spin_loop();
             }
 
             // Next, acquire this thread's read lock and actually check if the write lock
