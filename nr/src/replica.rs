@@ -63,11 +63,10 @@ impl ReplicaToken {
 /// # Important
 /// If this number is adjusted due to the use of the `arr_macro::arr` macro we
 /// have to adjust the `256` literals in the `new` constructor of `Replica`.
-#[cfg(not(any(loom, feature = "small-const")))]
+#[cfg(not(loom))]
 pub const MAX_THREADS_PER_REPLICA: usize = 256;
-#[cfg(any(loom, feature = "small-const"))]
+#[cfg(loom)]
 pub const MAX_THREADS_PER_REPLICA: usize = 2;
-
 const_assert!(
     MAX_THREADS_PER_REPLICA >= 1 && (MAX_THREADS_PER_REPLICA & (MAX_THREADS_PER_REPLICA - 1) == 0)
 );
@@ -372,8 +371,6 @@ where
                 .compare_exchange_weak(idx, idx + 1, Ordering::SeqCst, Ordering::SeqCst)
                 != Ok(idx)
             {
-                #[cfg(loom)]
-                loom::thread::yield_now();
                 continue;
             };
 
@@ -534,8 +531,6 @@ where
             Ordering::Acquire,
         ) != Ok(0)
         {
-            //#[cfg(loom)]
-            //loom::thread::yield_now();
             spin_loop();
         }
         #[cfg(not(loom))]
@@ -562,10 +557,6 @@ where
         let ctail = self.slog.get_ctail();
         while !self.slog.is_replica_synced_for_reads(self.idx, ctail) {
             self.try_combine(idx.0);
-
-            //#[cfg(loom)]
-            //loom::thread::yield_now();
-
             spin_loop();
         }
     }
@@ -582,14 +573,11 @@ where
         let ctail = self.slog.get_ctail();
         while !self.slog.is_replica_synced_for_reads(self.idx, ctail) {
             self.try_combine(tid);
-            #[cfg(loom)]
-            loom::thread::yield_now();
             spin_loop();
         }
 
         #[cfg(not(loom))]
         return self.data.read(tid - 1).dispatch(op);
-
         #[cfg(loom)]
         return self.data.read().unwrap().dispatch(op);
     }
@@ -606,7 +594,7 @@ where
     fn try_combine(&self, tid: usize) {
         // First, check if there already is a flat combiner. If there is no active flat combiner
         // then try to acquire the combiner lock. If there is, then just return.
-        /*for _i in 0..4 {
+        for _i in 0..4 {
             #[cfg(not(loom))]
             if unsafe {
                 core::ptr::read_volatile(
@@ -618,14 +606,15 @@ where
             {
                 return;
             }
-            #[cfg(loom)]
-            if self.combiner.load(Ordering::Relaxed) != 0 {
-                #[cfg(loom)]
-                loom::thread::yield_now();
 
-                return;
+            #[cfg(loom)]
+            {
+                if self.combiner.load(Ordering::Relaxed) != 0 {
+                    loom::thread::yield_now();
+                    return;
+                }
             }
-        }*/
+        }
 
         // Try to become the combiner here. If this fails, then simply return.
         if self
@@ -635,7 +624,6 @@ where
         {
             #[cfg(loom)]
             loom::thread::yield_now();
-
             return;
         }
 

@@ -24,9 +24,9 @@ use crossbeam_utils::CachePadded;
 
 /// Maximum number of reader threads that this lock supports.
 
-#[cfg(not(any(loom, feature = "small-const")))]
+#[cfg(not(loom))]
 const MAX_READER_THREADS: usize = 192;
-#[cfg(any(loom, feature = "small-const"))]
+#[cfg(loom)]
 const MAX_READER_THREADS: usize = 2;
 const_assert!(MAX_READER_THREADS > 0);
 
