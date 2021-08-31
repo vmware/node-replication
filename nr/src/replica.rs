@@ -19,12 +19,8 @@ use crossbeam_utils::CachePadded;
 
 use super::context::Context;
 use super::log::Log;
-use super::Dispatch;
-
-#[cfg(not(loom))]
 use super::rwlock::RwLock;
-#[cfg(loom)]
-use loom::sync::RwLock;
+use super::Dispatch;
 
 /// A token handed out to threads registered with replicas.
 ///
@@ -533,11 +529,8 @@ where
         {
             spin_loop();
         }
-        #[cfg(not(loom))]
-        let mut data = self.data.write(self.next.load(Ordering::Relaxed));
-        #[cfg(loom)]
-        let mut data = self.data.write().unwrap();
 
+        let mut data = self.data.write(self.next.load(Ordering::Relaxed));
         let mut f = |o: <D as Dispatch>::WriteOperation, _i: usize| {
             data.dispatch_mut(o);
         };
@@ -576,10 +569,7 @@ where
             spin_loop();
         }
 
-        #[cfg(not(loom))]
         return self.data.read(tid - 1).dispatch(op);
-        #[cfg(loom)]
-        return self.data.read().unwrap().dispatch(op);
     }
 
     /// Enqueues an operation inside a thread local context. Returns a boolean
@@ -658,10 +648,7 @@ where
         #[cfg(feature = "buggy")]
         {
             let f = |o: <D as Dispatch>::WriteOperation, i: usize| {
-                #[cfg(not(loom))]
                 let resp = self.data.write(next).dispatch_mut(o);
-                #[cfg(loom)]
-                let resp = self.data.write().unwrap().dispatch_mut(o);
                 if i == self.idx {
                     results.push(resp);
                 }
@@ -671,11 +658,7 @@ where
 
         #[cfg(not(feature = "buggy"))]
         {
-            #[cfg(not(loom))]
             let mut data = self.data.write(next);
-            #[cfg(loom)]
-            let mut data = self.data.write().unwrap();
-
             let f = |o: <D as Dispatch>::WriteOperation, i: usize| {
                 #[cfg(not(loom))]
                 let resp = data.dispatch_mut(o);
@@ -690,11 +673,7 @@ where
 
         // Execute any operations on the shared log against this replica.
         {
-            #[cfg(not(loom))]
             let mut data = self.data.write(next);
-            #[cfg(loom)]
-            let mut data = self.data.write().unwrap();
-
             let mut f = |o: <D as Dispatch>::WriteOperation, i: usize| {
                 let resp = data.dispatch_mut(o);
                 if i == self.idx {
@@ -719,7 +698,7 @@ where
     }
 }
 
-#[cfg(all(test, not(loom)))]
+#[cfg(test)]
 mod test {
     extern crate std;
 
