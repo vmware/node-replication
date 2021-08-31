@@ -230,7 +230,6 @@ where
         #[allow(clippy::declare_interior_mutable_const)]
         const LMASK_DEFAULT: CachePadded<Cell<bool>> = CachePadded::new(Cell::new(true));
 
-        // AtomicUsize::new is not const in loom, can be removed once https://github.com/tokio-rs/loom/issues/170 is fixed
         #[cfg(not(loom))]
         {
             #[allow(clippy::declare_interior_mutable_const)]
@@ -249,6 +248,9 @@ where
                 lmasks: [LMASK_DEFAULT; MAX_REPLICAS_PER_LOG],
             };
         }
+        // AtomicUsize::new is not const in loom. This code block (including arr
+        // dependency) becomes redundant once
+        // https://github.com/tokio-rs/loom/issues/170 is fixed:
         #[cfg(loom)]
         {
             use arr_macro::arr;
