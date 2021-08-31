@@ -742,7 +742,7 @@ where
     }
 }
 
-#[cfg(all(test, not(loom)))]
+#[cfg(test)]
 mod tests {
     // Import std so that we have an allocator for our unit tests.
     extern crate std;
