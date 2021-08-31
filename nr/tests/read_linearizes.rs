@@ -1,3 +1,6 @@
+// Copyright © 2019-2021 VMware, Inc. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
 //! If many threads read from the replica, they should all see a monotonically
 //! increasing value.
 //!
@@ -129,11 +132,12 @@ fn test_read_linearizes_no_gc() {
 // during `execute_mut` on the first thread.
 //
 // This triggered a bug in the past where reads could sneak by from another
-// thread on the same replica and see a value that could not yet be observed by
-// another replica for some thread interleavings.
+// thread on the same replica and read a value "too early", (meaning t3 on
+// another replica could do a read later in time and see an older value) for
+// some thread interleavings.
 //
 // Unfortunately, loom can't check this model exhaustively (AFAICT due to the
-// try_recv) so we have a max. duration of 30s for this test. It was enough to
+// try_recv) so we have a max. duration of 10s for this test. It was enough to
 // trigger the bug but not enough to prove the absence of bugs.
 //
 // To execute just this test, run: `RUSTFLAGS="--cfg loom" cargo test --test

@@ -87,6 +87,12 @@ extern crate static_assertions;
 mod context;
 mod log;
 mod replica;
+
+#[cfg(not(loom))]
+#[path = "rwlock.rs"]
+pub mod rwlock;
+#[cfg(loom)]
+#[path = "loom_rwlock.rs"]
 pub mod rwlock;
 
 pub use crate::log::{Log, MAX_REPLICAS_PER_LOG};
