@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use core::cell::RefCell;
+use core::future::Future;
 use core::hint::spin_loop;
 #[cfg(not(loom))]
 use core::sync::atomic::{AtomicUsize, Ordering};
@@ -645,7 +646,7 @@ where
 
         // Append all collected operations into the shared log. We pass a closure
         // in here because operations on the log might need to be consumed for GC.
-        {
+        if buffer.len() > 0 {
             let mut data = self.data.write(next);
             let f = |o: <D as Dispatch>::WriteOperation, i: usize| {
                 #[cfg(not(loom))]
@@ -682,6 +683,23 @@ where
             self.contexts[i - 1].enqueue_resps(&results[s..f]);
             s += operations[i - 1];
             operations[i - 1] = 0;
+        }
+    }
+
+    pub async fn async_execute_mut(
+        &'a self,
+        op: <D as Dispatch>::WriteOperation,
+        rid: ReplicaToken,
+    ) -> impl Future<Output = <D as Dispatch>::Response> + 'a {
+        // Enqueue the operation onto the thread local batch.
+        // For a single thread the future will append the operation and yield.
+        async { while !self.make_pending(op.clone(), rid.0) {} }.await;
+
+        // Each future tries to become the combiner, and then irrespective
+        // of the outcome it checks for the response in the reponse buffer.
+        async move {
+            async { self.try_combine(rid.0) }.await;
+            self.get_response(rid.0)
         }
     }
 }
