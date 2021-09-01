@@ -645,18 +645,6 @@ where
 
         // Append all collected operations into the shared log. We pass a closure
         // in here because operations on the log might need to be consumed for GC.
-        #[cfg(feature = "buggy")]
-        {
-            let f = |o: <D as Dispatch>::WriteOperation, i: usize| {
-                let resp = self.data.write(next).dispatch_mut(o);
-                if i == self.idx {
-                    results.push(resp);
-                }
-            };
-            self.slog.append(&buffer, self.idx, f);
-        }
-
-        #[cfg(not(feature = "buggy"))]
         {
             let mut data = self.data.write(next);
             let f = |o: <D as Dispatch>::WriteOperation, i: usize| {
