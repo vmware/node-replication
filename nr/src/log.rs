@@ -235,7 +235,7 @@ where
             #[allow(clippy::declare_interior_mutable_const)]
             const LTAIL_DEFAULT: CachePadded<AtomicUsize> = CachePadded::new(AtomicUsize::new(0));
 
-            return Log {
+            Log {
                 rawp: mem,
                 rawb: b,
                 size: num,
@@ -246,7 +246,7 @@ where
                 ltails: [LTAIL_DEFAULT; MAX_REPLICAS_PER_LOG],
                 next: CachePadded::new(AtomicUsize::new(1usize)),
                 lmasks: [LMASK_DEFAULT; MAX_REPLICAS_PER_LOG],
-            };
+            }
         }
         // AtomicUsize::new is not const in loom. This code block (including arr
         // dependency) becomes redundant once
