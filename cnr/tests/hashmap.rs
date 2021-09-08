@@ -21,7 +21,6 @@ enum OpRd {
 
 impl LogMapper for OpRd {
     fn hash(&self, nlogs: usize, logs: &mut Vec<usize>) {
-        logs.clear();
         match self {
             OpRd::Get(k) => logs.push(*k % nlogs),
         }
@@ -36,7 +35,6 @@ enum OpWr {
 
 impl LogMapper for OpWr {
     fn hash(&self, nlogs: usize, logs: &mut Vec<usize>) {
-        logs.clear();
         match self {
             OpWr::Put(k, _v) => logs.push(*k % nlogs),
             OpWr::PutScan(_k, _v) => {

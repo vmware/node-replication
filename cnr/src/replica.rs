@@ -219,7 +219,6 @@ where
     ///     // Only one log used for the example, hence returning 0.
     ///     fn hash(&self, _nlogs:usize, logs: &mut Vec<usize>)
     ///     {
-    ///         logs.clear();
     ///         logs.push(0);
     ///     }
     /// }
@@ -231,7 +230,6 @@ where
     ///     // Only one log used for the example, hence returning 0.
     ///     fn hash(&self, _nlogs:usize, logs: &mut Vec<usize>)
     ///     {
-    ///         logs.clear();
     ///         logs.push(0);
     ///     }
     /// }
@@ -396,7 +394,6 @@ where
     ///     // Only one log used for the example, hence returning 0.
     ///     fn hash(&self, _nlogs:usize, logs: &mut Vec<usize>)
     ///     {
-    ///         logs.clear();
     ///         logs.push(0);
     ///     }
     /// }
@@ -408,7 +405,6 @@ where
     ///     // Only one log used for the example, hence returning 0.
     ///     fn hash(&self, _nlogs:usize, logs: &mut Vec<usize>)
     ///     {
-    ///         logs.clear();
     ///         logs.push(0);
     ///     }
     /// }
@@ -488,7 +484,6 @@ where
     ///     // Only one log used for the example, hence returning 0.
     ///     fn hash(&self, _nlogs:usize, logs: &mut Vec<usize>)
     ///     {
-    ///         logs.clear();
     ///         logs.push(0);
     ///     }
     /// }
@@ -500,7 +495,6 @@ where
     ///     // Only one log used for the example, hence returning 0.
     ///     fn hash(&self, _nlogs:usize, logs: &mut Vec<usize>)
     ///     {
-    ///         logs.clear();
     ///         logs.push(0);
     ///     }
     /// }
@@ -583,7 +577,6 @@ where
     ///     // Only one log used for the example, hence returning 0.
     ///     fn hash(&self, _nlogs:usize, logs: &mut Vec<usize>)
     ///     {
-    ///         logs.clear();
     ///         logs.push(0);
     ///     }
     /// }
@@ -595,7 +588,6 @@ where
     ///     // Only one log used for the example, hence returning 0.
     ///     fn hash(&self, _nlogs:usize, logs: &mut Vec<usize>)
     ///     {
-    ///         logs.clear();
     ///         logs.push(0);
     ///     }
     /// }
@@ -737,7 +729,6 @@ where
     ///     // Only one log used for the example, hence returning 0.
     ///     fn hash(&self, _nlogs:usize, logs: &mut Vec<usize>)
     ///     {
-    ///         logs.clear();
     ///         logs.push(0);
     ///     }
     /// }
@@ -749,7 +740,6 @@ where
     ///     // Only one log used for the example, hence returning 0.
     ///     fn hash(&self, _nlogs:usize, logs: &mut Vec<usize>)
     ///     {
-    ///         logs.clear();
     ///         logs.push(0);
     ///     }
     /// }
@@ -819,7 +809,6 @@ where
     ///     // Only one log used for the example, hence returning 0.
     ///     fn hash(&self, _nlogs:usize, logs: &mut Vec<usize>)
     ///     {
-    ///         logs.clear();
     ///         logs.push(0);
     ///     }
     /// }
@@ -831,7 +820,6 @@ where
     ///     // Only one log used for the example, hence returning 0.
     ///     fn hash(&self, _nlogs:usize, logs: &mut Vec<usize>)
     ///     {
-    ///         logs.clear();
     ///         logs.push(0);
     ///     }
     /// }
@@ -1273,7 +1261,6 @@ mod test {
 
     impl LogMapper for OpWr {
         fn hash(&self, _nlogs: usize, logs: &mut Vec<usize>) {
-            logs.clear();
             logs.push(0);
         }
     }
@@ -1283,7 +1270,6 @@ mod test {
 
     impl LogMapper for OpRd {
         fn hash(&self, _nlogs: usize, logs: &mut Vec<usize>) {
-            logs.clear();
             logs.push(0);
         }
     }
@@ -1582,7 +1568,6 @@ mod test {
 
     impl LogMapper for WriteOp {
         fn hash(&self, nlogs: usize, logs: &mut Vec<usize>) {
-            logs.clear();
             match self {
                 WriteOp::Set(val) => logs.push(*val % nlogs),
                 WriteOp::SetScan(_) => {
@@ -1599,7 +1584,6 @@ mod test {
 
     impl LogMapper for ReadOp {
         fn hash(&self, nlogs: usize, logs: &mut Vec<usize>) {
-            logs.clear();
             logs.push(self.0 % nlogs);
         }
     }

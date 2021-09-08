@@ -52,7 +52,6 @@ pub enum QueueRd {
 
 impl LogMapper for QueueRd {
     fn hash(&self, _nlogs: usize, logs: &mut Vec<usize>) {
-        logs.clear();
         logs.push(0);
     }
 }
@@ -66,7 +65,6 @@ pub enum QueueConcurrent {
 
 impl LogMapper for QueueConcurrent {
     fn hash(&self, _nlogs: usize, logs: &mut Vec<usize>) {
-        logs.clear();
         logs.push(0);
     }
 }
@@ -78,7 +76,6 @@ pub enum SkipListConcurrent {
 
 impl LogMapper for SkipListConcurrent {
     fn hash(&self, nlogs: usize, logs: &mut Vec<usize>) {
-        logs.clear();
         match self {
             SkipListConcurrent::Get(k) => logs.push(*k as usize % nlogs),
         }
@@ -92,7 +89,6 @@ pub enum OpWr {
 
 impl LogMapper for OpWr {
     fn hash(&self, nlogs: usize, logs: &mut Vec<usize>) {
-        logs.clear();
         match self {
             OpWr::Push(k, _v) => logs.push(*k as usize % nlogs),
         }

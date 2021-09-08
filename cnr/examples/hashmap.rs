@@ -21,7 +21,6 @@ enum Modify {
 
 impl LogMapper for Modify {
     fn hash(&self, _nlogs: usize, logs: &mut Vec<usize>) {
-        logs.clear();
         logs.push(0);
     }
 }
@@ -34,7 +33,6 @@ enum Access {
 
 impl LogMapper for Access {
     fn hash(&self, _nlogs: usize, logs: &mut Vec<usize>) {
-        logs.clear();
         logs.push(0);
     }
 }

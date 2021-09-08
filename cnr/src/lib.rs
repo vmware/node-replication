@@ -42,7 +42,6 @@
 //! /// must map to same log.
 //! impl LogMapper for Modify {
 //!    fn hash(&self, nlogs: usize, logs: &mut Vec<usize>) {
-//!       logs.clear();
 //!       match self {
 //!          Modify::Put(key, _val) => logs.push(*key % nlogs),
 //!       }
@@ -60,7 +59,6 @@
 //! /// can go to same or different log and conflicts operations must map to same log.
 //! impl LogMapper for Access {
 //!    fn hash(&self, nlogs: usize, logs: &mut Vec<usize>) {
-//!       logs.clear();
 //!       match self {
 //!          Access::Get(key) => logs.push(*key % nlogs),
 //!       }

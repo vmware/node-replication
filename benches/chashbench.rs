@@ -178,7 +178,6 @@ pub enum OpWr {
 
 impl LogMapper for OpWr {
     fn hash(&self, nlogs: usize, logs: &mut Vec<usize>) {
-        logs.clear();
         let span = SPAN.load(Ordering::Relaxed);
         match self {
             OpWr::Put(k, _v) => logs.push((*k as usize / span) % nlogs),
@@ -194,7 +193,6 @@ pub enum OpRd {
 
 impl LogMapper for OpRd {
     fn hash(&self, nlogs: usize, logs: &mut Vec<usize>) {
-        logs.clear();
         let span = SPAN.load(Ordering::Relaxed);
         match self {
             OpRd::Get(k) => logs.push((*k as usize / span) % nlogs),
