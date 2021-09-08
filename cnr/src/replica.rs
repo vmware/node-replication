@@ -653,6 +653,7 @@ where
         let nlogs = self.logstate.len();
         hash_vec.clear();
         op.0.hash(nlogs, &mut hash_vec);
+        debug_assert_eq!(hash_vec.len(), nlogs, "Append scan ops to all the logs");
         let root_log = hash_vec[0];
 
         self.logstate[root_log].slog.acquire_scan_lock(thread_id);
