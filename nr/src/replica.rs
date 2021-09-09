@@ -646,7 +646,7 @@ where
 
         // Append all collected operations into the shared log. We pass a closure
         // in here because operations on the log might need to be consumed for GC.
-        if buffer.len() > 0 {
+        {
             let mut data = self.data.write(next);
             let f = |o: <D as Dispatch>::WriteOperation, i: usize| {
                 #[cfg(not(loom))]
