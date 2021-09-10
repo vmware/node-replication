@@ -54,11 +54,15 @@ type BenchFn<R> = fn(
     ReplicaToken,
     &Arc<Log<'static, <<R as ReplicaTrait>::D as Dispatch>::WriteOperation>>,
     &Arc<R>,
-    &Operation<
-        <<R as ReplicaTrait>::D as Dispatch>::ReadOperation,
-        <<R as ReplicaTrait>::D as Dispatch>::WriteOperation,
+    &Vec<
+        Operation<
+            <<R as ReplicaTrait>::D as Dispatch>::ReadOperation,
+            <<R as ReplicaTrait>::D as Dispatch>::WriteOperation,
+        >,
     >,
-    usize,
+    usize, // Operating vector length
+    usize, // current index
+    usize, // batch size
 );
 
 #[cfg(feature = "c_nr")]
@@ -67,11 +71,15 @@ type BenchFn<R> = fn(
     ReplicaToken,
     &Vec<Arc<Log<'static, <<R as ReplicaTrait>::D as Dispatch>::WriteOperation>>>,
     &Arc<R>,
-    &Operation<
-        <<R as ReplicaTrait>::D as Dispatch>::ReadOperation,
-        <<R as ReplicaTrait>::D as Dispatch>::WriteOperation,
+    &Vec<
+        Operation<
+            <<R as ReplicaTrait>::D as Dispatch>::ReadOperation,
+            <<R as ReplicaTrait>::D as Dispatch>::WriteOperation,
+        >,
     >,
-    usize,
+    usize, // Operating vector length
+    usize, // current index
+    usize, // batch size
 );
 
 pub trait ReplicaTrait {
@@ -772,17 +780,18 @@ where
                         let end_experiment = start + duration;
                         let mut next_log = start + log_period;
                         while Instant::now() < end_experiment {
-                            for _i in 0..batch_size {
-                                black_box((f)(
-                                    core_id,
-                                    replica_token,
-                                    &log,
-                                    &replica,
-                                    &operations[iter],
-                                    batch_size,
-                                ));
-                                iter = (iter + 1) % nop;
-                            }
+                            black_box((f)(
+                                core_id,
+                                replica_token,
+                                &log,
+                                &replica,
+                                &operations,
+                                nop,
+                                iter,
+                                batch_size,
+                            ));
+
+                            iter += (iter + batch_size) % nop;
                             operations_completed += 1 * batch_size;
 
                             if Instant::now() >= next_log {
