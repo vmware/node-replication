@@ -695,11 +695,16 @@ where
         // For a single thread the future will append the operation and yield.
         async { while !self.make_pending(op.clone(), rid.0) {} }.await;
 
-        // Each future tries to become the combiner, and then irrespective
-        // of the outcome it checks for the response in the reponse buffer.
+        // Check for the response even before becoming the combiner,
+        // as some other async combiner might have completed the work.
         async move {
-            async { self.try_combine(rid.0) }.await;
-            self.get_response(rid.0)
+            match self.contexts[rid.0 - 1].res() {
+                Some(res) => res,
+                None => {
+                    self.try_combine(rid.0);
+                    self.get_response(rid.0)
+                }
+            }
         }
     }
 }
