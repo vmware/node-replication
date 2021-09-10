@@ -322,14 +322,19 @@ fn synthetic_scale_out(c: &mut TestHarness) {
         .configure(
             c,
             "synthetic-scaleout",
-            |cid, rid, _log, replica, op, _batch_size| match op {
-                Operation::ReadOperation(mut o) => {
-                    o.set_tid(cid as usize);
-                    replica.execute(o, rid).unwrap();
-                }
-                Operation::WriteOperation(mut o) => {
-                    o.set_tid(cid as usize);
-                    replica.execute_mut(o, rid).unwrap();
+            |cid, rid, _log, replica, ops, nop, index, batch_size| {
+                for i in 0..batch_size {
+                    let op = &ops[(index + i) % nop];
+                    match op {
+                        Operation::ReadOperation(mut o) => {
+                            o.set_tid(cid as usize);
+                            replica.execute(o, rid).unwrap();
+                        }
+                        Operation::WriteOperation(mut o) => {
+                            o.set_tid(cid as usize);
+                            replica.execute_mut(o, rid).unwrap();
+                        }
+                    }
                 }
             },
         );

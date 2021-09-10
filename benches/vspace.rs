@@ -575,12 +575,17 @@ fn vspace_scale_out(c: &mut TestHarness) {
         .configure(
             c,
             "vspace-scaleout",
-            |_cid, rid, _log, replica, op, _batch_size| match op {
-                Operation::ReadOperation(o) => {
-                    let _r = replica.execute(*o, rid);
-                }
-                Operation::WriteOperation(o) => {
-                    let _r = replica.execute_mut(*o, rid);
+            |_cid, rid, _log, replica, ops, nop, index, batch_size| {
+                for i in 0..batch_size {
+                    let op = &ops[(index + i) % nop];
+                    match op {
+                        Operation::ReadOperation(o) => {
+                            let _r = replica.execute(*o, rid);
+                        }
+                        Operation::WriteOperation(o) => {
+                            let _r = replica.execute_mut(*o, rid);
+                        }
+                    }
                 }
             },
         );

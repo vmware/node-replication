@@ -346,12 +346,17 @@ fn memfs_scale_out(c: &mut TestHarness) {
         .configure(
             c,
             "memfs-scaleout",
-            |_cid, rid, _log, replica, op, _batch_size| match op {
-                Operation::ReadOperation(o) => {
-                    replica.execute(*o, rid).unwrap();
-                }
-                Operation::WriteOperation(o) => {
-                    replica.execute_mut(*o, rid).unwrap();
+            |_cid, rid, _log, replica, ops, nop, index, batch_size| {
+                for i in 0..batch_size {
+                    let op = &ops[(index + i) % nop];
+                    match op {
+                        Operation::ReadOperation(o) => {
+                            replica.execute(*o, rid).unwrap();
+                        }
+                        Operation::WriteOperation(o) => {
+                            replica.execute_mut(*o, rid).unwrap();
+                        }
+                    }
                 }
             },
         );

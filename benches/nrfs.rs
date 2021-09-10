@@ -144,18 +144,23 @@ fn nrfs_scale_out(c: &mut TestHarness, num_cpus: usize, write_ratio: usize) {
         .configure(
             c,
             &bench_name,
-            |_cid, rid, _log, replica, op, _batch_size| match op {
-                Operation::ReadOperation(op) => {
-                    let op = match op {
-                        OpRd::FileRead(_mnode) => OpRd::FileRead(rid.id() as u64 + 1),
-                    };
-                    let _ignore = replica.exec_ro(op, rid);
-                }
-                Operation::WriteOperation(op) => {
-                    let op = match op {
-                        OpWr::FileWrite(_mnode) => OpWr::FileWrite(rid.id() as u64 + 1),
-                    };
-                    let _ignore = replica.exec(op, rid);
+            |_cid, rid, _log, replica, ops, nop, index, batch_size| {
+                for i in 0..batch_size {
+                    let op = &ops[(index + i) % nop];
+                    match op {
+                        Operation::ReadOperation(op) => {
+                            let op = match op {
+                                OpRd::FileRead(_mnode) => OpRd::FileRead(rid.id() as u64 + 1),
+                            };
+                            let _ignore = replica.exec_ro(op, rid);
+                        }
+                        Operation::WriteOperation(op) => {
+                            let op = match op {
+                                OpWr::FileWrite(_mnode) => OpWr::FileWrite(rid.id() as u64 + 1),
+                            };
+                            let _ignore = replica.exec(op, rid);
+                        }
+                    }
                 }
             },
         );
