@@ -322,7 +322,7 @@ fn synthetic_scale_out(c: &mut TestHarness) {
         .configure(
             c,
             "synthetic-scaleout",
-            |cid, rid, _log, replica, ops, nop, index, batch_size| {
+            |cid, rid, _log, replica, ops, nop, index, batch_size, _rt| {
                 for i in 0..batch_size {
                     let op = &ops[(index + i) % nop];
                     match op {

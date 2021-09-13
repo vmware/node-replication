@@ -3,6 +3,8 @@
 
 //! Implements ReplicaTrait for a bunch of different concurrent hashmap implementations.
 
+use async_trait::async_trait;
+
 use std::cell::UnsafeCell;
 use std::ffi::c_void;
 use std::marker::Sync;
@@ -31,6 +33,7 @@ pub struct Partitioner<T: Dispatch> {
 // This implies we have to run with `ReplicaStrategy::PerThread`.
 unsafe impl<T> Sync for Partitioner<T> where T: Dispatch + Default + Sync {}
 
+#[async_trait]
 impl<T> ReplicaTrait for Partitioner<T>
 where
     T: Dispatch + Default + Sync,
@@ -74,6 +77,10 @@ where
         unsafe { (&mut *self.data_structure.get()).dispatch_mut(op) }
     }
 
+    async fn async_exec(&self, _op: <Self::D as Dispatch>::WriteOperation, _idx: ReplicaToken) {
+        /* NOP */
+    }
+
     fn exec_scan(
         &self,
         op: <Self::D as Dispatch>::WriteOperation,
@@ -88,6 +95,10 @@ where
         _idx: ReplicaToken,
     ) -> <T as Dispatch>::Response {
         unsafe { (&*self.data_structure.get()).dispatch(op) }
+    }
+
+    async fn async_exec_ro(&self, _op: <Self::D as Dispatch>::ReadOperation, _idx: ReplicaToken) {
+        /* NOP */
     }
 }
 
@@ -104,6 +115,7 @@ pub struct ConcurrentDs<T: Dispatch + Sync> {
 
 unsafe impl<T> Sync for ConcurrentDs<T> where T: Dispatch + Default + Sync {}
 
+#[async_trait]
 impl<T> ReplicaTrait for ConcurrentDs<T>
 where
     T: Dispatch + Default + Sync,
@@ -140,6 +152,10 @@ where
         unreachable!("All opertations must be read ops")
     }
 
+    async fn async_exec(&self, _op: <Self::D as Dispatch>::WriteOperation, _idx: ReplicaToken) {
+        /* NOP */
+    }
+
     fn exec_scan(
         &self,
         _op: <Self::D as Dispatch>::WriteOperation,
@@ -154,6 +170,10 @@ where
         _idx: ReplicaToken,
     ) -> <Self::D as Dispatch>::Response {
         self.data_structure.dispatch(op)
+    }
+
+    async fn async_exec_ro(&self, _op: <Self::D as Dispatch>::ReadOperation, _idx: ReplicaToken) {
+        /* NOP */
     }
 }
 

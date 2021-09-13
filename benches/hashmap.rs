@@ -5,7 +5,7 @@
 #![allow(dead_code)]
 #![feature(test)]
 #![feature(bench_black_box)]
-
+use futures::future::join_all;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::marker::Sync;
@@ -16,6 +16,7 @@ use zipf::ZipfDistribution;
 
 use node_replication::Dispatch;
 use node_replication::Replica;
+use node_replication::MAX_PENDING_OPS;
 
 mod hashmap_comparisons;
 mod mkbench;
@@ -239,7 +240,7 @@ where
 
     mkbench::ScaleBenchBuilder::<R>::new(ops)
         .thread_defaults()
-        .update_batch(128)
+        .update_batch(MAX_PENDING_OPS)
         .log_size(32 * 1024 * 1024)
         .replica_strategy(mkbench::ReplicaStrategy::One)
         .replica_strategy(mkbench::ReplicaStrategy::Socket)
@@ -248,7 +249,7 @@ where
         .configure(
             c,
             &bench_name,
-            |_cid, rid, _log, replica, ops, nop, index, batch_size| {
+            |_cid, rid, _log, replica, ops, nop, index, batch_size, _rt| {
                 for i in 0..batch_size {
                     let op = &ops[(index + i) % nop];
                     match op {
@@ -264,6 +265,50 @@ where
         );
 }
 
+/// Compare scale-out behaviour of synthetic data-structure.
+#[tokio::main]
+async fn async_hashmap_scale_out<R>(c: &mut TestHarness, name: &str, write_ratio: usize)
+where
+    R: ReplicaTrait + Send + Sync + 'static,
+    R::D: Send,
+    R::D: Dispatch<ReadOperation = OpRd>,
+    R::D: Dispatch<WriteOperation = OpWr>,
+    <R::D as Dispatch>::WriteOperation: Send + Sync,
+    <R::D as Dispatch>::ReadOperation: Send + Sync,
+    <R::D as Dispatch>::Response: Sync + Send + Debug,
+{
+    let ops = generate_operations(NOP, write_ratio, KEY_SPACE, UNIFORM);
+    let bench_name = format!("{}-scaleout-wr{}", name, write_ratio);
+
+    mkbench::ScaleBenchBuilder::<R>::new(ops)
+        .thread_defaults()
+        .update_batch(MAX_PENDING_OPS)
+        .log_size(32 * 1024 * 1024)
+        .replica_strategy(mkbench::ReplicaStrategy::One)
+        .replica_strategy(mkbench::ReplicaStrategy::Socket)
+        .thread_mapping(ThreadMapping::Interleave)
+        .log_strategy(mkbench::LogStrategy::One)
+        .configure(
+            c,
+            &bench_name,
+            |_cid, rid, _log, replica, ops, nop, index, batch_size, rt| {
+                let mut futures = Vec::with_capacity(batch_size);
+                for i in 0..batch_size {
+                    let op = &ops[(index + i) % nop];
+                    match op {
+                        Operation::ReadOperation(op) => {
+                            futures.push(replica.async_exec_ro(*op, rid));
+                        }
+                        Operation::WriteOperation(op) => {
+                            futures.push(replica.async_exec(*op, rid));
+                        }
+                    }
+                }
+                rt.block_on(async { join_all(futures).await });
+            },
+        );
+}
+
 /// Compare scale-out behaviour of partitioned hashmap data-structure.
 fn partitioned_hashmap_scale_out(c: &mut TestHarness, name: &str, write_ratio: usize) {
     let ops = generate_operations(NOP, write_ratio, KEY_SPACE, UNIFORM);
@@ -274,11 +319,11 @@ fn partitioned_hashmap_scale_out(c: &mut TestHarness, name: &str, write_ratio: u
         .replica_strategy(mkbench::ReplicaStrategy::PerThread)
         .thread_mapping(ThreadMapping::Interleave)
         .log_strategy(mkbench::LogStrategy::One)
-        .update_batch(128)
+        .update_batch(MAX_PENDING_OPS)
         .configure(
             c,
             &bench_name,
-            |_cid, rid, _log, replica, ops, nop, index, batch_size| {
+            |_cid, rid, _log, replica, ops, nop, index, batch_size, _rt| {
                 for i in 0..batch_size {
                     let op = &ops[(index + i) % nop];
                     match op {
@@ -308,13 +353,13 @@ where
     mkbench::ScaleBenchBuilder::<ConcurrentDs<T>>::new(ops)
         .thread_defaults()
         .replica_strategy(mkbench::ReplicaStrategy::One) // Can only be One
-        .update_batch(128)
+        .update_batch(MAX_PENDING_OPS)
         .thread_mapping(ThreadMapping::Interleave)
         .log_strategy(mkbench::LogStrategy::One)
         .configure(
             c,
             &bench_name,
-            |_cid, rid, _log, replica, ops, nop, index, batch_size| {
+            |_cid, rid, _log, replica, ops, nop, index, batch_size, _rt| {
                 for i in 0..batch_size {
                     let op = &ops[(index + i) % nop];
                     match op {
@@ -353,6 +398,7 @@ fn main() {
     hashmap_single_threaded(&mut harness);
     for write_ratio in write_ratios.into_iter() {
         hashmap_scale_out::<Replica<NrHashMap>>(&mut harness, "hashmap", write_ratio);
+        async_hashmap_scale_out::<Replica<NrHashMap>>(&mut harness, "async-hashmap", write_ratio);
 
         #[cfg(feature = "cmp")]
         {

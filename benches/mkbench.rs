@@ -10,6 +10,9 @@
 //!    to evaluate the scalability of a data-structure with node-replication.
 #![allow(unused)]
 
+use async_trait::async_trait;
+use tokio::runtime::Runtime;
+
 use std::cell::{Cell, RefMut};
 use std::collections::HashMap;
 use std::fmt;
@@ -63,6 +66,7 @@ type BenchFn<R> = fn(
     usize, // Operating vector length
     usize, // current index
     usize, // batch size
+    &Runtime,
 );
 
 #[cfg(feature = "c_nr")]
@@ -80,8 +84,10 @@ type BenchFn<R> = fn(
     usize, // Operating vector length
     usize, // current index
     usize, // batch size
+    &Runtime,
 );
 
+#[async_trait]
 pub trait ReplicaTrait {
     type D: Dispatch + Default + Sync;
 
@@ -99,6 +105,9 @@ pub trait ReplicaTrait {
         idx: ReplicaToken,
     ) -> <Self::D as Dispatch>::Response;
 
+    #[cfg(feature = "nr")]
+    async fn async_exec(&self, op: <Self::D as Dispatch>::WriteOperation, idx: ReplicaToken);
+
     fn exec_scan(
         &self,
         op: <Self::D as Dispatch>::WriteOperation,
@@ -110,8 +119,12 @@ pub trait ReplicaTrait {
         op: <Self::D as Dispatch>::ReadOperation,
         idx: ReplicaToken,
     ) -> <Self::D as Dispatch>::Response;
+
+    #[cfg(feature = "nr")]
+    async fn async_exec_ro(&self, op: <Self::D as Dispatch>::ReadOperation, idx: ReplicaToken);
 }
 
+#[async_trait]
 impl<'a, T: Dispatch + Sync + Default> ReplicaTrait for Replica<'a, T> {
     type D = T;
 
@@ -143,6 +156,11 @@ impl<'a, T: Dispatch + Sync + Default> ReplicaTrait for Replica<'a, T> {
         self.execute_mut(op, idx)
     }
 
+    #[cfg(feature = "nr")]
+    async fn async_exec(&self, op: <Self::D as Dispatch>::WriteOperation, idx: ReplicaToken) {
+        self.async_execute_mut(op, idx).await;
+    }
+
     fn exec_scan(
         &self,
         op: <Self::D as Dispatch>::WriteOperation,
@@ -160,6 +178,11 @@ impl<'a, T: Dispatch + Sync + Default> ReplicaTrait for Replica<'a, T> {
         idx: ReplicaToken,
     ) -> <Self::D as Dispatch>::Response {
         self.execute(op, idx)
+    }
+
+    #[cfg(feature = "nr")]
+    async fn async_exec_ro(&self, op: <Self::D as Dispatch>::ReadOperation, idx: ReplicaToken) {
+        self.async_execute(op, idx).await;
     }
 }
 
@@ -774,6 +797,7 @@ where
                         let mut operations_completed: usize = 0;
                         let mut iter: usize = 0;
                         let nop: usize = operations.len();
+                        let rt = &tokio::runtime::Runtime::new().unwrap();
 
                         b.wait();
                         let start = Instant::now();
@@ -789,6 +813,7 @@ where
                                 nop,
                                 iter,
                                 batch_size,
+                                rt,
                             ));
 
                             iter += (iter + batch_size) % nop;

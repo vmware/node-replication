@@ -72,7 +72,7 @@ fn log_scale_bench(c: &mut TestHarness) {
         .configure(
             c,
             "log-append",
-            |_cid, rid, log, replica, ops, nop, index, batch_size| {
+            |_cid, rid, log, replica, ops, nop, index, batch_size, _rt| {
                 for i in 0..batch_size {
                     let op = &ops[(index + i) % nop];
                     match op {

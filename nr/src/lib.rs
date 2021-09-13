@@ -112,12 +112,12 @@ pub trait Dispatch {
     /// A read-only operation. When executed against the data structure, an operation
     /// of this type must not mutate the data structure in anyway. Otherwise, the
     /// assumptions made by this library no longer hold.
-    type ReadOperation: Sized + Clone + PartialEq + Debug;
+    type ReadOperation: Sized + Clone + PartialEq + Debug + Send;
 
     /// A write operation. When executed against the data structure, an operation of
     /// this type is allowed to mutate state. The library ensures that this is done so
     /// in a thread-safe manner.
-    type WriteOperation: Sized + Clone + PartialEq + Debug + Send;
+    type WriteOperation: Sized + Clone + PartialEq + Debug + Send + Sync;
 
     /// The type on the value returned by the data structure when a `ReadOperation` or a
     /// `WriteOperation` successfully executes against it.
