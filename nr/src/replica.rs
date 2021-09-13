@@ -707,6 +707,14 @@ where
             }
         }
     }
+
+    pub async fn async_execute(
+        &'a self,
+        op: <D as Dispatch>::ReadOperation,
+        idx: ReplicaToken,
+    ) -> impl Future<Output = <D as Dispatch>::Response> + 'a {
+        async move { self.read_only(op, idx.0) }
+    }
 }
 
 #[cfg(test)]
