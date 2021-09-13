@@ -124,7 +124,7 @@ fn stack_scale_out(c: &mut TestHarness) {
         .configure(
             c,
             "stack-scaleout",
-            |_cid, rid, _log, replica, ops, nop, index, batch_size| {
+            |_cid, rid, _log, replica, ops, nop, index, batch_size, _rt| {
                 for i in 0..batch_size {
                     let op = &ops[(index + i) % batch_size];
                     match op {

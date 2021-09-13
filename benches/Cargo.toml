@@ -101,6 +101,9 @@ rand_xorshift = "0.3.0"
 crossbeam-utils = { version = "0.8", default-features = false }
 arr_macro = "0.1.2"
 static_assertions = "1.1.0"
+async-trait = "0.1.51"
+futures = "0.3.17"
+tokio = {version = "1.11.0", features = ["full"]}
 node-replication = { path = "../nr" }
 cnr = { path = "../cnr" }
 

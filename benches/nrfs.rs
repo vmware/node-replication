@@ -144,7 +144,7 @@ fn nrfs_scale_out(c: &mut TestHarness, num_cpus: usize, write_ratio: usize) {
         .configure(
             c,
             &bench_name,
-            |_cid, rid, _log, replica, ops, nop, index, batch_size| {
+            |_cid, rid, _log, replica, ops, nop, index, batch_size, _rt| {
                 for i in 0..batch_size {
                     let op = &ops[(index + i) % nop];
                     match op {
