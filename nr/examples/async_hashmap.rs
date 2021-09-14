@@ -1,8 +1,11 @@
 //! A minimal example that implements a replicated hashmap
 use std::collections::HashMap;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use futures::future::join_all;
+use futures::Future;
+
 use node_replication::Dispatch;
 use node_replication::Log;
 use node_replication::Replica;
@@ -30,17 +33,25 @@ enum Modify {
     Put(usize, usize),
 }
 
+/// We support an immutable read operation to lookup a key from the hashmap.
+#[derive(Clone, Debug, PartialEq)]
+enum Access {
+    Get(usize),
+}
+
 /// The Dispatch traits executes `ReadOperation` (our Access enum)
 /// and `WriteOperation` (our `Modify` enum) against the replicated
 /// data-structure.
 impl Dispatch for NrHashMap {
-    type ReadOperation = ();
+    type ReadOperation = Access;
     type WriteOperation = Modify;
     type Response = usize;
 
     /// The `dispatch` function applies the immutable operations.
-    fn dispatch(&self, _op: Self::ReadOperation) -> Self::Response {
-        0
+    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
+        match op {
+            Access::Get(key) => *self.storage.get(&key).unwrap(),
+        }
     }
 
     /// The `dispatch_mut` function applies the mutable operations.
@@ -63,14 +74,21 @@ async fn main() {
     let ridx = replica.register().expect("Unable to register with log");
 
     // Issue multiple Put operations
-    let mut futures = Vec::new();
+    let mut futures = Vec::with_capacity(CAPACITY);
     for i in 0..CAPACITY {
-        futures.push(replica.async_execute_mut(Modify::Put(i, i + 1), ridx).await);
+        match i % 2 {
+            0 => futures.push(
+                Box::pin(replica.async_execute_mut(Modify::Put(i, i + 1), ridx).await)
+                    as Pin<Box<dyn Future<Output = <NrHashMap as Dispatch>::Response>>>,
+            ),
+            1 => futures.push(Box::pin(replica.async_execute(Access::Get(i), ridx).await)),
+            _ => unreachable!(),
+        }
     }
-    let put_resp = join_all(futures).await;
+    let resp = join_all(futures).await;
 
     // Verify responses
-    for (i, item) in put_resp.iter().enumerate().take(CAPACITY) {
+    for (i, item) in resp.iter().enumerate().take(CAPACITY) {
         assert_eq!(*item, i + 1);
     }
 }

@@ -265,9 +265,8 @@ where
         );
 }
 
-/// Compare scale-out behaviour of synthetic data-structure.
-#[tokio::main]
-async fn async_hashmap_scale_out<R>(c: &mut TestHarness, name: &str, write_ratio: usize)
+/// Compare scale-out behaviour of hashmap data-structure with async APIs.
+fn async_hashmap_scale_out<R>(c: &mut TestHarness, name: &str, write_ratio: usize)
 where
     R: ReplicaTrait + Send + Sync + 'static,
     R::D: Send,
@@ -304,7 +303,7 @@ where
                         }
                     }
                 }
-                rt.block_on(async { join_all(futures).await });
+                rt.block_on(async { join_all(join_all(futures).await).await });
             },
         );
 }

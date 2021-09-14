@@ -9,6 +9,7 @@ use std::cell::UnsafeCell;
 use std::ffi::c_void;
 use std::marker::Sync;
 use std::mem;
+use std::pin::Pin;
 use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -77,8 +78,12 @@ where
         unsafe { (&mut *self.data_structure.get()).dispatch_mut(op) }
     }
 
-    async fn async_exec(&self, _op: <Self::D as Dispatch>::WriteOperation, _idx: ReplicaToken) {
-        /* NOP */
+    async fn async_exec(
+        &self,
+        _op: <Self::D as Dispatch>::WriteOperation,
+        _idx: ReplicaToken,
+    ) -> Pin<Box<dyn futures::Future<Output = <Self::D as Dispatch>::Response> + 'life0>> {
+        unreachable!("All opertations must be sync ops")
     }
 
     fn exec_scan(
@@ -97,8 +102,12 @@ where
         unsafe { (&*self.data_structure.get()).dispatch(op) }
     }
 
-    async fn async_exec_ro(&self, _op: <Self::D as Dispatch>::ReadOperation, _idx: ReplicaToken) {
-        /* NOP */
+    async fn async_exec_ro(
+        &self,
+        _op: <Self::D as Dispatch>::ReadOperation,
+        _idx: ReplicaToken,
+    ) -> Pin<Box<dyn futures::Future<Output = <Self::D as Dispatch>::Response> + 'life0>> {
+        unreachable!("All opertations must be sync ops")
     }
 }
 
@@ -152,8 +161,12 @@ where
         unreachable!("All opertations must be read ops")
     }
 
-    async fn async_exec(&self, _op: <Self::D as Dispatch>::WriteOperation, _idx: ReplicaToken) {
-        /* NOP */
+    async fn async_exec(
+        &self,
+        _op: <Self::D as Dispatch>::WriteOperation,
+        _idx: ReplicaToken,
+    ) -> Pin<Box<dyn futures::Future<Output = <Self::D as Dispatch>::Response> + 'life0>> {
+        unreachable!("All opertations must be read ops")
     }
 
     fn exec_scan(
@@ -172,8 +185,12 @@ where
         self.data_structure.dispatch(op)
     }
 
-    async fn async_exec_ro(&self, _op: <Self::D as Dispatch>::ReadOperation, _idx: ReplicaToken) {
-        /* NOP */
+    async fn async_exec_ro(
+        &self,
+        _op: <Self::D as Dispatch>::ReadOperation,
+        _idx: ReplicaToken,
+    ) -> Pin<Box<dyn futures::Future<Output = <Self::D as Dispatch>::Response> + 'life0>> {
+        unreachable!("All opertations must be read ops")
     }
 }
 

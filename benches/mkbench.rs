@@ -21,6 +21,7 @@ use std::hint::black_box;
 use std::io::Write;
 use std::marker::{PhantomData, Send, Sync};
 use std::path::Path;
+use std::pin::Pin;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc, Barrier, Mutex};
 use std::thread::{self, JoinHandle};
@@ -106,7 +107,11 @@ pub trait ReplicaTrait {
     ) -> <Self::D as Dispatch>::Response;
 
     #[cfg(feature = "nr")]
-    async fn async_exec(&self, op: <Self::D as Dispatch>::WriteOperation, idx: ReplicaToken);
+    async fn async_exec(
+        &self,
+        op: <Self::D as Dispatch>::WriteOperation,
+        idx: ReplicaToken,
+    ) -> Pin<Box<dyn futures::Future<Output = <Self::D as Dispatch>::Response> + 'life0>>;
 
     fn exec_scan(
         &self,
@@ -121,7 +126,11 @@ pub trait ReplicaTrait {
     ) -> <Self::D as Dispatch>::Response;
 
     #[cfg(feature = "nr")]
-    async fn async_exec_ro(&self, op: <Self::D as Dispatch>::ReadOperation, idx: ReplicaToken);
+    async fn async_exec_ro(
+        &self,
+        op: <Self::D as Dispatch>::ReadOperation,
+        idx: ReplicaToken,
+    ) -> Pin<Box<dyn futures::Future<Output = <Self::D as Dispatch>::Response> + 'life0>>;
 }
 
 #[async_trait]
@@ -157,8 +166,12 @@ impl<'a, T: Dispatch + Sync + Default> ReplicaTrait for Replica<'a, T> {
     }
 
     #[cfg(feature = "nr")]
-    async fn async_exec(&self, op: <Self::D as Dispatch>::WriteOperation, idx: ReplicaToken) {
-        self.async_execute_mut(op, idx).await;
+    async fn async_exec(
+        &self,
+        op: <Self::D as Dispatch>::WriteOperation,
+        idx: ReplicaToken,
+    ) -> Pin<Box<dyn futures::Future<Output = <Self::D as Dispatch>::Response> + 'life0>> {
+        Box::pin(self.async_execute_mut(op, idx).await)
     }
 
     fn exec_scan(
@@ -181,8 +194,12 @@ impl<'a, T: Dispatch + Sync + Default> ReplicaTrait for Replica<'a, T> {
     }
 
     #[cfg(feature = "nr")]
-    async fn async_exec_ro(&self, op: <Self::D as Dispatch>::ReadOperation, idx: ReplicaToken) {
-        self.async_execute(op, idx).await;
+    async fn async_exec_ro(
+        &self,
+        op: <Self::D as Dispatch>::ReadOperation,
+        idx: ReplicaToken,
+    ) -> Pin<Box<dyn futures::Future<Output = <Self::D as Dispatch>::Response> + 'life0>> {
+        Box::pin(self.async_execute(op, idx).await)
     }
 }
 
@@ -797,7 +814,10 @@ where
                         let mut operations_completed: usize = 0;
                         let mut iter: usize = 0;
                         let nop: usize = operations.len();
-                        let rt = &tokio::runtime::Runtime::new().unwrap();
+                        let rt = &tokio::runtime::Builder::new_multi_thread()
+                            .enable_all()
+                            .build()
+                            .unwrap();
 
                         b.wait();
                         let start = Instant::now();
