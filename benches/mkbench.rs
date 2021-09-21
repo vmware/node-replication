@@ -54,38 +54,38 @@ pub const WARN_THRESHOLD: usize = 1 << 28;
 
 #[cfg(feature = "nr")]
 type BenchFn<R> = fn(
-    crate::utils::ThreadId,
-    ReplicaToken,
-    &Arc<Log<'static, <<R as ReplicaTrait>::D as Dispatch>::WriteOperation>>,
-    &Arc<R>,
-    &Vec<
+    tid: crate::utils::ThreadId,
+    idx: ReplicaToken,
+    log: &Arc<Log<'static, <<R as ReplicaTrait>::D as Dispatch>::WriteOperation>>,
+    replica: &Arc<R>,
+    operations: &Vec<
         Operation<
             <<R as ReplicaTrait>::D as Dispatch>::ReadOperation,
             <<R as ReplicaTrait>::D as Dispatch>::WriteOperation,
         >,
     >,
-    usize, // Operating vector length
-    usize, // current index
-    usize, // batch size
-    &Runtime,
+    num_ops: usize,
+    op_index: usize,
+    batch_size: usize,
+    async_rt: &Runtime,
 );
 
 #[cfg(feature = "c_nr")]
 type BenchFn<R> = fn(
-    crate::utils::ThreadId,
-    ReplicaToken,
-    &Vec<Arc<Log<'static, <<R as ReplicaTrait>::D as Dispatch>::WriteOperation>>>,
-    &Arc<R>,
-    &Vec<
+    tid: crate::utils::ThreadId,
+    idx: ReplicaToken,
+    log: &Vec<Arc<Log<'static, <<R as ReplicaTrait>::D as Dispatch>::WriteOperation>>>,
+    replica: &Arc<R>,
+    operations: &Vec<
         Operation<
             <<R as ReplicaTrait>::D as Dispatch>::ReadOperation,
             <<R as ReplicaTrait>::D as Dispatch>::WriteOperation,
         >,
     >,
-    usize, // Operating vector length
-    usize, // current index
-    usize, // batch size
-    &Runtime,
+    num_ops: usize,
+    op_index: usize,
+    batch_size: usize,
+    async_rt: &Runtime,
 );
 
 #[async_trait]
