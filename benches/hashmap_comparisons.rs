@@ -83,7 +83,7 @@ where
         _op: <Self::D as Dispatch>::WriteOperation,
         _idx: ReplicaToken,
     ) -> Pin<Box<dyn futures::Future<Output = <Self::D as Dispatch>::Response> + 'life0>> {
-        unreachable!("All opertations must be sync ops")
+        unreachable!("All operations must be sync ops")
     }
 
     fn exec_scan(
@@ -107,7 +107,7 @@ where
         _op: <Self::D as Dispatch>::ReadOperation,
         _idx: ReplicaToken,
     ) -> Pin<Box<dyn futures::Future<Output = <Self::D as Dispatch>::Response> + 'life0>> {
-        unreachable!("All opertations must be sync ops")
+        unreachable!("All operations must be sync ops")
     }
 }
 
@@ -158,7 +158,7 @@ where
         _op: <Self::D as Dispatch>::WriteOperation,
         _idx: ReplicaToken,
     ) -> <Self::D as Dispatch>::Response {
-        unreachable!("All opertations must be read ops")
+        unreachable!("All operations must be read ops")
     }
 
     async fn async_exec(
@@ -166,7 +166,7 @@ where
         _op: <Self::D as Dispatch>::WriteOperation,
         _idx: ReplicaToken,
     ) -> Pin<Box<dyn futures::Future<Output = <Self::D as Dispatch>::Response> + 'life0>> {
-        unreachable!("All opertations must be read ops")
+        unreachable!("All operations must be read ops")
     }
 
     fn exec_scan(
@@ -174,7 +174,7 @@ where
         _op: <Self::D as Dispatch>::WriteOperation,
         _idx: ReplicaToken,
     ) -> <Self::D as Dispatch>::Response {
-        unreachable!("All opertations must be read ops")
+        unreachable!("All operations must be read ops")
     }
 
     fn exec_ro(
@@ -190,7 +190,7 @@ where
         _op: <Self::D as Dispatch>::ReadOperation,
         _idx: ReplicaToken,
     ) -> Pin<Box<dyn futures::Future<Output = <Self::D as Dispatch>::Response> + 'life0>> {
-        unreachable!("All opertations must be read ops")
+        unreachable!("All operations must be read ops")
     }
 }
 

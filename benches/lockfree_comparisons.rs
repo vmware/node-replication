@@ -60,7 +60,7 @@ where
         _op: <Self::D as Dispatch>::WriteOperation,
         _idx: ReplicaToken,
     ) -> <Self::D as Dispatch>::Response {
-        unreachable!("All opertations must be read ops")
+        unreachable!("All operations must be read ops")
     }
 
     fn exec_ro(
