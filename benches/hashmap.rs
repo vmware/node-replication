@@ -292,18 +292,22 @@ where
             &bench_name,
             |_cid, rid, _log, replica, ops, nop, index, batch_size, rt| {
                 let mut futures = Vec::with_capacity(batch_size);
-                for i in 0..batch_size {
-                    let op = &ops[(index + i) % nop];
-                    match op {
-                        Operation::ReadOperation(op) => {
-                            futures.push(replica.async_exec_ro(*op, rid));
+                let mut i = 0;
+                rt.block_on(async {
+                    for fut in &mut futures {
+                        let op = &ops[(index + i) % nop];
+                        match op {
+                            Operation::ReadOperation(op) => {
+                                replica.async_exec_ro(*op, rid, fut).await;
+                            }
+                            Operation::WriteOperation(op) => {
+                                replica.async_exec(*op, rid, fut).await;
+                            }
                         }
-                        Operation::WriteOperation(op) => {
-                            futures.push(replica.async_exec(*op, rid));
-                        }
+                        i += 1;
                     }
-                }
-                rt.block_on(async { join_all(join_all(futures).await).await });
+                    join_all(futures.iter_mut().map(|f| f.as_mut().unwrap())).await
+                });
             },
         );
 }

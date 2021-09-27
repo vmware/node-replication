@@ -111,7 +111,10 @@ pub trait ReplicaTrait {
         &self,
         op: <Self::D as Dispatch>::WriteOperation,
         idx: ReplicaToken,
-    ) -> Pin<Box<dyn futures::Future<Output = <Self::D as Dispatch>::Response> + 'life0>>;
+        resp: &mut Option<
+            Pin<Box<dyn futures::Future<Output = <Self::D as Dispatch>::Response> + 'life0 + Send>>,
+        >,
+    );
 
     fn exec_scan(
         &self,
@@ -130,7 +133,10 @@ pub trait ReplicaTrait {
         &self,
         op: <Self::D as Dispatch>::ReadOperation,
         idx: ReplicaToken,
-    ) -> Pin<Box<dyn futures::Future<Output = <Self::D as Dispatch>::Response> + 'life0>>;
+        resp: &mut Option<
+            Pin<Box<dyn futures::Future<Output = <Self::D as Dispatch>::Response> + 'life0 + Send>>,
+        >,
+    );
 }
 
 #[async_trait]
@@ -170,8 +176,11 @@ impl<'a, T: Dispatch + Sync + Default> ReplicaTrait for Replica<'a, T> {
         &self,
         op: <Self::D as Dispatch>::WriteOperation,
         idx: ReplicaToken,
-    ) -> Pin<Box<dyn futures::Future<Output = <Self::D as Dispatch>::Response> + 'life0>> {
-        Box::pin(self.async_execute_mut(op, idx).await)
+        resp: &mut Option<
+            Pin<Box<dyn futures::Future<Output = <Self::D as Dispatch>::Response> + 'life0 + Send>>,
+        >,
+    ) {
+        self.async_execute_mut(op, idx, resp).await;
     }
 
     fn exec_scan(
@@ -198,8 +207,11 @@ impl<'a, T: Dispatch + Sync + Default> ReplicaTrait for Replica<'a, T> {
         &self,
         op: <Self::D as Dispatch>::ReadOperation,
         idx: ReplicaToken,
-    ) -> Pin<Box<dyn futures::Future<Output = <Self::D as Dispatch>::Response> + 'life0>> {
-        Box::pin(self.async_execute(op, idx).await)
+        resp: &mut Option<
+            Pin<Box<dyn futures::Future<Output = <Self::D as Dispatch>::Response> + 'life0 + Send>>,
+        >,
+    ) {
+        self.async_execute(op, idx, resp).await;
     }
 }
 

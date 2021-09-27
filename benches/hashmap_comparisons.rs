@@ -82,7 +82,10 @@ where
         &self,
         _op: <Self::D as Dispatch>::WriteOperation,
         _idx: ReplicaToken,
-    ) -> Pin<Box<dyn futures::Future<Output = <Self::D as Dispatch>::Response> + 'life0>> {
+        _resp: &mut Option<
+            Pin<Box<dyn futures::Future<Output = <Self::D as Dispatch>::Response> + 'life0 + Send>>,
+        >,
+    ) {
         unreachable!("All operations must be sync ops")
     }
 
@@ -106,7 +109,10 @@ where
         &self,
         _op: <Self::D as Dispatch>::ReadOperation,
         _idx: ReplicaToken,
-    ) -> Pin<Box<dyn futures::Future<Output = <Self::D as Dispatch>::Response> + 'life0>> {
+        _resp: &mut Option<
+            Pin<Box<dyn futures::Future<Output = <Self::D as Dispatch>::Response> + 'life0 + Send>>,
+        >,
+    ) {
         unreachable!("All operations must be sync ops")
     }
 }
@@ -165,7 +171,10 @@ where
         &self,
         _op: <Self::D as Dispatch>::WriteOperation,
         _idx: ReplicaToken,
-    ) -> Pin<Box<dyn futures::Future<Output = <Self::D as Dispatch>::Response> + 'life0>> {
+        _resp: &mut Option<
+            Pin<Box<dyn futures::Future<Output = <Self::D as Dispatch>::Response> + 'life0 + Send>>,
+        >,
+    ) {
         unreachable!("All operations must be read ops")
     }
 
@@ -189,7 +198,10 @@ where
         &self,
         _op: <Self::D as Dispatch>::ReadOperation,
         _idx: ReplicaToken,
-    ) -> Pin<Box<dyn futures::Future<Output = <Self::D as Dispatch>::Response> + 'life0>> {
+        _resp: &mut Option<
+            Pin<Box<dyn futures::Future<Output = <Self::D as Dispatch>::Response> + 'life0 + Send>>,
+        >,
+    ) {
         unreachable!("All operations must be read ops")
     }
 }
