@@ -1,10 +1,8 @@
 //! A minimal example that implements a replicated hashmap
 use std::collections::HashMap;
-use std::pin::Pin;
 use std::sync::Arc;
 
 use futures::future::join_all;
-use futures::Future;
 
 use node_replication::Dispatch;
 use node_replication::Log;
@@ -74,18 +72,26 @@ async fn main() {
     let ridx = replica.register().expect("Unable to register with log");
 
     // Issue multiple Put operations
+    let mut i = 0;
     let mut futures = Vec::with_capacity(CAPACITY);
-    for i in 0..CAPACITY {
+    for _ in 0..CAPACITY {
+        futures.push(None);
+    }
+    for fut in &mut futures {
         match i % 2 {
-            0 => futures.push(
-                Box::pin(replica.async_execute_mut(Modify::Put(i, i + 1), ridx).await)
-                    as Pin<Box<dyn Future<Output = <NrHashMap as Dispatch>::Response>>>,
-            ),
-            1 => futures.push(Box::pin(replica.async_execute(Access::Get(i), ridx).await)),
+            0 => {
+                replica
+                    .async_execute_mut(Modify::Put(i, i + 1), ridx, fut)
+                    .await
+            }
+            1 => replica.async_execute(Access::Get(i), ridx, fut).await,
             _ => unreachable!(),
         }
+        i += 1;
     }
-    let resp = join_all(futures).await;
+    assert_eq!(futures.len(), CAPACITY);
+    let resp = join_all(futures.iter_mut().map(|f| f.as_mut().unwrap())).await;
+    assert_eq!(resp.len(), CAPACITY);
 
     // Verify responses
     for (i, item) in resp.iter().enumerate().take(CAPACITY) {

@@ -4,6 +4,7 @@
 use core::cell::RefCell;
 use core::future::Future;
 use core::hint::spin_loop;
+use core::pin::Pin;
 #[cfg(not(loom))]
 use core::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(loom)]
@@ -14,6 +15,7 @@ use alloc::sync::Arc;
 #[cfg(loom)]
 use loom::sync::Arc;
 
+use alloc::prelude::v1::Box;
 use alloc::vec::Vec;
 
 use crossbeam_utils::CachePadded;
@@ -690,14 +692,15 @@ where
         &'a self,
         op: <D as Dispatch>::WriteOperation,
         rid: ReplicaToken,
-    ) -> impl Future<Output = <D as Dispatch>::Response> + 'a {
+        resp: &mut Option<Pin<Box<dyn Future<Output = <D as Dispatch>::Response> + 'a + Send>>>,
+    ) {
         // Enqueue the operation onto the thread local batch.
         // For a single thread the future will append the operation and yield.
         async { while !self.make_pending(op.clone(), rid.0) {} }.await;
 
         // Check for the response even before becoming the combiner,
         // as some other async combiner might have completed the work.
-        async move {
+        *resp = Some(Box::pin(async move {
             match self.contexts[rid.0 - 1].res() {
                 Some(res) => res,
                 None => {
@@ -705,15 +708,16 @@ where
                     self.get_response(rid.0)
                 }
             }
-        }
+        }));
     }
 
     pub async fn async_execute(
         &'a self,
         op: <D as Dispatch>::ReadOperation,
         idx: ReplicaToken,
-    ) -> impl Future<Output = <D as Dispatch>::Response> + 'a {
-        async move { self.read_only(op, idx.0) }
+        resp: &mut Option<Pin<Box<dyn Future<Output = <D as Dispatch>::Response> + 'a + Send>>>,
+    ) {
+        *resp = Some(Box::pin(async move { self.read_only(op, idx.0) }));
     }
 }
 
@@ -906,5 +910,23 @@ mod test {
 
         let t1 = repl.register().expect("Failed to register with replica.");
         assert_eq!(Ok(2), repl.execute(11, t1));
+    }
+
+    #[tokio::test]
+    async fn test_box_reuse() {
+        use futures::executor::block_on;
+        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
+        let repl = Replica::<Data>::new(&slog);
+        let idx = repl.register().expect("Unable to register to the replica");
+
+        let op = 0;
+        let mut resp = None;
+        repl.async_execute_mut(op, idx, &mut resp).await;
+        let res = block_on(resp.as_mut().unwrap()).unwrap();
+        assert_eq!(res, 107);
+
+        repl.async_execute(op, idx, &mut resp).await;
+        let res = block_on(resp.as_mut().unwrap()).unwrap();
+        assert_eq!(res, 1);
     }
 }
