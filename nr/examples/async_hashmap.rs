@@ -7,6 +7,7 @@ use futures::future::join_all;
 use node_replication::Dispatch;
 use node_replication::Log;
 use node_replication::Replica;
+use node_replication::ReusableBoxFuture;
 
 const CAPACITY: usize = 32;
 
@@ -75,7 +76,7 @@ async fn main() {
     let mut i = 0;
     let mut futures = Vec::with_capacity(CAPACITY);
     for _ in 0..CAPACITY {
-        futures.push(None);
+        futures.push(ReusableBoxFuture::new(async move { Default::default() }));
     }
     for fut in &mut futures {
         match i % 2 {
@@ -90,7 +91,7 @@ async fn main() {
         i += 1;
     }
     assert_eq!(futures.len(), CAPACITY);
-    let resp = join_all(futures.iter_mut().map(|f| f.as_mut().unwrap())).await;
+    let resp = join_all(futures).await;
     assert_eq!(resp.len(), CAPACITY);
 
     // Verify responses
