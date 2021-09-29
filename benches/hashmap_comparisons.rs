@@ -9,14 +9,13 @@ use std::cell::UnsafeCell;
 use std::ffi::c_void;
 use std::marker::Sync;
 use std::mem;
-use std::pin::Pin;
 use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use urcu_sys;
 
-use node_replication::{Dispatch, Log, ReplicaToken};
+use node_replication::{Dispatch, Log, ReplicaToken, ReusableBoxFuture};
 
 use crate::mkbench::ReplicaTrait;
 
@@ -82,9 +81,7 @@ where
         &self,
         _op: <Self::D as Dispatch>::WriteOperation,
         _idx: ReplicaToken,
-        _resp: &mut Option<
-            Pin<Box<dyn futures::Future<Output = <Self::D as Dispatch>::Response> + 'life0 + Send>>,
-        >,
+        _resp: &mut ReusableBoxFuture<<Self::D as Dispatch>::Response>,
     ) {
         unreachable!("All operations must be sync ops")
     }
@@ -109,9 +106,7 @@ where
         &self,
         _op: <Self::D as Dispatch>::ReadOperation,
         _idx: ReplicaToken,
-        _resp: &mut Option<
-            Pin<Box<dyn futures::Future<Output = <Self::D as Dispatch>::Response> + 'life0 + Send>>,
-        >,
+        _resp: &mut ReusableBoxFuture<<Self::D as Dispatch>::Response>,
     ) {
         unreachable!("All operations must be sync ops")
     }
@@ -171,9 +166,7 @@ where
         &self,
         _op: <Self::D as Dispatch>::WriteOperation,
         _idx: ReplicaToken,
-        _resp: &mut Option<
-            Pin<Box<dyn futures::Future<Output = <Self::D as Dispatch>::Response> + 'life0 + Send>>,
-        >,
+        _resp: &mut ReusableBoxFuture<<Self::D as Dispatch>::Response>,
     ) {
         unreachable!("All operations must be read ops")
     }
@@ -198,9 +191,7 @@ where
         &self,
         _op: <Self::D as Dispatch>::ReadOperation,
         _idx: ReplicaToken,
-        _resp: &mut Option<
-            Pin<Box<dyn futures::Future<Output = <Self::D as Dispatch>::Response> + 'life0 + Send>>,
-        >,
+        _resp: &mut ReusableBoxFuture<<Self::D as Dispatch>::Response>,
     ) {
         unreachable!("All operations must be read ops")
     }

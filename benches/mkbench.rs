@@ -11,6 +11,7 @@
 #![allow(unused)]
 
 use async_trait::async_trait;
+use node_replication::ReusableBoxFuture;
 use tokio::runtime::Runtime;
 
 use std::cell::{Cell, RefMut};
@@ -111,9 +112,7 @@ pub trait ReplicaTrait {
         &self,
         op: <Self::D as Dispatch>::WriteOperation,
         idx: ReplicaToken,
-        resp: &mut Option<
-            Pin<Box<dyn futures::Future<Output = <Self::D as Dispatch>::Response> + 'life0 + Send>>,
-        >,
+        resp: &mut ReusableBoxFuture<'life0, <Self::D as Dispatch>::Response>,
     );
 
     fn exec_scan(
@@ -133,9 +132,7 @@ pub trait ReplicaTrait {
         &self,
         op: <Self::D as Dispatch>::ReadOperation,
         idx: ReplicaToken,
-        resp: &mut Option<
-            Pin<Box<dyn futures::Future<Output = <Self::D as Dispatch>::Response> + 'life0 + Send>>,
-        >,
+        resp: &mut ReusableBoxFuture<'life0, <Self::D as Dispatch>::Response>,
     );
 }
 
@@ -176,9 +173,7 @@ impl<'a, T: Dispatch + Sync + Default> ReplicaTrait for Replica<'a, T> {
         &self,
         op: <Self::D as Dispatch>::WriteOperation,
         idx: ReplicaToken,
-        resp: &mut Option<
-            Pin<Box<dyn futures::Future<Output = <Self::D as Dispatch>::Response> + 'life0 + Send>>,
-        >,
+        resp: &mut ReusableBoxFuture<'life0, <Self::D as Dispatch>::Response>,
     ) {
         self.async_execute_mut(op, idx, resp).await;
     }
@@ -207,9 +202,7 @@ impl<'a, T: Dispatch + Sync + Default> ReplicaTrait for Replica<'a, T> {
         &self,
         op: <Self::D as Dispatch>::ReadOperation,
         idx: ReplicaToken,
-        resp: &mut Option<
-            Pin<Box<dyn futures::Future<Output = <Self::D as Dispatch>::Response> + 'life0 + Send>>,
-        >,
+        resp: &mut ReusableBoxFuture<'life0, <Self::D as Dispatch>::Response>,
     ) {
         self.async_execute(op, idx, resp).await;
     }
