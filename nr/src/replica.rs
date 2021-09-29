@@ -2,9 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use core::cell::RefCell;
-use core::future::Future;
 use core::hint::spin_loop;
-use core::pin::Pin;
 #[cfg(not(loom))]
 use core::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(loom)]
@@ -15,7 +13,6 @@ use alloc::sync::Arc;
 #[cfg(loom)]
 use loom::sync::Arc;
 
-use alloc::prelude::v1::Box;
 use alloc::vec::Vec;
 
 use crossbeam_utils::CachePadded;
@@ -24,6 +21,7 @@ use super::context::Context;
 use super::log::Log;
 use super::rwlock::RwLock;
 use super::Dispatch;
+use super::ReusableBoxFuture;
 
 /// A token handed out to threads registered with replicas.
 ///
@@ -692,15 +690,15 @@ where
         &'a self,
         op: <D as Dispatch>::WriteOperation,
         rid: ReplicaToken,
-        resp: &mut Option<Pin<Box<dyn Future<Output = <D as Dispatch>::Response> + 'a + Send>>>,
+        resp: &mut ReusableBoxFuture<'a, <D as Dispatch>::Response>,
     ) {
         // Enqueue the operation onto the thread local batch.
         // For a single thread the future will append the operation and yield.
         async { while !self.make_pending(op.clone(), rid.0) {} }.await;
 
-        // Check for the response even before becoming the combiner,
-        // as some other async combiner might have completed the work.
-        *resp = Some(Box::pin(async move {
+        resp.set(async move {
+            // Check for the response even before becoming the combiner,
+            // as some other async combiner might have completed the work.
             match self.contexts[rid.0 - 1].res() {
                 Some(res) => res,
                 None => {
@@ -708,16 +706,16 @@ where
                     self.get_response(rid.0)
                 }
             }
-        }));
+        });
     }
 
     pub async fn async_execute(
         &'a self,
         op: <D as Dispatch>::ReadOperation,
         idx: ReplicaToken,
-        resp: &mut Option<Pin<Box<dyn Future<Output = <D as Dispatch>::Response> + 'a + Send>>>,
+        resp: &mut ReusableBoxFuture<'a, <D as Dispatch>::Response>,
     ) {
-        *resp = Some(Box::pin(async move { self.read_only(op, idx.0) }));
+        resp.set(async move { self.read_only(op, idx.0) });
     }
 }
 
@@ -920,13 +918,14 @@ mod test {
         let idx = repl.register().expect("Unable to register to the replica");
 
         let op = 0;
-        let mut resp = None;
+        let mut resp: ReusableBoxFuture<<Data as Dispatch>::Response> =
+            ReusableBoxFuture::new(async move { Ok(0) });
         repl.async_execute_mut(op, idx, &mut resp).await;
-        let res = block_on(resp.as_mut().unwrap()).unwrap();
+        let res = block_on(&mut resp).unwrap();
         assert_eq!(res, 107);
 
         repl.async_execute(op, idx, &mut resp).await;
-        let res = block_on(resp.as_mut().unwrap()).unwrap();
+        let res = block_on(resp).unwrap();
         assert_eq!(res, 1);
     }
 }
