@@ -87,6 +87,7 @@ extern crate static_assertions;
 mod context;
 mod log;
 mod replica;
+mod reusable_box;
 
 #[cfg(not(loom))]
 #[path = "rwlock.rs"]
@@ -98,6 +99,7 @@ pub mod rwlock;
 pub use crate::log::{Log, MAX_REPLICAS_PER_LOG};
 pub use context::MAX_PENDING_OPS;
 pub use replica::{Replica, ReplicaToken, MAX_THREADS_PER_REPLICA};
+pub use reusable_box::ReusableBoxFuture;
 
 use core::fmt::Debug;
 
