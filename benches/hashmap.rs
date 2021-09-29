@@ -16,6 +16,7 @@ use zipf::ZipfDistribution;
 
 use node_replication::Dispatch;
 use node_replication::Replica;
+use node_replication::ReusableBoxFuture;
 use node_replication::MAX_PENDING_OPS;
 
 mod hashmap_comparisons;
@@ -104,11 +105,11 @@ impl Default for NrHashMap {
 impl Dispatch for NrHashMap {
     type ReadOperation = OpRd;
     type WriteOperation = OpWr;
-    type Response = Result<Option<u64>, ()>;
+    type Response = Option<u64>;
 
     fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
         match op {
-            OpRd::Get(key) => return Ok(self.get(key)),
+            OpRd::Get(key) => return self.get(key),
         }
     }
 
@@ -117,7 +118,7 @@ impl Dispatch for NrHashMap {
         match op {
             OpWr::Put(key, val) => {
                 self.put(key, val);
-                Ok(None)
+                None
             }
         }
     }
@@ -274,7 +275,7 @@ where
     R::D: Dispatch<WriteOperation = OpWr>,
     <R::D as Dispatch>::WriteOperation: Send + Sync,
     <R::D as Dispatch>::ReadOperation: Send + Sync,
-    <R::D as Dispatch>::Response: Sync + Send + Debug,
+    <R::D as Dispatch>::Response: Sync + Send + Debug + Default,
 {
     let ops = generate_operations(NOP, write_ratio, KEY_SPACE, UNIFORM);
     let bench_name = format!("{}-scaleout-wr{}", name, write_ratio);
@@ -291,7 +292,12 @@ where
             c,
             &bench_name,
             |_cid, rid, _log, replica, ops, nop, index, batch_size, rt| {
-                let mut futures = Vec::with_capacity(batch_size);
+                let mut futures: Vec<
+                    ReusableBoxFuture<<<R as ReplicaTrait>::D as Dispatch>::Response>,
+                > = Vec::with_capacity(batch_size);
+                for _i in 0..batch_size {
+                    futures.push(ReusableBoxFuture::new(async move { Default::default() }));
+                }
                 let mut i = 0;
                 rt.block_on(async {
                     for fut in &mut futures {
@@ -306,7 +312,7 @@ where
                         }
                         i += 1;
                     }
-                    join_all(futures.iter_mut().map(|f| f.as_mut().unwrap())).await
+                    join_all(futures).await
                 });
             },
         );
