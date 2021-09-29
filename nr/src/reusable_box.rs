@@ -1,26 +1,26 @@
 // https://github.com/tokio-rs/tokio/blob/master/tokio-util/src/sync/reusable_box.rs
 
-use std::alloc::Layout;
-use std::future::Future;
-use std::panic::AssertUnwindSafe;
-use std::pin::Pin;
-use std::ptr::{self, NonNull};
-use std::task::{Context, Poll};
-use std::{fmt, panic};
+use alloc::alloc::Layout;
+use alloc::boxed::Box;
+use core::fmt;
+use core::future::Future;
+use core::pin::Pin;
+use core::ptr::{self, NonNull};
+use core::task::{Context, Poll};
 
 /// A reusable `Pin<Box<dyn Future<Output = T> + Send>>`.
 ///
 /// This type lets you replace the future stored in the box without
 /// reallocating when the size and alignment permits this.
-pub struct ReusableBoxFuture<T> {
-    boxed: NonNull<dyn Future<Output = T> + Send>,
+pub struct ReusableBoxFuture<'a, T> {
+    boxed: NonNull<dyn Future<Output = T> + Send + 'a>,
 }
 
-impl<T> ReusableBoxFuture<T> {
+impl<'a, T> ReusableBoxFuture<'a, T> {
     /// Create a new `ReusableBoxFuture<T>` containing the provided future.
     pub fn new<F>(future: F) -> Self
     where
-        F: Future<Output = T> + Send + 'static,
+        F: Future<Output = T> + Send + 'a,
     {
         let boxed: Box<dyn Future<Output = T> + Send> = Box::new(future);
 
@@ -38,7 +38,7 @@ impl<T> ReusableBoxFuture<T> {
     /// different from the layout of the currently stored future.
     pub fn set<F>(&mut self, future: F)
     where
-        F: Future<Output = T> + Send + 'static,
+        F: Future<Output = T> + Send + 'a,
     {
         if let Err(future) = self.try_set(future) {
             *self = Self::new(future);
@@ -52,7 +52,7 @@ impl<T> ReusableBoxFuture<T> {
     /// future.
     pub fn try_set<F>(&mut self, future: F) -> Result<(), F>
     where
-        F: Future<Output = T> + Send + 'static,
+        F: Future<Output = T> + Send + 'a,
     {
         // SAFETY: The pointer is not dangling.
         let self_layout = {
@@ -80,12 +80,10 @@ impl<T> ReusableBoxFuture<T> {
     /// same as `self.layout`.
     unsafe fn set_same_layout<F>(&mut self, future: F)
     where
-        F: Future<Output = T> + Send + 'static,
+        F: Future<Output = T> + Send + 'a,
     {
         // Drop the existing future, catching any panics.
-        let result = panic::catch_unwind(AssertUnwindSafe(|| {
-            ptr::drop_in_place(self.boxed.as_ptr());
-        }));
+        ptr::drop_in_place(self.boxed.as_ptr());
 
         // Overwrite the future behind the pointer. This is safe because the
         // allocation was allocated with the same size and alignment as the type F.
@@ -95,14 +93,6 @@ impl<T> ReusableBoxFuture<T> {
         // Update the vtable of self.boxed. The pointer is not null because we
         // just got it from self.boxed, which is not null.
         self.boxed = NonNull::new_unchecked(self_ptr);
-
-        // If the old future's destructor panicked, resume unwinding.
-        match result {
-            Ok(()) => {}
-            Err(payload) => {
-                panic::resume_unwind(payload);
-            }
-        }
     }
 
     /// Get a pinned reference to the underlying future.
@@ -118,7 +108,7 @@ impl<T> ReusableBoxFuture<T> {
     }
 }
 
-impl<T> Future for ReusableBoxFuture<T> {
+impl<'a, T> Future for ReusableBoxFuture<'a, T> {
     type Output = T;
 
     /// Poll the future stored inside this box.
@@ -128,17 +118,17 @@ impl<T> Future for ReusableBoxFuture<T> {
 }
 
 // The future stored inside ReusableBoxFuture<T> must be Send.
-unsafe impl<T> Send for ReusableBoxFuture<T> {}
+unsafe impl<'a, T> Send for ReusableBoxFuture<'a, T> {}
 
 // The only method called on self.boxed is poll, which takes &mut self, so this
 // struct being Sync does not permit any invalid access to the Future, even if
 // the future is not Sync.
-unsafe impl<T> Sync for ReusableBoxFuture<T> {}
+unsafe impl<'a, T> Sync for ReusableBoxFuture<'a, T> {}
 
 // Just like a Pin<Box<dyn Future>> is always Unpin, so is this type.
-impl<T> Unpin for ReusableBoxFuture<T> {}
+impl<'a, T> Unpin for ReusableBoxFuture<'a, T> {}
 
-impl<T> Drop for ReusableBoxFuture<T> {
+impl<'a, T> Drop for ReusableBoxFuture<'a, T> {
     fn drop(&mut self) {
         unsafe {
             drop(Box::from_raw(self.boxed.as_ptr()));
@@ -146,7 +136,7 @@ impl<T> Drop for ReusableBoxFuture<T> {
     }
 }
 
-impl<T> fmt::Debug for ReusableBoxFuture<T> {
+impl<'a, T> fmt::Debug for ReusableBoxFuture<'a, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ReusableBoxFuture").finish()
     }
