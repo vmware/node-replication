@@ -128,8 +128,8 @@ pub trait ReplicaTrait {
     ) -> <Self::D as Dispatch>::Response;
 
     #[cfg(feature = "nr")]
-    async fn async_exec_ro(
-        &self,
+    fn async_exec_ro<'life0>(
+        &'life0 self,
         op: <Self::D as Dispatch>::ReadOperation,
         idx: ReplicaToken,
         resp: &mut ReusableBoxFuture<'life0, <Self::D as Dispatch>::Response>,
@@ -198,13 +198,13 @@ impl<'a, T: Dispatch + Sync + Default> ReplicaTrait for Replica<'a, T> {
     }
 
     #[cfg(feature = "nr")]
-    async fn async_exec_ro(
-        &self,
+    fn async_exec_ro<'life0>(
+        &'life0 self,
         op: <Self::D as Dispatch>::ReadOperation,
         idx: ReplicaToken,
         resp: &mut ReusableBoxFuture<'life0, <Self::D as Dispatch>::Response>,
     ) {
-        self.async_execute(op, idx, resp).await;
+        self.async_execute(op, idx, resp);
     }
 }
 

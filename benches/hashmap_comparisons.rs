@@ -102,7 +102,7 @@ where
         unsafe { (&*self.data_structure.get()).dispatch(op) }
     }
 
-    async fn async_exec_ro(
+    fn async_exec_ro(
         &self,
         _op: <Self::D as Dispatch>::ReadOperation,
         _idx: ReplicaToken,
@@ -187,7 +187,7 @@ where
         self.data_structure.dispatch(op)
     }
 
-    async fn async_exec_ro(
+    fn async_exec_ro(
         &self,
         _op: <Self::D as Dispatch>::ReadOperation,
         _idx: ReplicaToken,

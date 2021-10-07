@@ -709,7 +709,7 @@ where
         });
     }
 
-    pub async fn async_execute(
+    pub fn async_execute(
         &'a self,
         op: <D as Dispatch>::ReadOperation,
         idx: ReplicaToken,
@@ -924,7 +924,7 @@ mod test {
         let res = block_on(&mut resp).unwrap();
         assert_eq!(res, 107);
 
-        repl.async_execute(op, idx, &mut resp).await;
+        repl.async_execute(op, idx, &mut resp);
         let res = block_on(resp).unwrap();
         assert_eq!(res, 1);
     }
