@@ -304,7 +304,7 @@ where
                         let op = &ops[(index + i) % nop];
                         match op {
                             Operation::ReadOperation(op) => {
-                                replica.async_exec_ro(*op, rid, fut).await;
+                                replica.async_exec_ro(*op, rid, fut);
                             }
                             Operation::WriteOperation(op) => {
                                 replica.async_exec(*op, rid, fut).await;

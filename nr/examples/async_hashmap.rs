@@ -85,7 +85,7 @@ async fn main() {
                     .async_execute_mut(Modify::Put(i, i + 1), ridx, fut)
                     .await
             }
-            1 => replica.async_execute(Access::Get(i), ridx, fut).await,
+            1 => replica.async_execute(Access::Get(i), ridx, fut),
             _ => unreachable!(),
         }
         i += 1;
