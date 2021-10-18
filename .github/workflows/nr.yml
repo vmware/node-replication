@@ -15,7 +15,7 @@ jobs:
     steps:
     - name: Install dependencies
       run: sudo apt-get update && sudo apt-get install -y libhwloc-dev gnuplot libfuse-dev liburcu-dev liburcu6
-    - uses: actions/checkout@v2.3.4
+    - uses: actions/checkout@v2.3.5
     - name: Install rust toolchain
       run: rustup show
     - name: Check formatting
