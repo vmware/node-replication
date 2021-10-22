@@ -107,14 +107,6 @@ pub trait ReplicaTrait {
         idx: ReplicaToken,
     ) -> <Self::D as Dispatch>::Response;
 
-    #[cfg(feature = "nr")]
-    async fn async_exec(
-        &self,
-        op: <Self::D as Dispatch>::WriteOperation,
-        idx: ReplicaToken,
-        resp: &mut ReusableBoxFuture<'life0, <Self::D as Dispatch>::Response>,
-    );
-
     fn exec_scan(
         &self,
         op: <Self::D as Dispatch>::WriteOperation,
@@ -126,14 +118,6 @@ pub trait ReplicaTrait {
         op: <Self::D as Dispatch>::ReadOperation,
         idx: ReplicaToken,
     ) -> <Self::D as Dispatch>::Response;
-
-    #[cfg(feature = "nr")]
-    fn async_exec_ro<'life0>(
-        &'life0 self,
-        op: <Self::D as Dispatch>::ReadOperation,
-        idx: ReplicaToken,
-        resp: &mut ReusableBoxFuture<'life0, <Self::D as Dispatch>::Response>,
-    );
 }
 
 #[async_trait]
@@ -168,16 +152,6 @@ impl<'a, T: Dispatch + Sync + Default> ReplicaTrait for Replica<'a, T> {
         self.execute_mut(op, idx)
     }
 
-    #[cfg(feature = "nr")]
-    async fn async_exec(
-        &self,
-        op: <Self::D as Dispatch>::WriteOperation,
-        idx: ReplicaToken,
-        resp: &mut ReusableBoxFuture<'life0, <Self::D as Dispatch>::Response>,
-    ) {
-        self.async_execute_mut(op, idx, resp).await;
-    }
-
     fn exec_scan(
         &self,
         op: <Self::D as Dispatch>::WriteOperation,
@@ -195,16 +169,6 @@ impl<'a, T: Dispatch + Sync + Default> ReplicaTrait for Replica<'a, T> {
         idx: ReplicaToken,
     ) -> <Self::D as Dispatch>::Response {
         self.execute(op, idx)
-    }
-
-    #[cfg(feature = "nr")]
-    fn async_exec_ro<'life0>(
-        &'life0 self,
-        op: <Self::D as Dispatch>::ReadOperation,
-        idx: ReplicaToken,
-        resp: &mut ReusableBoxFuture<'life0, <Self::D as Dispatch>::Response>,
-    ) {
-        self.async_execute(op, idx, resp);
     }
 }
 
@@ -678,6 +642,7 @@ where
         0usize
     }
 
+    #[cfg(not(feature = "async"))]
     fn alloc_replicas(&mut self, replicas: &mut Vec<Arc<R>>) {
         let mut handles = Vec::with_capacity(self.rm.len());
         for (rid, cores) in self.rm.clone().into_iter() {
@@ -693,6 +658,40 @@ where
                     utils::pin_thread(core0);
 
                     (rid, ReplicaTrait::new_arc(log))
+                })
+                .join()
+                .unwrap(),
+            );
+        }
+        // Sort replicas in ascending order; (0,1,2,..). And this way, mappings won't be affect by
+        // how (rid,cores) are stored in self.rm as rid and index in replica-vector will be same.
+        handles.sort_by(|a, b| a.0.cmp(&b.0));
+
+        for handle in handles {
+            replicas.push(handle.1);
+        }
+    }
+
+    #[cfg(feature = "async")]
+    fn alloc_replicas(&mut self, replicas: &mut Vec<Arc<Replica<R::D>>>) {
+        let mut handles = Vec::with_capacity(self.rm.len());
+        for (rid, cores) in self.rm.clone().into_iter() {
+            let log = self.log.clone();
+            // Parallelize the creation of the replicas as this can take
+            // quite some time if you run e.g, PerThread or L1 strategies
+            // on big machine
+            handles.push(
+                thread::spawn(move || {
+                    let core0 = cores[0];
+                    // Pinning the thread to the replica' cores forces the memory
+                    // allocation to be local to the where a replica will be used later
+                    utils::pin_thread(core0);
+
+                    #[cfg(feature = "nr")]
+                    return (rid, Replica::<R::D>::new(&log[0].clone()));
+
+                    #[cfg(feature = "c_nr")]
+                    return (rid, Replica::<R::D>::new(log));
                 })
                 .join()
                 .unwrap(),
@@ -743,7 +742,12 @@ where
         let barrier = Arc::new(Barrier::new(thread_num));
 
         let complete = Arc::new(arr![AtomicUsize::default(); 128]);
+
+        #[cfg(feature = "async")]
+        let mut replicas: Vec<Arc<Replica<R::D>>> = Vec::with_capacity(self.replicas());
+        #[cfg(not(feature = "async"))]
         let mut replicas: Vec<Arc<R>> = Vec::with_capacity(self.replicas());
+
         self.alloc_replicas(&mut replicas);
         let do_sync = self.sync;
 
@@ -815,6 +819,18 @@ where
                             duration
                         );
 
+                        let mut futures: Vec<
+                            ReusableBoxFuture<<<R as ReplicaTrait>::D as Dispatch>::Response>,
+                        > = Vec::with_capacity(batch_size);
+
+                        for _i in 0..batch_size {
+                            let resp = match &operations[0] {
+                                Operation::ReadOperation(op) => replica.exec_ro(*op, replica_token),
+                                Operation::WriteOperation(op) => replica.exec(*op, replica_token),
+                            };
+                            futures.push(ReusableBoxFuture::new(async { resp }));
+                        }
+
                         let mut operations_per_second: Vec<usize> = Vec::with_capacity(32);
                         let mut operations_completed: usize = 0;
                         let mut iter: usize = 0;
@@ -829,17 +845,42 @@ where
                         let end_experiment = start + duration;
                         let mut next_log = start + log_period;
                         while Instant::now() < end_experiment {
-                            black_box((f)(
-                                core_id,
-                                replica_token,
-                                &log,
-                                &replica,
-                                &operations,
-                                nop,
-                                iter,
-                                batch_size,
-                                rt,
-                            ));
+                            #[cfg(feature = "async")]
+                            {
+                                let mut i = 0;
+                                rt.block_on(async {
+                                    for fut in &mut futures {
+                                        let op = &operations[(iter + i) % nop];
+                                        match op {
+                                            Operation::ReadOperation(op) => {
+                                                replica.async_execute(*op, replica_token, fut);
+                                            }
+                                            Operation::WriteOperation(op) => {
+                                                replica
+                                                    .async_execute_mut(*op, replica_token, fut)
+                                                    .await;
+                                            }
+                                        }
+                                        i += 1;
+                                    }
+                                    futures::future::join_all(&mut futures).await
+                                });
+                            }
+
+                            #[cfg(not(feature = "async"))]
+                            {
+                                black_box((f)(
+                                    core_id,
+                                    replica_token,
+                                    &log,
+                                    &replica,
+                                    &operations,
+                                    nop,
+                                    iter,
+                                    batch_size,
+                                    rt,
+                                ));
+                            }
 
                             iter += (iter + batch_size) % nop;
                             operations_completed += 1 * batch_size;

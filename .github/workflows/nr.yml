@@ -40,6 +40,7 @@ jobs:
         cargo bench --bench synthetic --features="nr" --no-run
         cargo bench --bench stack --features="nr" --no-run
         cargo bench --bench hashmap --features="nr cmp" --no-run
+        cargo bench --bench hashmap --features="nr async" --no-run
         cargo bench --bench vspace --features="nr" --no-run
         cargo bench --bench hashbench --features="nr" --no-run
         cargo bench --bench memfs --features="nr" --no-run
