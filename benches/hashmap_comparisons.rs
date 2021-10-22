@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use urcu_sys;
 
-use node_replication::{Dispatch, Log, ReplicaToken, ReusableBoxFuture};
+use node_replication::{Dispatch, Log, ReplicaToken};
 
 use crate::mkbench::ReplicaTrait;
 
@@ -77,15 +77,6 @@ where
         unsafe { (&mut *self.data_structure.get()).dispatch_mut(op) }
     }
 
-    async fn async_exec(
-        &self,
-        _op: <Self::D as Dispatch>::WriteOperation,
-        _idx: ReplicaToken,
-        _resp: &mut ReusableBoxFuture<<Self::D as Dispatch>::Response>,
-    ) {
-        unreachable!("All operations must be sync ops")
-    }
-
     fn exec_scan(
         &self,
         op: <Self::D as Dispatch>::WriteOperation,
@@ -100,15 +91,6 @@ where
         _idx: ReplicaToken,
     ) -> <T as Dispatch>::Response {
         unsafe { (&*self.data_structure.get()).dispatch(op) }
-    }
-
-    fn async_exec_ro(
-        &self,
-        _op: <Self::D as Dispatch>::ReadOperation,
-        _idx: ReplicaToken,
-        _resp: &mut ReusableBoxFuture<<Self::D as Dispatch>::Response>,
-    ) {
-        unreachable!("All operations must be sync ops")
     }
 }
 
@@ -162,15 +144,6 @@ where
         unreachable!("All operations must be read ops")
     }
 
-    async fn async_exec(
-        &self,
-        _op: <Self::D as Dispatch>::WriteOperation,
-        _idx: ReplicaToken,
-        _resp: &mut ReusableBoxFuture<<Self::D as Dispatch>::Response>,
-    ) {
-        unreachable!("All operations must be read ops")
-    }
-
     fn exec_scan(
         &self,
         _op: <Self::D as Dispatch>::WriteOperation,
@@ -185,15 +158,6 @@ where
         _idx: ReplicaToken,
     ) -> <Self::D as Dispatch>::Response {
         self.data_structure.dispatch(op)
-    }
-
-    fn async_exec_ro(
-        &self,
-        _op: <Self::D as Dispatch>::ReadOperation,
-        _idx: ReplicaToken,
-        _resp: &mut ReusableBoxFuture<<Self::D as Dispatch>::Response>,
-    ) {
-        unreachable!("All operations must be read ops")
     }
 }
 

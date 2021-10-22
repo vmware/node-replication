@@ -5,7 +5,6 @@
 #![allow(dead_code)]
 #![feature(test)]
 #![feature(bench_black_box)]
-use futures::future::join_all;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::marker::Sync;
@@ -16,7 +15,6 @@ use zipf::ZipfDistribution;
 
 use node_replication::Dispatch;
 use node_replication::Replica;
-use node_replication::ReusableBoxFuture;
 use node_replication::MAX_PENDING_OPS;
 
 mod hashmap_comparisons;
@@ -291,30 +289,7 @@ where
         .configure(
             c,
             &bench_name,
-            |_cid, rid, _log, replica, ops, nop, index, batch_size, rt| {
-                let mut futures: Vec<
-                    ReusableBoxFuture<<<R as ReplicaTrait>::D as Dispatch>::Response>,
-                > = Vec::with_capacity(batch_size);
-                for _i in 0..batch_size {
-                    futures.push(ReusableBoxFuture::new(async move { Default::default() }));
-                }
-                let mut i = 0;
-                rt.block_on(async {
-                    for fut in &mut futures {
-                        let op = &ops[(index + i) % nop];
-                        match op {
-                            Operation::ReadOperation(op) => {
-                                replica.async_exec_ro(*op, rid, fut);
-                            }
-                            Operation::WriteOperation(op) => {
-                                replica.async_exec(*op, rid, fut).await;
-                            }
-                        }
-                        i += 1;
-                    }
-                    join_all(futures).await
-                });
-            },
+            |_cid, _rid, _log, _replica, _ops, _nop, _index, _batch_size, _rt| {},
         );
 }
 
@@ -406,8 +381,19 @@ fn main() {
 
     hashmap_single_threaded(&mut harness);
     for write_ratio in write_ratios.into_iter() {
-        hashmap_scale_out::<Replica<NrHashMap>>(&mut harness, "hashmap", write_ratio);
-        async_hashmap_scale_out::<Replica<NrHashMap>>(&mut harness, "async-hashmap", write_ratio);
+        #[cfg(not(feature = "async"))]
+        {
+            hashmap_scale_out::<Replica<NrHashMap>>(&mut harness, "hashmap", write_ratio);
+        }
+
+        #[cfg(feature = "async")]
+        {
+            async_hashmap_scale_out::<Replica<NrHashMap>>(
+                &mut harness,
+                "async-hashmap",
+                write_ratio,
+            );
+        }
 
         #[cfg(feature = "cmp")]
         {
