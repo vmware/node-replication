@@ -79,7 +79,7 @@ const_assert!(
 /// `execute`). A mutable operation will be eventually executed against the replica
 /// along with any operations that were received on other replicas that share
 /// the same underlying log.
-pub struct Replica<'a, D>
+pub struct Replica<D>
 where
     D: Sized + Dispatch + Sync,
 {
@@ -115,10 +115,6 @@ where
     /// the combiner enqueues these results into the appropriate thread context.
     result: RefCell<Vec<<D as Dispatch>::Response>>,
 
-    /// Reference to the shared log that operations will be appended to and the
-    /// data structure will be updated from.
-    slog: Arc<Log<'a, <D as Dispatch>::WriteOperation>>,
-
     /// The underlying replicated data structure. Shared between threads registered
     /// with this replica. Each replica maintains its own.
     data: CachePadded<RwLock<D>>,
@@ -126,9 +122,9 @@ where
 
 /// The Replica is Sync. Member variables are protected by a CAS on `combiner`.
 /// Contexts are thread-safe.
-unsafe impl<'a, D> Sync for Replica<'a, D> where D: Sized + Sync + Dispatch {}
+unsafe impl<'a, D> Sync for Replica<D> where D: Sized + Sync + Dispatch {}
 
-impl<'a, D> core::fmt::Debug for Replica<'a, D>
+impl<'a, D> core::fmt::Debug for Replica<D>
 where
     D: Sized + Sync + Dispatch,
 {
@@ -137,7 +133,7 @@ where
     }
 }
 
-impl<'a, D> Replica<'a, D>
+impl<D> Replica<D>
 where
     D: Sized + Default + Dispatch + Sync,
 {
@@ -191,12 +187,12 @@ where
     /// // Create a replica that uses the above log.
     /// let replica = Replica::<Data>::new(&log);
     /// ```
-    pub fn new<'b>(log: &Arc<Log<'b, <D as Dispatch>::WriteOperation>>) -> Arc<Replica<'b, D>> {
+    pub fn new<'a>(log: &Arc<Log<'a, <D as Dispatch>::WriteOperation>>) -> Arc<Replica<D>> {
         Replica::with_data(log, Default::default())
     }
 }
 
-impl<'a, D> Replica<'a, D>
+impl<'a, D> Replica<D>
 where
     D: Sized + Dispatch + Sync,
 {
@@ -213,7 +209,7 @@ where
     pub fn with_data<'b>(
         log: &Arc<Log<'b, <D as Dispatch>::WriteOperation>>,
         d: D,
-    ) -> Arc<Replica<'b, D>> {
+    ) -> Arc<Replica<D>> {
         let mut contexts = Vec::with_capacity(MAX_THREADS_PER_REPLICA);
         // Add `MAX_THREADS_PER_REPLICA` contexts
         for _idx in 0..MAX_THREADS_PER_REPLICA {
@@ -247,7 +243,6 @@ where
                                 >::batch_size(),
                         ),
                     ),
-                slog: log.clone(),
                 data: CachePadded::new(RwLock::<D>::new(d)),
             },
         )
@@ -422,15 +417,16 @@ where
     /// assert_eq!(None, res);
     pub fn execute_mut(
         &self,
+        slog: &Arc<Log<'a, <D as Dispatch>::WriteOperation>>,
         op: <D as Dispatch>::WriteOperation,
         idx: ReplicaToken,
     ) -> <D as Dispatch>::Response {
         // Enqueue the operation onto the thread local batch and then try to flat combine.
         while !self.make_pending(op.clone(), idx.0) {}
-        self.try_combine(idx.0);
+        self.try_combine(slog, idx.0);
 
         // Return the response to the caller function.
-        self.get_response(idx.0)
+        self.get_response(slog, idx.0)
     }
 
     /// Executes a read-only operation against this replica and returns a response.
@@ -481,15 +477,20 @@ where
     /// assert_eq!(Some(100), res);
     pub fn execute(
         &self,
+        slog: &Arc<Log<'a, <D as Dispatch>::WriteOperation>>,
         op: <D as Dispatch>::ReadOperation,
         idx: ReplicaToken,
     ) -> <D as Dispatch>::Response {
-        self.read_only(op, idx.0)
+        self.read_only(slog, op, idx.0)
     }
 
     /// Busy waits until a response is available within the thread's context.
     /// `idx` identifies this thread.
-    fn get_response(&self, idx: usize) -> <D as Dispatch>::Response {
+    fn get_response(
+        &self,
+        slog: &Arc<Log<'a, <D as Dispatch>::WriteOperation>>,
+        idx: usize,
+    ) -> <D as Dispatch>::Response {
         let mut iter = 0;
         let interval = 1 << 29;
 
@@ -504,7 +505,7 @@ where
             iter += 1;
 
             if iter == interval {
-                self.try_combine(idx);
+                self.try_combine(slog, idx);
                 iter = 0;
             }
         }
@@ -518,7 +519,11 @@ where
     /// # Note
     /// There is probably no need for a regular client to ever call this function.
     #[doc(hidden)]
-    pub fn verify<F: FnMut(&D)>(&self, mut v: F) {
+    pub fn verify<F: FnMut(&D)>(
+        &self,
+        slog: &Arc<Log<'a, <D as Dispatch>::WriteOperation>>,
+        mut v: F,
+    ) {
         // Acquire the combiner lock before attempting anything on the data structure.
         // Use an idx greater than the maximum that can be allocated.
         while self.combiner.compare_exchange_weak(
@@ -536,7 +541,7 @@ where
             data.dispatch_mut(o);
         };
 
-        self.slog.exec(self.idx, &mut f);
+        slog.exec(self.idx, &mut f);
 
         v(&data);
 
@@ -547,10 +552,10 @@ where
     /// on another replica are still active. The active replica will use all the entries
     /// in the log and won't be able perform garbage collection because of the inactive
     /// replica. So, this method syncs up the replica against the underlying log.
-    pub fn sync(&self, idx: ReplicaToken) {
-        let ctail = self.slog.get_ctail();
-        while !self.slog.is_replica_synced_for_reads(self.idx, ctail) {
-            self.try_combine(idx.0);
+    pub fn sync(&self, slog: &Arc<Log<'a, <D as Dispatch>::WriteOperation>>, idx: ReplicaToken) {
+        let ctail = slog.get_ctail();
+        while slog.is_replica_synced_for_reads(self.idx, ctail) {
+            self.try_combine(slog, idx.0);
             spin_loop();
         }
     }
@@ -559,14 +564,15 @@ where
     /// Makes sure the replica is synced up against the log before doing so.
     fn read_only(
         &self,
+        slog: &Arc<Log<'a, <D as Dispatch>::WriteOperation>>,
         op: <D as Dispatch>::ReadOperation,
         tid: usize,
     ) -> <D as Dispatch>::Response {
         // We can perform the read only if our replica is synced up against
         // the shared log. If it isn't, then try to combine until it is synced up.
-        let ctail = self.slog.get_ctail();
-        while !self.slog.is_replica_synced_for_reads(self.idx, ctail) {
-            self.try_combine(tid);
+        let ctail = slog.get_ctail();
+        while !slog.is_replica_synced_for_reads(self.idx, ctail) {
+            self.try_combine(slog, tid);
             spin_loop();
         }
 
@@ -582,7 +588,7 @@ where
 
     /// Appends an operation to the log and attempts to perform flat combining.
     /// Accepts a thread `tid` as an argument. Required to acquire the combiner lock.
-    fn try_combine(&self, tid: usize) {
+    fn try_combine(&self, slog: &Arc<Log<'a, <D as Dispatch>::WriteOperation>>, tid: usize) {
         // First, check if there already is a flat combiner. If there is no active flat combiner
         // then try to acquire the combiner lock. If there is, then just return.
         for _i in 0..4 {
@@ -619,7 +625,7 @@ where
         }
 
         // Successfully became the combiner; perform one round of flat combining.
-        self.combine();
+        self.combine(slog);
 
         // Allow other threads to perform flat combining once we have finished all our work.
         // At this point, we've dropped all mutable references to thread contexts and to
@@ -629,7 +635,7 @@ where
 
     /// Performs one round of flat combining. Collects, appends and executes operations.
     #[inline(always)]
-    fn combine(&self) {
+    fn combine(&self, slog: &Arc<Log<'a, <D as Dispatch>::WriteOperation>>) {
         let mut buffer = self.buffer.borrow_mut();
         let mut operations = self.inflight.borrow_mut();
         let mut results = self.result.borrow_mut();
@@ -657,7 +663,7 @@ where
                     results.push(resp);
                 }
             };
-            self.slog.append(&buffer, self.idx, f);
+            slog.append(&buffer, self.idx, f);
         }
 
         // Execute any operations on the shared log against this replica.
@@ -669,7 +675,7 @@ where
                     results.push(resp)
                 };
             };
-            self.slog.exec(self.idx, &mut f);
+            slog.exec(self.idx, &mut f);
         }
 
         // Return/Enqueue responses back into the appropriate thread context(s).
@@ -823,7 +829,7 @@ mod test {
         let _idx = repl.register();
 
         repl.make_pending(121, 1);
-        repl.try_combine(1);
+        repl.try_combine(&slog, 1);
 
         assert_eq!(repl.combiner.load(Ordering::SeqCst), 0);
         assert_eq!(repl.data.read(0).junk, 1);
@@ -838,7 +844,7 @@ mod test {
 
         repl.next.store(9, Ordering::SeqCst);
         repl.make_pending(121, 8);
-        repl.try_combine(1);
+        repl.try_combine(&slog, 1);
 
         assert_eq!(repl.data.read(0).junk, 1);
         assert_eq!(repl.contexts[7].res(), Some(Ok(107)));
@@ -853,7 +859,7 @@ mod test {
         repl.next.store(9, Ordering::SeqCst);
         repl.combiner.store(8, Ordering::SeqCst);
         repl.make_pending(121, 1);
-        repl.try_combine(1);
+        repl.try_combine(&slog, 1);
 
         assert_eq!(repl.data.read(0).junk, 0);
         assert_eq!(repl.contexts[0].res(), None);
@@ -866,7 +872,7 @@ mod test {
         let repl = Replica::<Data>::new(&slog);
         let idx = repl.register().unwrap();
 
-        assert_eq!(Ok(107), repl.execute_mut(121, idx));
+        assert_eq!(Ok(107), repl.execute_mut(&slog, 121, idx));
         assert_eq!(1, repl.data.read(0).junk);
     }
 
@@ -880,7 +886,7 @@ mod test {
 
         repl.make_pending(121, 1);
 
-        assert_eq!(repl.get_response(1), Ok(107));
+        assert_eq!(repl.get_response(&slog, 1), Ok(107));
     }
 
     // Tests whether we can issue a read-only operation against the replica.
@@ -890,8 +896,8 @@ mod test {
         let repl = Replica::<Data>::new(&slog);
         let idx = repl.register().expect("Failed to register with replica.");
 
-        assert_eq!(Ok(107), repl.execute_mut(121, idx));
-        assert_eq!(Ok(1), repl.execute(11, idx));
+        assert_eq!(Ok(107), repl.execute_mut(&slog, 121, idx));
+        assert_eq!(Ok(1), repl.execute(&slog, 11, idx));
     }
 
     // Tests that execute() syncs up the replica with the log before
@@ -907,7 +913,7 @@ mod test {
         slog.exec(2, &mut |_o: u64, _i: usize| {});
 
         let t1 = repl.register().expect("Failed to register with replica.");
-        assert_eq!(Ok(2), repl.execute(11, t1));
+        assert_eq!(Ok(2), repl.execute(&slog, 11, t1));
     }
 
     #[tokio::test]
