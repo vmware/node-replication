@@ -20,6 +20,9 @@ use crossbeam_utils::CachePadded;
 use crate::context::MAX_PENDING_OPS;
 use crate::replica::MAX_THREADS_PER_REPLICA;
 
+/// A token that register a replica with a log.
+pub(crate) type LogToken = usize;
+
 /// The default size of the shared log in bytes. If constructed using the
 /// default constructor, the log will be these many bytes in size. Currently
 /// set to 32 MiB based on the ASPLOS 2017 paper.
@@ -312,7 +315,7 @@ where
     /// // to the log, and execute these operations.
     /// let idx = l.register().expect("Failed to register with the Log.");
     /// ```
-    pub(crate) fn register(&self) -> Option<usize> {
+    pub(crate) fn register(&self) -> Option<LogToken> {
         // Loop until we either run out of identifiers or we manage to increment `next`.
         loop {
             let n = self.next.load(Ordering::Relaxed);
