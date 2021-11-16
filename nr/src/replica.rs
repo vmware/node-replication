@@ -716,7 +716,9 @@ mod test {
     // Tests whether we can construct a Replica given a log.
     #[test]
     fn test_replica_create() {
-        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new(1024));
+        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new_with_bytes(
+            1024,
+        ));
         let repl = Replica::<Data>::new(&slog);
         assert_eq!(repl.idx, 1);
         assert_eq!(repl.combiner.load(Ordering::SeqCst), 0);
@@ -737,7 +739,9 @@ mod test {
     // Tests whether we can register with this replica and receive an idx.
     #[test]
     fn test_replica_register() {
-        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new(1024));
+        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new_with_bytes(
+            1024,
+        ));
         let repl = Replica::<Data>::new(&slog);
         assert_eq!(repl.register(), Some(ReplicaToken(1)));
         assert_eq!(repl.next.load(Ordering::SeqCst), 2);
@@ -749,7 +753,9 @@ mod test {
     // Tests whether registering more than the maximum limit of threads per replica is disallowed.
     #[test]
     fn test_replica_register_none() {
-        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new(1024));
+        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new_with_bytes(
+            1024,
+        ));
         let repl = Replica::<Data>::new(&slog);
         repl.next
             .store(MAX_THREADS_PER_REPLICA + 1, Ordering::SeqCst);
@@ -759,7 +765,9 @@ mod test {
     // Tests that we can successfully allow operations to go pending on this replica.
     #[test]
     fn test_replica_make_pending() {
-        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new(1024));
+        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new_with_bytes(
+            1024,
+        ));
         let repl = Replica::<Data>::new(&slog);
         let mut o = vec![];
 
@@ -772,7 +780,9 @@ mod test {
     // Tests that we can't pend operations on a context that is already full of operations.
     #[test]
     fn test_replica_make_pending_false() {
-        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new(1024));
+        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new_with_bytes(
+            1024,
+        ));
         let repl = Replica::<Data>::new(&slog);
         for _i in 0..Context::<u64, Result<u64, ()>>::batch_size() {
             assert!(repl.make_pending(121, 1))
@@ -813,7 +823,9 @@ mod test {
     // Tests whether try_combine() fails if someone else is currently flat combining.
     #[test]
     fn test_replica_try_combine_fail() {
-        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new(1024));
+        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new_with_bytes(
+            1024,
+        ));
         let repl = Replica::<Data>::new(&slog);
 
         repl.next.store(9, Ordering::SeqCst);
