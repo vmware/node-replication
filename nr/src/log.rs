@@ -164,8 +164,8 @@ impl<T> Log<T>
 where
     T: Sized + Clone,
 {
-    /// Constructs and returns a log of size `bytes` bytes.
-    /// A size between 1-2 MiB usually works well in most cases.
+    /// Constructs and returns a log of (approximately) size `bytes` bytes. A
+    /// size between 1-2 MiB tends to works well.
     ///
     /// # Example
     ///
@@ -180,15 +180,15 @@ where
     ///     Invalid,
     /// }
     ///
-    /// // Creates a 1 Mega Byte sized log.
-    /// let l = Log::<Operation>::new(1 * 1024 * 1024);
+    /// // Creates a 1 MiB sized log.
+    /// let l = Log::<Operation>::new_with_bytes(1 * 1024 * 1024);
     /// ```
     ///
-    /// This method also allocates memory for the log upfront. No further allocations
+    /// This method allocates memory for the log upfront. No further allocations
     /// will be performed once this method returns.
-    pub fn new(bytes: usize) -> Log<T> {
+    pub fn new_with_entries(num: usize) -> Log<T> {
         // Allocate the log
-        let mut v = Vec::with_capacity(Log::<T>::bytes_to_log_entries(bytes));
+        let mut v = Vec::with_capacity(Log::<T>::entries_to_log_entries(num));
         for _ in 0..v.capacity() {
             v.push(Default::default());
         }
@@ -232,6 +232,41 @@ where
         }
     }
 
+    /// Constructs and returns a log of (approximately) size `bytes` bytes. A
+    /// size between 1-2 MiB tends to works well.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use node_replication::Log;
+    ///
+    /// // Operation type that will go onto the log.
+    /// #[derive(Clone)]
+    /// enum Operation {
+    ///     Read,
+    ///     Write(u64),
+    ///     Invalid,
+    /// }
+    ///
+    /// // Creates a 1 MiB sized log.
+    /// let l = Log::<Operation>::new_with_bytes(1 * 1024 * 1024);
+    /// ```
+    ///
+    /// This method allocates memory for the log upfront. No further allocations
+    /// will be performed once this method returns.
+    pub fn new_with_bytes(bytes: usize) -> Log<T> {
+        Log::new_with_entries(Log::<T>::bytes_to_log_entries(bytes))
+    }
+
+    /// Determines the number of entries in the log. This is likely just
+    /// `entries` rounded to the next power of two -- as long as it's above the
+    /// minimal threshold required for the log to work (2*GC_FROM_HEAD).
+    fn entries_to_log_entries(entries: usize) -> usize {
+        core::cmp::max(2 * GC_FROM_HEAD, entries)
+            .checked_next_power_of_two()
+            .unwrap_or(2 * GC_FROM_HEAD)
+    }
+
     /// Given a size in bytes, returns the number of log entries that will fit.
     fn bytes_to_log_entries(bytes: usize) -> usize {
         // Calculate the number of entries that will go into the log, and retrieve a
@@ -245,6 +280,7 @@ where
         if !num.is_power_of_two() {
             num = num.checked_next_power_of_two().unwrap_or(2 * GC_FROM_HEAD)
         }
+
         num
     }
 
@@ -701,7 +737,7 @@ where
 {
     /// Default constructor for the shared log.
     fn default() -> Self {
-        Log::new(DEFAULT_LOG_BYTES)
+        Log::new_with_bytes(DEFAULT_LOG_BYTES)
     }
 }
 
@@ -747,10 +783,8 @@ mod tests {
     // Tests if a small log can be correctly constructed.
     #[test]
     fn test_log_create() {
-        let l = Log::<Operation>::new(1024 * 1024);
+        let l = Log::<Operation>::new_with_bytes(1024 * 1024);
         let n = (1024 * 1024) / Log::<Operation>::entry_size();
-        assert_eq!(l.rawb, 1024 * 1024);
-        assert_eq!(l.size, n);
         assert_eq!(l.slog.len(), n);
         assert_eq!(l.head.load(Ordering::Relaxed), 0);
         assert_eq!(l.tail.load(Ordering::Relaxed), 0);
@@ -769,9 +803,14 @@ mod tests {
     // Tests if the constructor allocates enough space for GC.
     #[test]
     fn test_log_min_size() {
-        let l = Log::<Operation>::new(1024);
-        assert_eq!(l.rawb, 2 * GC_FROM_HEAD * Log::<Operation>::entry_size());
-        assert_eq!(l.size, 2 * GC_FROM_HEAD);
+        let l = Log::<Operation>::new_with_bytes(1024);
+        assert_eq!(l.slog.len(), 2 * GC_FROM_HEAD);
+    }
+
+    // Tests if the constructor allocates enough space for GC.
+    #[test]
+    fn test_log_min_size2() {
+        let l = Log::<Operation>::new_with_entries(1);
         assert_eq!(l.slog.len(), 2 * GC_FROM_HEAD);
     }
 
@@ -779,10 +818,17 @@ mod tests {
     // are a power of two.
     #[test]
     fn test_log_power_of_two() {
-        let l = Log::<Operation>::new(524 * 1024);
+        let l = Log::<Operation>::new_with_bytes(524 * 1024);
         let n = ((524 * 1024) / Log::<Operation>::entry_size()).checked_next_power_of_two();
-        assert_eq!(l.rawb, n.unwrap() * Log::<Operation>::entry_size());
-        assert_eq!(l.size, n.unwrap());
+        assert_eq!(l.slog.len(), n.unwrap());
+    }
+
+    // Tests that the constructor allocates a log whose number of entries
+    // are a power of two.
+    #[test]
+    fn test_log_power_of_two2() {
+        let l = Log::<Operation>::new_with_entries(524 * 1024);
+        let n = (524 * 1024usize).checked_next_power_of_two();
         assert_eq!(l.slog.len(), n.unwrap());
     }
 
@@ -791,8 +837,6 @@ mod tests {
     fn test_log_create_default() {
         let l = Log::<Operation>::default();
         let n = DEFAULT_LOG_BYTES / Log::<Operation>::entry_size();
-        assert_eq!(l.rawb, DEFAULT_LOG_BYTES);
-        assert_eq!(l.size, n);
         assert_eq!(l.slog.len(), n);
         assert_eq!(l.head.load(Ordering::Relaxed), 0);
         assert_eq!(l.tail.load(Ordering::Relaxed), 0);
@@ -811,14 +855,14 @@ mod tests {
     // Tests if we can correctly index into the shared log.
     #[test]
     fn test_log_index() {
-        let l = Log::<Operation>::new(2 * 1024 * 1024);
+        let l = Log::<Operation>::new_with_bytes(2 * 1024 * 1024);
         assert_eq!(l.index(99000), 696);
     }
 
     // Tests if we can correctly register with the shared log.
     #[test]
     fn test_log_register() {
-        let l = Log::<Operation>::new(1024);
+        let l = Log::<Operation>::new_with_bytes(1024);
         assert_eq!(l.register(), Some(1));
         assert_eq!(l.next.load(Ordering::Relaxed), 2);
     }
@@ -826,7 +870,7 @@ mod tests {
     // Tests that we cannot register more than the max replicas with the log.
     #[test]
     fn test_log_register_none() {
-        let l = Log::<Operation>::new(1024);
+        let l = Log::<Operation>::new_with_bytes(1024);
         l.next.store(MAX_REPLICAS_PER_LOG, Ordering::Relaxed);
         assert!(l.register().is_none());
         assert_eq!(l.next.load(Ordering::Relaxed), MAX_REPLICAS_PER_LOG);
@@ -885,12 +929,16 @@ mod tests {
         };
 
         l.next.store(2, Ordering::Relaxed);
-        l.tail.store(l.size - GC_FROM_HEAD - 1, Ordering::Relaxed);
+        l.tail
+            .store(l.slog.len() - GC_FROM_HEAD - 1, Ordering::Relaxed);
         l.ltails[0].store(1024, Ordering::Relaxed);
         l.append(&o, 1, |_o: Operation, _i: usize| {});
 
         assert_eq!(l.head.load(Ordering::Relaxed), 1024);
-        assert_eq!(l.tail.load(Ordering::Relaxed), l.size - GC_FROM_HEAD + 3);
+        assert_eq!(
+            l.tail.load(Ordering::Relaxed),
+            l.slog.len() - GC_FROM_HEAD + 3
+        );
     }
 
     // Tests that on log wrap around, the local mask stays
@@ -908,11 +956,11 @@ mod tests {
 
         l.next.store(2, Ordering::Relaxed);
         l.head.store(2 * 8192, Ordering::Relaxed);
-        l.tail.store(l.size - 10, Ordering::Relaxed);
+        l.tail.store(l.slog.len() - 10, Ordering::Relaxed);
         l.append(&o, 1, |_o: Operation, _i: usize| {});
 
         assert_eq!(l.lmasks[0].get(), true);
-        assert_eq!(l.tail.load(Ordering::Relaxed), l.size + 1014);
+        assert_eq!(l.tail.load(Ordering::Relaxed), l.slog.len() + 1014);
     }
 
     // Test that we can execute operations appended to the log.
@@ -1013,14 +1061,14 @@ mod tests {
         l.append(&o, 1, |_o: Operation, _i: usize| {}); // Required for GC to work correctly.
         l.next.store(2, Ordering::SeqCst);
         l.head.store(2 * 8192, Ordering::SeqCst);
-        l.tail.store(l.size - 10, Ordering::SeqCst);
+        l.tail.store(l.slog.len() - 10, Ordering::SeqCst);
         l.append(&o, 1, |_o: Operation, _i: usize| {});
 
-        l.ltails[0].store(l.size - 10, Ordering::SeqCst);
+        l.ltails[0].store(l.slog.len() - 10, Ordering::SeqCst);
         l.exec(1, &mut f);
 
         assert_eq!(l.lmasks[0].get(), false);
-        assert_eq!(l.tail.load(Ordering::Relaxed), l.size + 1014);
+        assert_eq!(l.tail.load(Ordering::Relaxed), l.slog.len() + 1014);
     }
 
     // Tests that exec() panics if the head of the log advances beyond the tail.
@@ -1082,7 +1130,7 @@ mod tests {
 
         assert_eq!(Log::<Arc<Operation>>::entry_size(), entry_size);
         let size: usize = total_entries * entry_size;
-        let l = Log::<Arc<Operation>>::new(size);
+        let l = Log::<Arc<Operation>>::new_with_bytes(size);
         let o1 = [Arc::new(Operation::Read)];
         let o2 = [Arc::new(Operation::Read)];
         assert_eq!(Arc::strong_count(&o1[0]), 1);
