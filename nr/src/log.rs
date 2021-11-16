@@ -1,14 +1,14 @@
 // Copyright © 2019-2020 VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use alloc::alloc::{alloc, dealloc, Layout};
+use alloc::boxed::Box;
+use alloc::vec::Vec;
 
 use core::cell::Cell;
 use core::default::Default;
 use core::fmt;
-use core::mem::{align_of, size_of};
-use core::ops::{Drop, FnMut};
-use core::slice::from_raw_parts_mut;
+use core::mem::size_of;
+use core::ops::FnMut;
 
 #[cfg(not(loom))]
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -55,7 +55,6 @@ const WARN_THRESHOLD: usize = 1 << 28;
 ///
 /// `T` is the type on the operation - typically an enum class containing opcodes as well as
 /// arguments. It is required that this type be sized and cloneable.
-#[derive(Default)]
 #[repr(align(64))]
 struct Entry<T>
 where
@@ -69,6 +68,19 @@ where
 
     /// Indicates whether this entry represents a valid operation when on the log.
     alivef: AtomicBool,
+}
+
+impl<T> Default for Entry<T>
+where
+    T: Sized + Clone,
+{
+    fn default() -> Self {
+        Self {
+            operation: None,
+            replica: 0,
+            alivef: AtomicBool::new(false),
+        }
+    }
 }
 
 /// A log of operations that is typically accessed by multiple
@@ -93,21 +105,12 @@ where
 /// from `new`. Only in the rare circumstance someone would implement their own
 /// Replica would it be necessary to call any of the Log's methods.
 #[repr(align(64))]
-pub struct Log<'a, T>
+pub struct Log<T>
 where
     T: Sized + Clone,
 {
-    /// Raw pointer to the actual underlying log. Required for dealloc.
-    rawp: *mut u8,
-
-    /// Size of the underlying log in bytes. Required for dealloc.
-    rawb: usize,
-
-    /// The maximum number of entries that can be held inside the log.
-    size: usize,
-
-    /// A reference to the actual log. Nothing but a slice of entries.
-    slog: &'a [Cell<Entry<T>>],
+    /// The actual log, a slice of entries.
+    slog: Box<[Cell<Entry<T>>]>,
 
     /// Logical index into the above slice at which the log starts.
     head: CachePadded<AtomicUsize>,
@@ -137,7 +140,7 @@ where
     lmasks: [CachePadded<Cell<bool>>; MAX_REPLICAS_PER_LOG],
 }
 
-impl<'a, T> fmt::Debug for Log<'a, T>
+impl<T> fmt::Debug for Log<T>
 where
     T: Sized + Clone,
 {
@@ -145,19 +148,19 @@ where
         fmt.debug_struct("Log")
             .field("head", &self.tail)
             .field("tail", &self.head)
-            .field("size", &self.size)
+            .field("log_entries", &self.slog.len())
             .finish()
     }
 }
 
 /// The Log is Send. The *mut u8 (`rawp`) is never dereferenced.
-unsafe impl<'a, T> Send for Log<'a, T> where T: Sized + Clone {}
+unsafe impl<T> Send for Log<T> where T: Sized + Clone {}
 
 /// The Log is Sync. We know this because: `head` and `tail` are atomic variables, `append()`
 /// reserves entries using a CAS, and exec() does not concurrently mutate entries on the log.
-unsafe impl<'a, T> Sync for Log<'a, T> where T: Sized + Clone {}
+unsafe impl<T> Sync for Log<T> where T: Sized + Clone {}
 
-impl<'a, T> Log<'a, T>
+impl<T> Log<T>
 where
     T: Sized + Clone,
 {
@@ -183,49 +186,15 @@ where
     ///
     /// This method also allocates memory for the log upfront. No further allocations
     /// will be performed once this method returns.
-    pub fn new<'b>(bytes: usize) -> Log<'b, T> {
-        // Calculate the number of entries that will go into the log, and retrieve a
-        // slice to it from the allocated region of memory.
-        let mut num = bytes / Log::<T>::entry_size();
-
-        // Make sure the log is large enough to allow for periodic garbage collection.
-        if num < 2 * GC_FROM_HEAD {
-            num = 2 * GC_FROM_HEAD;
+    pub fn new(bytes: usize) -> Log<T> {
+        // Allocate the log
+        let mut v = Vec::with_capacity(Log::<T>::bytes_to_log_entries(bytes));
+        for _ in 0..v.capacity() {
+            v.push(Default::default());
         }
 
-        // Round off to the next power of two if required. If we overflow, then set
-        // the number of entries to the minimum required for GC. This is unlikely since
-        // we'd need a log size > 2^63 entries for this to happen.
-        if !num.is_power_of_two() {
-            num = num.checked_next_power_of_two().unwrap_or(2 * GC_FROM_HEAD)
-        };
-
-        // Now that we have the actual number of entries, allocate the log.
-        let b = num * Log::<T>::entry_size();
-        let mem = unsafe {
-            alloc(
-                Layout::from_size_align(b, align_of::<Cell<Entry<T>>>())
-                    .expect("Alignment error while allocating the shared log!"),
-            )
-        };
-        if mem.is_null() {
-            panic!("Failed to allocate memory for the shared log!");
-        }
-        let raw = unsafe { from_raw_parts_mut(mem as *mut Cell<Entry<T>>, num) };
-
-        // Initialize all log entries by calling the default constructor.
-        for e in raw.iter_mut() {
-            unsafe {
-                ::core::ptr::write(
-                    e,
-                    Cell::new(Entry {
-                        operation: None,
-                        replica: 0usize,
-                        alivef: AtomicBool::new(false),
-                    }),
-                );
-            }
-        }
+        // Convert it to a boxed slice, so we don't accidentially change the size
+        let raw = v.into_boxed_slice();
 
         #[allow(clippy::declare_interior_mutable_const)]
         const LMASK_DEFAULT: CachePadded<Cell<bool>> = CachePadded::new(Cell::new(true));
@@ -236,9 +205,6 @@ where
             const LTAIL_DEFAULT: CachePadded<AtomicUsize> = CachePadded::new(AtomicUsize::new(0));
 
             Log {
-                rawp: mem,
-                rawb: b,
-                size: num,
                 slog: raw,
                 head: CachePadded::new(AtomicUsize::new(0usize)),
                 tail: CachePadded::new(AtomicUsize::new(0usize)),
@@ -255,9 +221,6 @@ where
         {
             use arr_macro::arr;
             Log {
-                rawp: mem,
-                rawb: b,
-                size: num,
                 slog: raw,
                 head: CachePadded::new(AtomicUsize::new(0usize)),
                 tail: CachePadded::new(AtomicUsize::new(0usize)),
@@ -267,6 +230,22 @@ where
                 lmasks: [LMASK_DEFAULT; MAX_REPLICAS_PER_LOG],
             }
         }
+    }
+
+    /// Given a size in bytes, returns the number of log entries that will fit.
+    fn bytes_to_log_entries(bytes: usize) -> usize {
+        // Calculate the number of entries that will go into the log, and retrieve a
+        // slice to it from the allocated region of memory.
+        // Make sure the log is large enough to allow for periodic garbage collection.
+        let mut num = core::cmp::max(2 * GC_FROM_HEAD, bytes / Log::<T>::entry_size());
+
+        // Round off to the next power of two if required. If we overflow, then set
+        // the number of entries to the minimum required for GC. This is unlikely since
+        // we'd need a log size > 2^63 entries for this to happen.
+        if !num.is_power_of_two() {
+            num = num.checked_next_power_of_two().unwrap_or(2 * GC_FROM_HEAD)
+        }
+        num
     }
 
     /// Returns the size of an entry in bytes.
@@ -390,10 +369,10 @@ where
             let head = self.head.load(Ordering::Relaxed);
 
             // If there are fewer than `GC_FROM_HEAD` entries on the log, then just
-            // try again. The replica that reserved entry (h + self.size - GC_FROM_HEAD)
+            // try again. The replica that reserved entry (h + self.slog.len() - GC_FROM_HEAD)
             // is currently trying to advance the head of the log. Keep refreshing the
             // replica against the log to make sure that it isn't deadlocking GC.
-            if tail > head + self.size - GC_FROM_HEAD {
+            if tail > head + self.slog.len() - GC_FROM_HEAD {
                 if waitgc % WARN_THRESHOLD == 0 {
                     warn!(
                         "append(ops.len()={}, {}) takes too many iterations ({}) waiting for gc...",
@@ -413,7 +392,7 @@ where
             // If on adding in the above entries there would be fewer than `GC_FROM_HEAD`
             // entries left on the log, then we need to advance the head of the log.
             let mut advance = false;
-            if tail + nops > head + self.size - GC_FROM_HEAD {
+            if tail + nops > head + self.slog.len() - GC_FROM_HEAD {
                 advance = true
             };
 
@@ -545,7 +524,7 @@ where
             unsafe { d((*e).operation.as_ref().unwrap().clone(), (*e).replica) };
 
             // Looks like we're going to wrap around now; flip this replica's local mask.
-            if self.index(i) == self.size - 1 {
+            if self.index(i) == self.slog.len() - 1 {
                 self.lmasks[idx - 1].set(!self.lmasks[idx - 1].get());
                 //trace!("idx: {} lmask: {}", idx, self.lmasks[idx - 1].get());
             }
@@ -560,7 +539,7 @@ where
     /// Returns a physical index given a logical index into the shared log.
     #[inline(always)]
     fn index(&self, logical: usize) -> usize {
-        logical & (self.size - 1)
+        logical & (self.slog.len() - 1)
     }
 
     /// Advances the head of the log forward. If a replica has stopped making progress,
@@ -608,7 +587,7 @@ where
             // Make sure that we freed up enough space so that threads waiting for
             // GC in append can make progress. Otherwise, try to make progress again.
             // If we're making progress again, then try consuming entries on the log.
-            if f < min_local_tail + self.size - GC_FROM_HEAD {
+            if f < min_local_tail + self.slog.len() - GC_FROM_HEAD {
                 return;
             } else {
                 self.exec(rid, &mut s);
@@ -641,7 +620,7 @@ where
 
         // Next, free up all log entries. Use pointers to avoid memcpy and speed up
         // the reset of the log here.
-        for i in 0..self.size {
+        for i in 0..self.slog.len() {
             let e = self.slog[self.index(i)].as_ptr();
             (*e).alivef.store(false, Ordering::Release);
         }
@@ -716,29 +695,13 @@ where
     }
 }
 
-impl<'a, T> Default for Log<'a, T>
+impl<T> Default for Log<T>
 where
     T: Sized + Clone,
 {
     /// Default constructor for the shared log.
     fn default() -> Self {
         Log::new(DEFAULT_LOG_BYTES)
-    }
-}
-
-impl<'a, T> Drop for Log<'a, T>
-where
-    T: Sized + Clone,
-{
-    /// Destructor for the shared log.
-    fn drop(&mut self) {
-        unsafe {
-            dealloc(
-                self.rawp,
-                Layout::from_size_align(self.rawb, align_of::<Cell<Entry<T>>>())
-                    .expect("Alignment error while deallocating the shared log!"),
-            )
-        };
     }
 }
 
