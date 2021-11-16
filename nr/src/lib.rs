@@ -69,6 +69,8 @@
     feature = "unstable",
     feature(new_uninit, get_mut_unchecked, negative_impls)
 )]
+#![feature(try_reserve)]
+#![feature(box_syntax)]
 
 #[cfg(test)]
 extern crate std;
@@ -83,6 +85,10 @@ extern crate log as logging;
 
 #[macro_use]
 extern crate static_assertions;
+
+use alloc::vec::Vec;
+use core::marker::Sync;
+use core::num::NonZeroUsize;
 
 mod context;
 mod log;
@@ -132,6 +138,65 @@ pub trait Dispatch {
     /// Method on the data structure that allows a write operation to be
     /// executed against it.
     fn dispatch_mut(&mut self, op: Self::WriteOperation) -> Self::Response;
+}
+
+pub struct NodeReplicationError;
+
+pub struct NodeReplicated<D: Dispatch + Sync> {
+    log: Log<D::WriteOperation>,
+    replicas: Vec<Box<Replica<D>>>,
+}
+
+use crate::replica::ReplicaId;
+use alloc::prelude::v1::Box;
+//use alloc::sync::Arc;
+use alloc::collections::TryReserveError;
+
+impl<D> NodeReplicated<D>
+where
+    D: Default + Dispatch + Sized + Sync,
+{
+    pub fn new(num_replicas: NonZeroUsize) -> Result<Self, TryReserveError> {
+        assert!(num_replicas.get() < MAX_REPLICAS_PER_LOG);
+        let log = Log::default();
+
+        let mut replicas = Vec::new();
+        replicas.try_reserve(num_replicas.get())?;
+        for replica_id in 0..num_replicas.get() {
+            let log_token = log
+                .register()
+                .expect("Succeeds (num_replicas < MAX_REPLICAS_PER_LOG)");
+
+            // Succeeds (try_reserve)
+            replicas.push(box Replica::new(replica_id, log_token));
+        }
+
+        Ok(NodeReplicated { replicas, log })
+    }
+
+    pub fn register(&self, replica_id: ReplicaId) -> Option<ReplicaToken> {
+        self.replicas[replica_id].register()
+    }
+
+    pub fn execute_mut(
+        &self,
+        op: <D as Dispatch>::WriteOperation,
+        idx: ReplicaToken,
+    ) -> <D as Dispatch>::Response {
+        self.replicas[idx.rid()].execute_mut(&self.log, op, idx)
+    }
+
+    pub fn execute(
+        &self,
+        op: <D as Dispatch>::ReadOperation,
+        idx: ReplicaToken,
+    ) -> <D as Dispatch>::Response {
+        self.replicas[idx.rid()].execute(&self.log, op, idx)
+    }
+
+    pub fn sync(&self, idx: ReplicaToken) {
+        self.replicas[idx.rid()].sync(&self.log, idx)
+    }
 }
 
 #[cfg(doctest)]
