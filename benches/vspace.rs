@@ -12,16 +12,9 @@ use std::mem::transmute;
 use std::pin::Pin;
 
 use log::{debug, trace};
-use rand::{thread_rng, Rng};
 use x86::bits64::paging::*;
 
-use node_replication::Dispatch;
-use node_replication::Replica;
-
-mod mkbench;
-mod utils;
-use utils::benchmark::*;
-use utils::Operation;
+const VSPACE_RANGE: u64 = 256*1024*1024*1024; 
 
 fn kernel_vaddr_to_paddr(v: VAddr) -> PAddr {
     let vaddr_val: usize = v.into();
@@ -34,8 +27,8 @@ fn paddr_to_kernel_vaddr(p: PAddr) -> VAddr {
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-struct VSpaceError {
-    at: u64,
+pub struct VSpaceError {
+    pub at: u64,
 }
 
 /// Type of resource we're trying to allocate
@@ -142,15 +135,45 @@ impl fmt::Display for MapAction {
 
 pub struct VSpace {
     pub pml4: Pin<Box<PML4>>,
-    allocs: Vec<(*mut u8, usize)>,
+    pub mem_counter: usize,
+    //allocs: Vec<(*mut u8, usize)>,
 }
 
 unsafe impl Sync for VSpace {}
 unsafe impl Send for VSpace {}
 
+
+/*
+/// The Dispatch traits executes `ReadOperation` (our Access enum)
+/// and `WriteOperation` (our Modify enum) against the replicated
+/// data-structure.
+impl Dispatch for VSpace {
+   type ReadOperation = Access;
+   type WriteOperation = Modify;
+   type Response = u64;
+
+   /// The `dispatch` function applies the immutable operations.
+   fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
+       match op {
+           Access::Resolve(key) => self.resolveWrapped(key),
+       }
+   }
+
+   /// The `dispatch_mut` function applies the mutable operations.
+   fn dispatch_mut(
+       &mut self,
+       op: Self::WriteOperation,
+   ) -> Self::Response {
+       match op {
+           Modify::Map(key, value) => self.mapGenericWrapped(key, value, 0x1000) as u64,
+       }
+   }
+}
+ */
+
 impl Drop for VSpace {
     fn drop(&mut self) {
-        unsafe {
+        /*unsafe {
             self.allocs.reverse();
             for (base, size) in self.allocs.iter() {
                 //println!("-- dealloc {:p} {:#x}", base, size);
@@ -159,23 +182,49 @@ impl Drop for VSpace {
                     core::alloc::Layout::from_size_align_unchecked(*size, 4096),
                 );
             }
-        }
+        }*/
     }
 }
 
 impl Default for VSpace {
     fn default() -> VSpace {
-        VSpace {
+        let mut vs = VSpace {
             pml4: Box::pin(
                 [PML4Entry::new(PAddr::from(0x0u64), PML4Flags::empty()); PAGE_SIZE_ENTRIES],
             ),
-            allocs: Vec::with_capacity(1024),
+            mem_counter: 4096,
+            //allocs: Vec::with_capacity(1024),
+        };
+        for i in 0..VSPACE_RANGE / 4096 {
+            assert!(vs.map_generic(
+                VAddr::from(i * 4096),
+                (PAddr::from(i * 4096), 4096),
+                MapAction::ReadWriteExecuteUser,
+            ).is_ok());
         }
+
+        vs
     }
 }
 
 impl VSpace {
-    fn map_generic(
+    pub fn mapGenericWrapped(
+        self: &mut VSpace,
+        vbase: u64,
+        pregion: u64,
+        pregion_len: usize,
+    ) -> bool {
+        let rights = MapAction::ReadWriteExecuteUser;
+        let r = self.map_generic(
+            VAddr::from(vbase),
+            (PAddr::from(pregion), pregion_len),
+            rights,
+        );
+
+        r.is_ok()
+    }
+
+    pub fn map_generic(
         &mut self,
         vbase: VAddr,
         pregion: (PAddr, usize),
@@ -355,11 +404,12 @@ impl VSpace {
         let mut pt_idx = pt_index(vbase);
         let mut mapped: usize = 0;
         while mapped < psize && pt_idx < 512 {
-            if !pt[pt_idx].is_present() {
+            // XXX: allow updates
+            //if !pt[pt_idx].is_present() {
                 pt[pt_idx] = PTEntry::new(pbase + mapped, PTFlags::P | rights.to_pt_rights());
-            } else {
-                return Err(VSpaceError { at: vbase.as_u64() });
-            }
+            //} else {
+            //    return Err(VSpaceError { at: vbase.as_u64() });
+            //}
 
             mapped += BASE_PAGE_SIZE;
             pt_idx += 1;
@@ -383,10 +433,15 @@ impl VSpace {
 
     /// A simple wrapper function for allocating just one page.
     fn allocate_one_page(&mut self) -> PAddr {
+        log::info!("allocate a page...");
+        self.mem_counter += 4096;
         self.allocate_pages(1, ResourceType::PageTable)
     }
 
     fn allocate_pages(&mut self, how_many: usize, _typ: ResourceType) -> PAddr {
+        log::info!("allocate_pages {}...", how_many);
+        self.mem_counter += how_many * 4096;
+
         let new_region: *mut u8 = unsafe {
             alloc::alloc::alloc(core::alloc::Layout::from_size_align_unchecked(
                 how_many * BASE_PAGE_SIZE,
@@ -399,7 +454,7 @@ impl VSpace {
                 *new_region.offset(i as isize) = 0u8;
             }
         }
-        self.allocs.push((new_region, how_many * BASE_PAGE_SIZE));
+        //self.allocs.push((new_region, how_many * BASE_PAGE_SIZE));
 
         kernel_vaddr_to_paddr(VAddr::from(new_region as usize))
     }
@@ -434,7 +489,12 @@ impl VSpace {
         unsafe { transmute::<VAddr, &mut PDPT>(paddr_to_kernel_vaddr(entry.address())) }
     }
 
-    fn resolve_addr(&self, addr: VAddr) -> Option<PAddr> {
+    pub fn resolveWrapped(&self, addr: u64) -> u64 {
+        self.resolve_addr(VAddr::from(addr)).map(|pa| pa.as_u64()).unwrap_or(0x0)
+    }
+
+    pub fn resolve_addr(&self, addr: VAddr) -> Option<PAddr> {
+        //log::error!("resolv addr {:#x}", addr);
         let pml4_idx = pml4_index(addr);
         if self.pml4[pml4_idx].is_present() {
             let pdpt_idx = pdpt_index(addr);
@@ -456,6 +516,8 @@ impl VSpace {
                             let pt_idx = pt_index(addr);
                             let pt = self.get_pt(pd[pd_idx]);
                             if pt[pt_idx].is_present() {
+                                //log::error!("return {:#x}", pt[pt_idx].address());
+
                                 let page_offset = addr.base_page_offset();
                                 return Some(pt[pt_idx].address() + page_offset);
                             }
@@ -463,11 +525,13 @@ impl VSpace {
                     }
                 }
             }
+        }else {
+           // log::error!("pml4 not present {:#x}", addr);
         }
         None
     }
 
-    fn map_new(
+    pub fn map_new(
         &mut self,
         base: VAddr,
         size: usize,
@@ -481,15 +545,23 @@ impl VSpace {
     }
 }
 
+mod mkbench;
+mod utils;
+
+use rand::{thread_rng, Rng};
+use node_replication::Dispatch;
+use node_replication::Replica;
+use utils::benchmark::*;
+use utils::Operation;
+
 #[derive(Copy, Clone, Debug, PartialEq)]
-enum OpcodeWr {
-    Map(VAddr, usize, MapAction, PAddr),
-    MapDevice(VAddr, PAddr, usize),
+enum Modify {
+    Map(u64, u64),
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
-enum OpcodeRd {
-    Identify(u64),
+enum Access {
+    Resolve(u64),
 }
 
 #[derive(Default)]
@@ -498,58 +570,51 @@ struct VSpaceDispatcher {
 }
 
 impl Dispatch for VSpaceDispatcher {
-    type ReadOperation = OpcodeRd;
-    type WriteOperation = OpcodeWr;
-    type Response = Result<(u64, u64), VSpaceError>;
+   type ReadOperation = Access;
+   type WriteOperation = Modify;
+   type Response = u64;
 
-    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
+   /// The `dispatch` function applies the immutable operations.
+   fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
+        let mut rng = thread_rng();
+        const VAL_RANGE_MASK: u64 = (VSPACE_RANGE-1) & !(0xfff);
+        let op = Access::Resolve(rng.gen::<u64>()  & VAL_RANGE_MASK);
         match op {
-            OpcodeRd::Identify(base) => {
-                let paddr = self.vspace.resolve_addr(VAddr::from(base));
-                Ok((paddr.map(|pnum| pnum.as_u64()).unwrap_or(0x0), 0x0))
-            }
+            Access::Resolve(key) => self.vspace.resolveWrapped(key),
         }
-    }
+   }
 
-    fn dispatch_mut(&mut self, op: Self::WriteOperation) -> Self::Response {
-        match op {
-            OpcodeWr::Map(vbase, length, rights, pbase) => {
-                let (retaddr, len) = self.vspace.map_new(vbase, length, rights, pbase)?;
-                Ok((retaddr.as_u64(), len as u64))
-            }
-            OpcodeWr::MapDevice(base, paddr, bound) => {
-                self.vspace
-                    .map_generic(base, (paddr, bound as usize), MapAction::ReadWriteUser)?;
-                Ok((0, 0))
-            }
-        }
-    }
+   /// The `dispatch_mut` function applies the mutable operations.
+   fn dispatch_mut(
+       &mut self,
+       op: Self::WriteOperation,
+   ) -> Self::Response {
+       match op {
+           Modify::Map(key, value) => self.vspace.mapGenericWrapped(key, value, 0x1000) as u64,
+       }
+   }
 }
 
-fn generate_operations(nop: usize) -> Vec<Operation<OpcodeRd, OpcodeWr>> {
+fn generate_operations(nop: usize) -> Vec<Operation<Access, Modify>> {
     let mut ops = Vec::with_capacity(nop);
     let mut rng = thread_rng();
 
-    const PAGE_RANGE_MASK: u64 = !0xffff_0000_0000_0fff;
-    const MAP_SIZE_MASK: u64 = !0xffff_ffff_f000_0fff;
+    const VAL_RANGE_MASK: u64 = (VSPACE_RANGE-1) & !(0xfff);
     for _i in 0..nop {
-        match rng.gen::<usize>() % 3 {
-            0 => ops.push(Operation::ReadOperation(OpcodeRd::Identify(
-                rng.gen::<u64>(),
-            ))),
-            1 => ops.push(Operation::WriteOperation(OpcodeWr::Map(
-                VAddr::from(rng.gen::<u64>() & PAGE_RANGE_MASK),
-                rng.gen::<usize>() & MAP_SIZE_MASK as usize,
-                MapAction::ReadWriteUser,
-                PAddr::from(rng.gen::<u64>() & PAGE_RANGE_MASK),
-            ))),
-            2 => ops.push(Operation::WriteOperation(OpcodeWr::MapDevice(
-                VAddr::from(rng.gen::<u64>() & PAGE_RANGE_MASK),
-                PAddr::from(rng.gen::<u64>() & PAGE_RANGE_MASK),
-                rng.gen::<usize>() & MAP_SIZE_MASK as usize,
-            ))),
-            _ => unreachable!(),
-        }
+        let val = rng.gen::<u64>()  & VAL_RANGE_MASK;
+        //log::error!("val = {:#x}", val);
+        //match rng.gen::<usize>() % 2 {
+            //0 => 
+            ops.push(Operation::ReadOperation(Access::Resolve(
+                rng.gen::<u64>()  & VAL_RANGE_MASK,
+            )));
+            //,
+            //1 => ops.push(Operation::WriteOperation(Modify::Map(
+            //    rng.gen::<u64>()  & VAL_RANGE_MASK,
+            //    rng.gen::<u64>()  & VAL_RANGE_MASK,
+            //))),
+            //_ => unreachable!(),
+        //}
     }
     ops
 }
@@ -566,12 +631,20 @@ fn vspace_single_threaded(c: &mut TestHarness) {
 }
 
 fn vspace_scale_out(c: &mut TestHarness) {
-    const NOP: usize = 3000;
+    const NOP: usize = 1_000_000;
     let ops = generate_operations(NOP);
+    use mkbench::*;
 
     mkbench::ScaleBenchBuilder::<Replica<VSpaceDispatcher>>::new(ops)
-        .machine_defaults()
+        .thread_mapping(ThreadMapping::Sequential)
+        .replica_strategy(ReplicaStrategy::Socket)
+        .replica_strategy(ReplicaStrategy::One)
         .log_strategy(mkbench::LogStrategy::One)
+        //.threads(1)
+        .threads(24)
+        .threads(48)
+        .threads(72)
+        .threads(96)
         .configure(
             c,
             "vspace-scaleout",
@@ -590,6 +663,6 @@ fn main() {
     let _r = env_logger::try_init();
     let mut harness = Default::default();
 
-    vspace_single_threaded(&mut harness);
+    //vspace_single_threaded(&mut harness);
     vspace_scale_out(&mut harness);
 }
