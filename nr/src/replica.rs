@@ -187,7 +187,7 @@ where
     /// // Create a replica that uses the above log.
     /// let replica = Replica::<Data>::new(&log);
     /// ```
-    pub fn new<'a>(log: &Arc<Log<'a, <D as Dispatch>::WriteOperation>>) -> Arc<Replica<D>> {
+    pub fn new(log: &Arc<Log<<D as Dispatch>::WriteOperation>>) -> Arc<Replica<D>> {
         Replica::with_data(log, Default::default())
     }
 }
@@ -206,10 +206,7 @@ where
     /// to every Replica object. If not the resulting operations executed
     /// against replicas may not give deterministic results.
     #[cfg(not(feature = "unstable"))]
-    pub fn with_data<'b>(
-        log: &Arc<Log<'b, <D as Dispatch>::WriteOperation>>,
-        d: D,
-    ) -> Arc<Replica<D>> {
+    pub fn with_data(log: &Arc<Log<<D as Dispatch>::WriteOperation>>, d: D) -> Arc<Replica<D>> {
         let mut contexts = Vec::with_capacity(MAX_THREADS_PER_REPLICA);
         // Add `MAX_THREADS_PER_REPLICA` contexts
         for _idx in 0..MAX_THREADS_PER_REPLICA {
@@ -417,7 +414,7 @@ where
     /// assert_eq!(None, res);
     pub fn execute_mut(
         &self,
-        slog: &Arc<Log<'a, <D as Dispatch>::WriteOperation>>,
+        slog: &Arc<Log<<D as Dispatch>::WriteOperation>>,
         op: <D as Dispatch>::WriteOperation,
         idx: ReplicaToken,
     ) -> <D as Dispatch>::Response {
@@ -477,7 +474,7 @@ where
     /// assert_eq!(Some(100), res);
     pub fn execute(
         &self,
-        slog: &Arc<Log<'a, <D as Dispatch>::WriteOperation>>,
+        slog: &Arc<Log<<D as Dispatch>::WriteOperation>>,
         op: <D as Dispatch>::ReadOperation,
         idx: ReplicaToken,
     ) -> <D as Dispatch>::Response {
@@ -488,7 +485,7 @@ where
     /// `idx` identifies this thread.
     fn get_response(
         &self,
-        slog: &Arc<Log<'a, <D as Dispatch>::WriteOperation>>,
+        slog: &Arc<Log<<D as Dispatch>::WriteOperation>>,
         idx: usize,
     ) -> <D as Dispatch>::Response {
         let mut iter = 0;
@@ -519,11 +516,7 @@ where
     /// # Note
     /// There is probably no need for a regular client to ever call this function.
     #[doc(hidden)]
-    pub fn verify<F: FnMut(&D)>(
-        &self,
-        slog: &Arc<Log<'a, <D as Dispatch>::WriteOperation>>,
-        mut v: F,
-    ) {
+    pub fn verify<F: FnMut(&D)>(&self, slog: &Arc<Log<<D as Dispatch>::WriteOperation>>, mut v: F) {
         // Acquire the combiner lock before attempting anything on the data structure.
         // Use an idx greater than the maximum that can be allocated.
         while self.combiner.compare_exchange_weak(
@@ -552,7 +545,7 @@ where
     /// on another replica are still active. The active replica will use all the entries
     /// in the log and won't be able perform garbage collection because of the inactive
     /// replica. So, this method syncs up the replica against the underlying log.
-    pub fn sync(&self, slog: &Arc<Log<'a, <D as Dispatch>::WriteOperation>>, idx: ReplicaToken) {
+    pub fn sync(&self, slog: &Arc<Log<<D as Dispatch>::WriteOperation>>, idx: ReplicaToken) {
         let ctail = slog.get_ctail();
         while slog.is_replica_synced_for_reads(self.idx, ctail) {
             self.try_combine(slog, idx.0);
@@ -564,7 +557,7 @@ where
     /// Makes sure the replica is synced up against the log before doing so.
     fn read_only(
         &self,
-        slog: &Arc<Log<'a, <D as Dispatch>::WriteOperation>>,
+        slog: &Arc<Log<<D as Dispatch>::WriteOperation>>,
         op: <D as Dispatch>::ReadOperation,
         tid: usize,
     ) -> <D as Dispatch>::Response {
@@ -588,7 +581,7 @@ where
 
     /// Appends an operation to the log and attempts to perform flat combining.
     /// Accepts a thread `tid` as an argument. Required to acquire the combiner lock.
-    fn try_combine(&self, slog: &Arc<Log<'a, <D as Dispatch>::WriteOperation>>, tid: usize) {
+    fn try_combine(&self, slog: &Arc<Log<<D as Dispatch>::WriteOperation>>, tid: usize) {
         // First, check if there already is a flat combiner. If there is no active flat combiner
         // then try to acquire the combiner lock. If there is, then just return.
         for _i in 0..4 {
@@ -635,7 +628,7 @@ where
 
     /// Performs one round of flat combining. Collects, appends and executes operations.
     #[inline(always)]
-    fn combine(&self, slog: &Arc<Log<'a, <D as Dispatch>::WriteOperation>>) {
+    fn combine(&self, slog: &Arc<Log<<D as Dispatch>::WriteOperation>>) {
         let mut buffer = self.buffer.borrow_mut();
         let mut operations = self.inflight.borrow_mut();
         let mut results = self.result.borrow_mut();
