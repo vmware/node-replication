@@ -17,10 +17,6 @@ use super::log::{Log, LogToken};
 use super::rwlock::RwLock;
 use super::Dispatch;
 
-/// Unique identifier for the given replica (it's probably the same as the NUMA
-/// node that this replica corresponds to).
-pub type ReplicaId = usize;
-
 /// The idx that uniquely identifies a thread that's registered with the
 /// replica.
 pub type ThreadIdx = usize;
@@ -28,11 +24,12 @@ pub type ThreadIdx = usize;
 /// A token handed out to threads registered with replicas.
 ///
 /// # Note
+
 /// Ideally this would be an affine type and returned again by
 /// `execute` and `execute_ro`. However it feels like this would
 /// hurt API ergonomics a lot.
 #[derive(Copy, Clone, Debug, PartialEq)]
-pub struct ReplicaToken(ReplicaId, ThreadIdx);
+pub struct ReplicaToken(ThreadIdx);
 
 /// To make it harder to use the same ReplicaToken on multiple threads.
 #[cfg(features = "unstable")]
@@ -46,18 +43,13 @@ impl ReplicaToken {
     /// additional fake replica implementations.
     /// If we had a means to declare this not-pub we should do that instead.
     #[doc(hidden)]
-    pub unsafe fn new(rid: ReplicaId, tid: ThreadIdx) -> Self {
-        ReplicaToken(rid, tid)
-    }
-
-    /// Returns the replica ID.
-    pub fn rid(&self) -> ReplicaId {
-        self.0
+    pub unsafe fn new(tid: ThreadIdx) -> Self {
+        ReplicaToken(tid)
     }
 
     /// Getter for thread ID.
     pub fn tid(&self) -> ThreadIdx {
-        self.1
+        self.0
     }
 }
 
@@ -90,10 +82,6 @@ pub struct Replica<D>
 where
     D: Sized + Dispatch + Sync,
 {
-    /// Unique index that identifies the replica among a set of replicas
-    /// attached to a log.
-    replica_id: ReplicaId,
-
     /// A replica-identifier received when the replica is registered against
     /// the shared-log. Required when consuming operations from the log.
     log_tkn: LogToken,
@@ -198,8 +186,8 @@ where
     /// // Create a replica that uses the above log.
     /// let replica = Replica::<Data>::new(&log);
     /// ```
-    pub fn new(replica_id: ReplicaId, log_tkn: LogToken) -> Replica<D> {
-        Replica::with_data(replica_id, log_tkn, Default::default())
+    pub fn new(log_tkn: LogToken) -> Replica<D> {
+        Replica::with_data(log_tkn, Default::default())
     }
 }
 
@@ -217,7 +205,7 @@ where
     /// to every Replica object. If not the resulting operations executed
     /// against replicas may not give deterministic results.
     #[cfg(not(feature = "unstable"))]
-    pub fn with_data(replica_id: ReplicaId, log_tkn: LogToken, d: D) -> Replica<D> {
+    pub fn with_data(log_tkn: LogToken, d: D) -> Replica<D> {
         let mut contexts = Vec::with_capacity(MAX_THREADS_PER_REPLICA);
         // Add `MAX_THREADS_PER_REPLICA` contexts
         for _idx in 0..MAX_THREADS_PER_REPLICA {
@@ -225,7 +213,6 @@ where
         }
 
         Replica {
-            replica_id,
             log_tkn,
             combiner: CachePadded::new(AtomicUsize::new(0)),
             next: CachePadded::new(AtomicUsize::new(1)),
@@ -370,7 +357,7 @@ where
                 continue;
             };
 
-            return Some(ReplicaToken(self.replica_id, idx));
+            return Some(ReplicaToken(idx));
         }
     }
 
@@ -726,8 +713,7 @@ mod test {
     fn test_replica_create() {
         let slog = Log::<<Data as Dispatch>::WriteOperation>::new_with_bytes(1024);
         let lt = slog.register().unwrap();
-        let repl = Replica::<Data>::new(0, lt);
-        assert_eq!(repl.replica_id, 0);
+        let repl = Replica::<Data>::new(lt);
         assert_eq!(repl.log_tkn, 1);
         assert_eq!(repl.combiner.load(Ordering::SeqCst), 0);
         assert_eq!(repl.next.load(Ordering::SeqCst), 1);
@@ -749,11 +735,11 @@ mod test {
     fn test_replica_register() {
         let slog = Log::<<Data as Dispatch>::WriteOperation>::new_with_bytes(1024);
         let lt = slog.register().unwrap();
-        let repl = Replica::<Data>::new(0, lt);
-        assert_eq!(repl.register(), Some(ReplicaToken(0, 1)));
+        let repl = Replica::<Data>::new(lt);
+        assert_eq!(repl.register(), Some(ReplicaToken(1)));
         assert_eq!(repl.next.load(Ordering::SeqCst), 2);
         repl.next.store(17, Ordering::SeqCst);
-        assert_eq!(repl.register(), Some(ReplicaToken(0, 17)));
+        assert_eq!(repl.register(), Some(ReplicaToken(17)));
         assert_eq!(repl.next.load(Ordering::SeqCst), 18);
     }
 
@@ -762,7 +748,7 @@ mod test {
     fn test_replica_register_none() {
         let slog = Log::<<Data as Dispatch>::WriteOperation>::new_with_bytes(1024);
         let lt = slog.register().unwrap();
-        let repl = Replica::<Data>::new(0, lt);
+        let repl = Replica::<Data>::new(lt);
         repl.next
             .store(MAX_THREADS_PER_REPLICA + 1, Ordering::SeqCst);
         assert!(repl.register().is_none());
@@ -773,7 +759,7 @@ mod test {
     fn test_replica_make_pending() {
         let slog = Log::<<Data as Dispatch>::WriteOperation>::new_with_bytes(1024);
         let lt = slog.register().unwrap();
-        let repl = Replica::<Data>::new(0, lt);
+        let repl = Replica::<Data>::new(lt);
         let mut o = vec![];
 
         assert!(repl.make_pending(121, 8));
@@ -787,7 +773,7 @@ mod test {
     fn test_replica_make_pending_false() {
         let slog = Log::<<Data as Dispatch>::WriteOperation>::new_with_bytes(1024);
         let lt = slog.register().unwrap();
-        let repl = Replica::<Data>::new(0, lt);
+        let repl = Replica::<Data>::new(lt);
         for _i in 0..Context::<u64, Result<u64, ()>>::batch_size() {
             assert!(repl.make_pending(121, 1))
         }
@@ -800,7 +786,7 @@ mod test {
     fn test_replica_try_combine() {
         let slog = Log::<<Data as Dispatch>::WriteOperation>::default();
         let lt = slog.register().unwrap();
-        let repl = Replica::<Data>::new(0, lt);
+        let repl = Replica::<Data>::new(lt);
         let _idx = repl.register();
 
         repl.make_pending(121, 1);
@@ -816,7 +802,7 @@ mod test {
     fn test_replica_try_combine_pending() {
         let slog = Log::<<Data as Dispatch>::WriteOperation>::default();
         let lt = slog.register().unwrap();
-        let repl = Replica::<Data>::new(0, lt);
+        let repl = Replica::<Data>::new(lt);
 
         repl.next.store(9, Ordering::SeqCst);
         repl.make_pending(121, 8);
@@ -831,7 +817,7 @@ mod test {
     fn test_replica_try_combine_fail() {
         let slog = Log::<<Data as Dispatch>::WriteOperation>::new_with_bytes(1024);
         let lt = slog.register().unwrap();
-        let repl = Replica::<Data>::new(0, lt);
+        let repl = Replica::<Data>::new(lt);
 
         repl.next.store(9, Ordering::SeqCst);
         repl.combiner.store(8, Ordering::SeqCst);
@@ -847,7 +833,7 @@ mod test {
     fn test_replica_execute_combine() {
         let slog = Log::<<Data as Dispatch>::WriteOperation>::default();
         let lt = slog.register().unwrap();
-        let repl = Replica::<Data>::new(0, lt);
+        let repl = Replica::<Data>::new(lt);
         let idx = repl.register().unwrap();
 
         assert_eq!(Ok(107), repl.execute_mut(&slog, 121, idx));
@@ -860,7 +846,7 @@ mod test {
     fn test_replica_get_response() {
         let slog = Log::<<Data as Dispatch>::WriteOperation>::default();
         let lt = slog.register().unwrap();
-        let repl = Replica::<Data>::new(0, lt);
+        let repl = Replica::<Data>::new(lt);
         let _idx = repl.register();
 
         repl.make_pending(121, 1);
@@ -873,7 +859,7 @@ mod test {
     fn test_replica_execute() {
         let slog = Log::<<Data as Dispatch>::WriteOperation>::default();
         let lt = slog.register().unwrap();
-        let repl = Replica::<Data>::new(0, lt);
+        let repl = Replica::<Data>::new(lt);
         let idx = repl.register().expect("Failed to register with replica.");
 
         assert_eq!(Ok(107), repl.execute_mut(&slog, 121, idx));
@@ -886,7 +872,7 @@ mod test {
     fn test_replica_execute_not_synced() {
         let slog = Log::<<Data as Dispatch>::WriteOperation>::default();
         let lt = slog.register().unwrap();
-        let repl = Replica::<Data>::new(0, lt);
+        let repl = Replica::<Data>::new(lt);
 
         // Add in operations to the log off the side, not through the replica.
         let o = [121, 212];
