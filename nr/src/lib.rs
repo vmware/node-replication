@@ -71,6 +71,8 @@
 )]
 #![feature(try_reserve)]
 #![feature(box_syntax)]
+#![feature(allocator_api)]
+#![feature(nonnull_slice_from_raw_parts)]
 
 #[cfg(test)]
 extern crate std;
@@ -175,9 +177,40 @@ impl ThreadToken {
     }
 }
 
+type AffinityChangeFn = Box<dyn Fn(Option<usize>)>;
+
+struct AffinityChanger {
+    set_mem_affinity: AffinityChangeFn,
+}
+
+impl AffinityChanger {
+    fn switch(&self, node: usize) -> CurrentAffinity {
+        CurrentAffinity::new(self, node)
+    }
+}
+
+struct CurrentAffinity<'a> {
+    parent: &'a AffinityChanger,
+}
+
+impl<'a> CurrentAffinity<'a> {
+    fn new(parent: &'a AffinityChanger, affinity: usize) -> Self {
+        (parent.set_mem_affinity)(Some(affinity));
+
+        CurrentAffinity { parent }
+    }
+}
+
+impl<'a> Drop for CurrentAffinity<'a> {
+    fn drop(&mut self) {
+        (self.parent.set_mem_affinity)(None);
+    }
+}
+
 pub struct NodeReplicated<D: Dispatch + Sync> {
     log: Log<D::WriteOperation>,
     replicas: Vec<Box<Replica<D>>>,
+    _affinity_changer: AffinityChanger,
 }
 
 use alloc::prelude::v1::Box;
@@ -188,22 +221,38 @@ impl<D> NodeReplicated<D>
 where
     D: Default + Dispatch + Sized + Sync,
 {
-    pub fn new(num_replicas: NonZeroUsize) -> Result<Self, TryReserveError> {
+    pub fn new<F>(num_replicas: NonZeroUsize, set_mem_affinity: F) -> Result<Self, TryReserveError>
+    where
+        F: Fn(Option<usize>) + Sized + 'static,
+    {
         assert!(num_replicas.get() < MAX_REPLICAS_PER_LOG);
+        let affinity_changer = AffinityChanger {
+            set_mem_affinity: Box::new(set_mem_affinity),
+        };
         let log = Log::default();
 
         let mut replicas = Vec::new();
         replicas.try_reserve(num_replicas.get())?;
-        for _replica_id in 0..num_replicas.get() {
+        for replica_id in 0..num_replicas.get() {
             let log_token = log
                 .register()
                 .expect("Succeeds (num_replicas < MAX_REPLICAS_PER_LOG)");
 
+            // Allocate replica on the proper NUMA node
+            let r = {
+                let _aff = affinity_changer.switch(replica_id);
+                box Replica::new(log_token)
+            };
+
             // Succeeds (try_reserve)
-            replicas.push(box Replica::new(log_token));
+            replicas.push(r);
         }
 
-        Ok(NodeReplicated { replicas, log })
+        Ok(NodeReplicated {
+            _affinity_changer: affinity_changer,
+            replicas,
+            log,
+        })
     }
 }
 
@@ -211,22 +260,8 @@ impl<D> NodeReplicated<D>
 where
     D: Clone + Dispatch + Sized + Sync,
 {
-    pub fn with_data(num_replicas: NonZeroUsize, ds: D) -> Result<Self, TryReserveError> {
-        assert!(num_replicas.get() < MAX_REPLICAS_PER_LOG);
-        let log = Log::default();
-
-        let mut replicas = Vec::new();
-        replicas.try_reserve(num_replicas.get())?;
-        for _replica_id in 0..num_replicas.get() {
-            let log_token = log
-                .register()
-                .expect("Succeeds (num_replicas < MAX_REPLICAS_PER_LOG)");
-
-            // Succeeds (try_reserve)
-            replicas.push(box Replica::with_data(log_token, ds.clone()));
-        }
-
-        Ok(NodeReplicated { replicas, log })
+    pub fn with_data(_num_replicas: NonZeroUsize, _ds: D) -> Result<Self, TryReserveError> {
+        unreachable!("complete me")
     }
 }
 
