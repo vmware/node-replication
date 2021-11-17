@@ -140,14 +140,46 @@ pub trait Dispatch {
     fn dispatch_mut(&mut self, op: Self::WriteOperation) -> Self::Response;
 }
 
+/// Unique identifier for the given replica (it's probably the same as the NUMA
+/// node that this replica corresponds to).
+pub type ReplicaId = usize;
+
 pub struct NodeReplicationError;
+
+/// A token handed out to threads registered with replicas.
+///
+/// # Note
+/// Ideally this would be an affine type and returned again by
+/// `execute` and `execute_ro`. However it feels like this would
+/// hurt API ergonomics a lot.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct ThreadToken {
+    pub rid: ReplicaId,
+    pub rtkn: ReplicaToken,
+}
+
+/// To make it harder to use the same ThreadToken on multiple threads.
+#[cfg(features = "unstable")]
+impl !Send for ThreadToken {}
+
+impl ThreadToken {
+    /// Creates a new ThreadToken
+    ///
+    /// # Safety
+    /// This should only ever be used for the benchmark harness to create
+    /// additional fake replica implementations.
+    /// If we had a means to declare this as not-pub we should do that instead.
+    #[doc(hidden)]
+    pub fn new(rid: ReplicaId, rtkn: ReplicaToken) -> Self {
+        Self { rid, rtkn }
+    }
+}
 
 pub struct NodeReplicated<D: Dispatch + Sync> {
     log: Log<D::WriteOperation>,
     replicas: Vec<Box<Replica<D>>>,
 }
 
-use crate::replica::ReplicaId;
 use alloc::prelude::v1::Box;
 //use alloc::sync::Arc;
 use alloc::collections::TryReserveError;
@@ -162,40 +194,73 @@ where
 
         let mut replicas = Vec::new();
         replicas.try_reserve(num_replicas.get())?;
-        for replica_id in 0..num_replicas.get() {
+        for _replica_id in 0..num_replicas.get() {
             let log_token = log
                 .register()
                 .expect("Succeeds (num_replicas < MAX_REPLICAS_PER_LOG)");
 
             // Succeeds (try_reserve)
-            replicas.push(box Replica::new(replica_id, log_token));
+            replicas.push(box Replica::new(log_token));
         }
 
         Ok(NodeReplicated { replicas, log })
     }
+}
 
-    pub fn register(&self, replica_id: ReplicaId) -> Option<ReplicaToken> {
-        self.replicas[replica_id].register()
+impl<D> NodeReplicated<D>
+where
+    D: Clone + Dispatch + Sized + Sync,
+{
+    pub fn with_data(num_replicas: NonZeroUsize, ds: D) -> Result<Self, TryReserveError> {
+        assert!(num_replicas.get() < MAX_REPLICAS_PER_LOG);
+        let log = Log::default();
+
+        let mut replicas = Vec::new();
+        replicas.try_reserve(num_replicas.get())?;
+        for _replica_id in 0..num_replicas.get() {
+            let log_token = log
+                .register()
+                .expect("Succeeds (num_replicas < MAX_REPLICAS_PER_LOG)");
+
+            // Succeeds (try_reserve)
+            replicas.push(box Replica::with_data(log_token, ds.clone()));
+        }
+
+        Ok(NodeReplicated { replicas, log })
+    }
+}
+
+impl<D> NodeReplicated<D>
+where
+    D: Dispatch + Sized + Sync,
+{
+    pub fn register(&self, replica_id: ReplicaId) -> Option<ThreadToken> {
+        if replica_id < self.replicas.len() {
+            let rtkn = self.replicas[replica_id].register()?;
+            Some(ThreadToken::new(replica_id, rtkn))
+        } else {
+            None
+        }
     }
 
     pub fn execute_mut(
         &self,
         op: <D as Dispatch>::WriteOperation,
-        idx: ReplicaToken,
+        tkn: ThreadToken,
     ) -> <D as Dispatch>::Response {
-        self.replicas[idx.rid()].execute_mut(&self.log, op, idx)
+        self.replicas[tkn.rid].execute_mut(&self.log, op, tkn.rtkn)
     }
 
     pub fn execute(
         &self,
         op: <D as Dispatch>::ReadOperation,
-        idx: ReplicaToken,
+        tkn: ThreadToken,
     ) -> <D as Dispatch>::Response {
-        self.replicas[idx.rid()].execute(&self.log, op, idx)
+        self.replicas[tkn.rid].execute(&self.log, op, tkn.rtkn)
     }
 
-    pub fn sync(&self, idx: ReplicaToken) {
-        self.replicas[idx.rid()].sync(&self.log, idx)
+    pub fn sync(&self, tkn: ThreadToken) {
+        self.replicas[tkn.rid].sync(&self.log, tkn.rtkn)
     }
 }
 
