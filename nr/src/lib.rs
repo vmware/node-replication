@@ -283,7 +283,10 @@ where
     ) -> <D as Dispatch>::Response {
         match self.replicas[tkn.rid].execute_mut(&self.log, op, tkn.rtkn) {
             Ok(r) => r,
-            Err(stuck_ridx) => panic!("replica#{} is stuck", stuck_ridx),
+            Err(stuck_ridx) => {
+                //self.replicas[stuck_ridx].sync(&self.log);
+                panic!("replica#{} is stuck", stuck_ridx)
+            }
         }
     }
 

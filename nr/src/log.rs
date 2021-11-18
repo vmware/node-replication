@@ -390,7 +390,6 @@ where
         let nops = ops.len();
         let mut iteration = 1;
         let mut waitgc = 1;
-        let replica_we_wait_for = 0xdeadbeef;
 
         // Keep trying to reserve entries and add operations to the log until
         // we succeed in doing so.
@@ -402,8 +401,8 @@ where
                     idx,
                     iteration,
                 );
-                unimplemented!("determine correct replica_we_wait_for");
-                return Err(replica_we_wait_for);
+                let (min_replica_idx, _min_local_tail) = self.find_min_tail();
+                return Err(min_replica_idx);
             }
             iteration += 1;
 
@@ -422,9 +421,8 @@ where
                         idx,
                         waitgc,
                     );
-
-                    unimplemented!("determine correct replica_we_wait_for");
-                    return Err(replica_we_wait_for);
+                    let (min_replica_idx, _min_local_tail) = self.find_min_tail();
+                    return Err(min_replica_idx);
                 }
                 waitgc += 1;
                 self.exec(idx, &mut s);
@@ -587,6 +585,26 @@ where
         logical & (self.slog.len() - 1)
     }
 
+    /// Loops over all `ltails` and identifies the replica with the lowest tail.
+    ///
+    /// # Returns
+    /// The ID of the replica with the lowest tail and the lowest tail `idx`.
+    fn find_min_tail(&self) -> (usize, usize) {
+        let r = self.next.load(Ordering::Relaxed);
+        let (mut min_replica_idx, mut min_local_tail) = (0, self.ltails[0].load(Ordering::Relaxed));
+
+        // Find the smallest local tail across all replicas.
+        for idx in 1..r {
+            let cur_local_tail = self.ltails[idx - 1].load(Ordering::Relaxed);
+            if min_local_tail > cur_local_tail {
+                min_local_tail = cur_local_tail;
+                min_replica_idx = idx - 1;
+            }
+        }
+
+        (min_replica_idx, min_local_tail)
+    }
+
     /// Advances the head of the log forward. If a replica has stopped making progress,
     /// then this method will never return. Accepts a closure that is passed into exec()
     /// to ensure that this replica does not deadlock GC.
@@ -597,21 +615,9 @@ where
         // this method might never return.
         let mut iteration = 1;
         loop {
-            let r = self.next.load(Ordering::Relaxed);
             let global_head = self.head.load(Ordering::Relaxed);
             let f = self.tail.load(Ordering::Relaxed);
-
-            let (mut min_replica_idx, mut min_local_tail) =
-                (0, self.ltails[0].load(Ordering::Relaxed));
-
-            // Find the smallest local tail across all replicas.
-            for idx in 1..r {
-                let cur_local_tail = self.ltails[idx - 1].load(Ordering::Relaxed);
-                if min_local_tail > cur_local_tail {
-                    min_local_tail = cur_local_tail;
-                    min_replica_idx = idx - 1;
-                };
-            }
+            let (min_replica_idx, min_local_tail) = self.find_min_tail();
 
             // If we cannot advance the head further, then start
             // from the beginning of this loop again. Before doing so, try consuming
