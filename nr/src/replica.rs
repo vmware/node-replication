@@ -192,6 +192,36 @@ where
     }
 }
 
+/// Indicates that we succesfully hold the combiner lock (atomic `combiner` is
+/// set to 1 and we have to reset it to 0)
+pub struct CombinerLock<'a, D>
+where
+    D: Sized + Dispatch + Sync,
+{
+    replica: &'a Replica<D>,
+}
+
+impl<'a, D> CombinerLock<'a, D>
+where
+    D: Sized + Dispatch + Sync,
+{
+    unsafe fn new(replica: &'a Replica<D>) -> Self {
+        Self { replica }
+    }
+}
+
+impl<D> Drop for CombinerLock<'_, D>
+where
+    D: Sized + Dispatch + Sync,
+{
+    fn drop(&mut self) {
+        // Allow other threads to perform flat combining once we have finished all our work.
+        // At this point, we've dropped all mutable references to thread contexts and to
+        // the staging buffer as well.
+        self.replica.combiner.store(0, Ordering::Release);
+    }
+}
+
 impl<'a, D> Replica<D>
 where
     D: Sized + Dispatch + Sync,
@@ -412,10 +442,10 @@ where
         slog: &Log<<D as Dispatch>::WriteOperation>,
         op: <D as Dispatch>::WriteOperation,
         idx: ReplicaToken,
-    ) -> Result<<D as Dispatch>::Response, usize> {
+    ) -> Result<<D as Dispatch>::Response, (usize, CombinerLock<D>)> {
         // Enqueue the operation onto the thread local batch and then try to flat combine.
         while !self.make_pending(op.clone(), idx.tid()) {}
-        self.try_combine(slog, idx.tid())?;
+        self.try_combine(slog)?;
 
         // Return the response to the caller function.
         self.get_response(slog, idx.tid())
@@ -472,17 +502,17 @@ where
         slog: &Log<<D as Dispatch>::WriteOperation>,
         op: <D as Dispatch>::ReadOperation,
         idx: ReplicaToken,
-    ) -> Result<<D as Dispatch>::Response, usize> {
+    ) -> Result<<D as Dispatch>::Response, (usize, CombinerLock<D>)> {
         self.read_only(slog, op, idx.tid())
     }
 
     /// Busy waits until a response is available within the thread's context.
     /// `idx` identifies this thread.
-    fn get_response(
+    pub(crate) fn get_response(
         &self,
         slog: &Log<<D as Dispatch>::WriteOperation>,
         idx: usize,
-    ) -> Result<<D as Dispatch>::Response, usize> {
+    ) -> Result<<D as Dispatch>::Response, (usize, CombinerLock<D>)> {
         let mut iter = 0;
         let interval = 1 << 29;
 
@@ -497,7 +527,7 @@ where
             iter += 1;
 
             if iter == interval {
-                self.try_combine(slog, idx)?;
+                self.try_combine(slog)?;
                 iter = 0;
             }
         }
@@ -543,11 +573,10 @@ where
     pub fn sync(
         &self,
         slog: &Log<<D as Dispatch>::WriteOperation>,
-        idx: ReplicaToken,
-    ) -> Result<(), usize> {
+    ) -> Result<(), (usize, CombinerLock<D>)> {
         let ctail = slog.get_ctail();
         while slog.is_replica_synced_for_reads(self.log_tkn, ctail) {
-            self.try_combine(slog, idx.tid())?;
+            self.try_combine(slog)?;
             spin_loop();
         }
         Ok(())
@@ -560,12 +589,12 @@ where
         slog: &Log<<D as Dispatch>::WriteOperation>,
         op: <D as Dispatch>::ReadOperation,
         tid: usize,
-    ) -> Result<<D as Dispatch>::Response, usize> {
+    ) -> Result<<D as Dispatch>::Response, (usize, CombinerLock<D>)> {
         // We can perform the read only if our replica is synced up against
         // the shared log. If it isn't, then try to combine until it is synced up.
         let ctail = slog.get_ctail();
         while !slog.is_replica_synced_for_reads(self.log_tkn, ctail) {
-            self.try_combine(slog, tid)?;
+            self.try_combine(slog)?;
             spin_loop();
         }
 
@@ -579,13 +608,28 @@ where
         self.contexts[idx - 1].enqueue(op)
     }
 
+    // Try to become acquire the combiner lock here. If this fails, then return None.
+    #[inline(always)]
+    fn acquire_combiner_lock(&self) -> Option<CombinerLock<D>> {
+        if self
+            .combiner
+            .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Acquire)
+            != Ok(0)
+        {
+            #[cfg(loom)]
+            loom::thread::yield_now();
+            None
+        } else {
+            unsafe { Some(CombinerLock::new(self)) }
+        }
+    }
+
     /// Appends an operation to the log and attempts to perform flat combining.
     /// Accepts a thread `tid` as an argument. Required to acquire the combiner lock.
-    fn try_combine(
-        &self,
+    fn try_combine<'r>(
+        &'r self,
         slog: &Log<<D as Dispatch>::WriteOperation>,
-        tid: usize,
-    ) -> Result<(), usize> {
+    ) -> Result<(), (usize, CombinerLock<'r, D>)> {
         // First, check if there already is a flat combiner. If there is no active flat combiner
         // then try to acquire the combiner lock. If there is, then just return.
         for _ in 0..4 {
@@ -597,34 +641,24 @@ where
         }
 
         // Try to become the combiner here. If this fails, then simply return.
-        if self
-            .combiner
-            .compare_exchange_weak(0, tid, Ordering::Acquire, Ordering::Acquire)
-            != Ok(0)
-        {
+        if let Some(combiner_lock) = self.acquire_combiner_lock() {
+            // Successfully became the combiner; perform one round of flat combining.
+            self.combine(slog, combiner_lock)?;
+            Ok(())
+        } else {
             #[cfg(loom)]
             loom::thread::yield_now();
-            return Ok(());
+            Ok(())
         }
-
-        // Successfully became the combiner; perform one round of flat combining.
-        self.combine(slog)?;
-        // If we get an error from combine(), note that we return and don't release the combiner lock
-        // the expecation is that the client ensure advances the slow replica and
-        // re-executes in combine() afterwards... (TODO: probably need smth like re_enter_combine which
-        // releases the lock without acquiring it)
-
-        // Allow other threads to perform flat combining once we have finished all our work.
-        // At this point, we've dropped all mutable references to thread contexts and to
-        // the staging buffer as well.
-        self.combiner.store(0, Ordering::Release);
-
-        Ok(())
     }
 
     /// Performs one round of flat combining. Collects, appends and executes operations.
     #[inline(always)]
-    fn combine(&self, slog: &Log<<D as Dispatch>::WriteOperation>) -> Result<(), usize> {
+    pub(crate) fn combine<'r>(
+        &'r self,
+        slog: &Log<<D as Dispatch>::WriteOperation>,
+        combiner_lock: CombinerLock<'r, D>,
+    ) -> Result<(), (usize, CombinerLock<'r, D>)> {
         let mut buffer = self.buffer.borrow_mut();
         let mut operations = self.inflight.borrow_mut();
         let mut results = self.result.borrow_mut();
@@ -652,7 +686,8 @@ where
                     results.push(resp);
                 }
             };
-            slog.append(&buffer, self.log_tkn, f)?;
+            slog.append(&buffer, self.log_tkn, f)
+                .map_err(|ridx| (ridx, combiner_lock))?;
         }
 
         // Execute any operations on the shared log against this replica.
@@ -826,7 +861,7 @@ mod test {
         let _idx = repl.register();
 
         repl.make_pending(121, 1);
-        assert!(repl.try_combine(&slog, 1).is_ok());
+        assert!(repl.try_combine(&slog).is_ok());
 
         assert_eq!(repl.combiner.load(Ordering::SeqCst), 0);
         assert_eq!(repl.data.read(0).junk, 1);
@@ -842,7 +877,7 @@ mod test {
 
         repl.next.store(9, Ordering::SeqCst);
         repl.make_pending(121, 8);
-        assert!(repl.try_combine(&slog, 1).is_ok());
+        assert!(repl.try_combine(&slog).is_ok());
 
         assert_eq!(repl.data.read(0).junk, 1);
         assert_eq!(repl.contexts[7].res(), Some(Ok(107)));
@@ -858,7 +893,7 @@ mod test {
         repl.next.store(9, Ordering::SeqCst);
         repl.combiner.store(8, Ordering::SeqCst);
         repl.make_pending(121, 1);
-        assert!(repl.try_combine(&slog, 1).is_ok());
+        assert!(repl.try_combine(&slog).is_ok());
 
         assert_eq!(repl.data.read(0).junk, 0);
         assert_eq!(repl.contexts[0].res(), None);
