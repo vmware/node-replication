@@ -281,11 +281,24 @@ where
         op: <D as Dispatch>::WriteOperation,
         tkn: ThreadToken,
     ) -> <D as Dispatch>::Response {
-        match self.replicas[tkn.rid].execute_mut(&self.log, op, tkn.rtkn) {
-            Ok(r) => r,
-            Err(stuck_ridx) => {
-                //self.replicas[stuck_ridx].sync(&self.log);
-                panic!("replica#{} is stuck", stuck_ridx)
+        let mut combiner = None;
+        loop {
+            let mut_op_res = if let Some(combiner_lock) = combiner {
+                assert!(self.replicas[tkn.rid]
+                    .combine(&self.log, combiner_lock)
+                    .is_ok());
+                self.replicas[tkn.rid].get_response(&self.log, tkn.rtkn.tid())
+            } else {
+                self.replicas[tkn.rid].execute_mut(&self.log, op.clone(), tkn.rtkn)
+            };
+
+            match mut_op_res {
+                Ok(r) => return r,
+                Err((stuck_ridx, combiner_lock)) => {
+                    assert!(self.replicas[stuck_ridx].sync(&self.log).is_ok());
+                    combiner = Some(combiner_lock);
+                    continue;
+                }
             }
         }
     }
@@ -295,16 +308,30 @@ where
         op: <D as Dispatch>::ReadOperation,
         tkn: ThreadToken,
     ) -> <D as Dispatch>::Response {
-        match self.replicas[tkn.rid].execute(&self.log, op, tkn.rtkn) {
-            Ok(r) => r,
-            Err(stuck_ridx) => panic!("replica#{} is stuck", stuck_ridx),
+        let mut combiner = None;
+        loop {
+            if let Some(combiner_lock) = combiner {
+                assert!(self.replicas[tkn.rid]
+                    .combine(&self.log, combiner_lock)
+                    .is_ok());
+            }
+
+            let op_res = self.replicas[tkn.rid].execute(&self.log, op.clone(), tkn.rtkn);
+            match op_res {
+                Ok(r) => return r,
+                Err((stuck_ridx, combiner_lock)) => {
+                    assert!(self.replicas[stuck_ridx].sync(&self.log).is_ok());
+                    combiner = Some(combiner_lock);
+                    continue;
+                }
+            }
         }
     }
 
     pub fn sync(&self, tkn: ThreadToken) {
-        match self.replicas[tkn.rid].sync(&self.log, tkn.rtkn) {
+        match self.replicas[tkn.rid].sync(&self.log) {
             Ok(r) => r,
-            Err(stuck_ridx) => panic!("replica#{} is stuck", stuck_ridx),
+            Err((stuck_ridx, combiner_lock)) => panic!("replica#{} is stuck", stuck_ridx),
         }
     }
 }
