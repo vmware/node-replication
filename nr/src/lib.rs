@@ -175,7 +175,7 @@ impl ThreadToken {
     }
 }
 
-type AffinityChangeFn = Box<dyn Fn(Option<usize>)>;
+type AffinityChangeFn = Box<dyn Fn(Option<usize>) + Send + Sync>;
 
 struct AffinityChanger {
     set_mem_affinity: AffinityChangeFn,
@@ -221,7 +221,7 @@ where
 {
     pub fn new<F>(num_replicas: NonZeroUsize, set_mem_affinity: F) -> Result<Self, TryReserveError>
     where
-        F: Fn(Option<usize>) + Sized + 'static,
+        F: Fn(Option<usize>) + Sized + 'static + Send + Sync,
     {
         assert!(num_replicas.get() < MAX_REPLICAS_PER_LOG);
         let affinity_changer = AffinityChanger {
@@ -281,7 +281,10 @@ where
         op: <D as Dispatch>::WriteOperation,
         tkn: ThreadToken,
     ) -> <D as Dispatch>::Response {
-        self.replicas[tkn.rid].execute_mut(&self.log, op, tkn.rtkn)
+        match self.replicas[tkn.rid].execute_mut(&self.log, op, tkn.rtkn) {
+            Ok(r) => r,
+            Err(stuck_ridx) => panic!("replica#{} is stuck", stuck_ridx),
+        }
     }
 
     pub fn execute(
@@ -289,11 +292,17 @@ where
         op: <D as Dispatch>::ReadOperation,
         tkn: ThreadToken,
     ) -> <D as Dispatch>::Response {
-        self.replicas[tkn.rid].execute(&self.log, op, tkn.rtkn)
+        match self.replicas[tkn.rid].execute(&self.log, op, tkn.rtkn) {
+            Ok(r) => r,
+            Err(stuck_ridx) => panic!("replica#{} is stuck", stuck_ridx),
+        }
     }
 
     pub fn sync(&self, tkn: ThreadToken) {
-        self.replicas[tkn.rid].sync(&self.log, tkn.rtkn)
+        match self.replicas[tkn.rid].sync(&self.log, tkn.rtkn) {
+            Ok(r) => r,
+            Err(stuck_ridx) => panic!("replica#{} is stuck", stuck_ridx),
+        }
     }
 }
 

@@ -411,10 +411,10 @@ where
         slog: &Log<<D as Dispatch>::WriteOperation>,
         op: <D as Dispatch>::WriteOperation,
         idx: ReplicaToken,
-    ) -> <D as Dispatch>::Response {
+    ) -> Result<<D as Dispatch>::Response, usize> {
         // Enqueue the operation onto the thread local batch and then try to flat combine.
         while !self.make_pending(op.clone(), idx.tid()) {}
-        self.try_combine(slog, idx.tid());
+        self.try_combine(slog, idx.tid())?;
 
         // Return the response to the caller function.
         self.get_response(slog, idx.tid())
@@ -471,7 +471,7 @@ where
         slog: &Log<<D as Dispatch>::WriteOperation>,
         op: <D as Dispatch>::ReadOperation,
         idx: ReplicaToken,
-    ) -> <D as Dispatch>::Response {
+    ) -> Result<<D as Dispatch>::Response, usize> {
         self.read_only(slog, op, idx.tid())
     }
 
@@ -481,7 +481,7 @@ where
         &self,
         slog: &Log<<D as Dispatch>::WriteOperation>,
         idx: usize,
-    ) -> <D as Dispatch>::Response {
+    ) -> Result<<D as Dispatch>::Response, usize> {
         let mut iter = 0;
         let interval = 1 << 29;
 
@@ -490,13 +490,13 @@ where
         loop {
             let r = self.contexts[idx - 1].res();
             if let Some(resp) = r {
-                return resp;
+                return Ok(resp);
             }
 
             iter += 1;
 
             if iter == interval {
-                self.try_combine(slog, idx);
+                self.try_combine(slog, idx)?;
                 iter = 0;
             }
         }
@@ -539,12 +539,17 @@ where
     /// on another replica are still active. The active replica will use all the entries
     /// in the log and won't be able perform garbage collection because of the inactive
     /// replica. So, this method syncs up the replica against the underlying log.
-    pub fn sync(&self, slog: &Log<<D as Dispatch>::WriteOperation>, idx: ReplicaToken) {
+    pub fn sync(
+        &self,
+        slog: &Log<<D as Dispatch>::WriteOperation>,
+        idx: ReplicaToken,
+    ) -> Result<(), usize> {
         let ctail = slog.get_ctail();
         while slog.is_replica_synced_for_reads(self.log_tkn, ctail) {
-            self.try_combine(slog, idx.tid());
+            self.try_combine(slog, idx.tid())?;
             spin_loop();
         }
+        Ok(())
     }
 
     /// Issues a read-only operation against the replica and returns a response.
@@ -554,16 +559,16 @@ where
         slog: &Log<<D as Dispatch>::WriteOperation>,
         op: <D as Dispatch>::ReadOperation,
         tid: usize,
-    ) -> <D as Dispatch>::Response {
+    ) -> Result<<D as Dispatch>::Response, usize> {
         // We can perform the read only if our replica is synced up against
         // the shared log. If it isn't, then try to combine until it is synced up.
         let ctail = slog.get_ctail();
         while !slog.is_replica_synced_for_reads(self.log_tkn, ctail) {
-            self.try_combine(slog, tid);
+            self.try_combine(slog, tid)?;
             spin_loop();
         }
 
-        return self.data.read(tid - 1).dispatch(op);
+        return Ok(self.data.read(tid - 1).dispatch(op));
     }
 
     /// Enqueues an operation inside a thread local context. Returns a boolean
@@ -575,7 +580,11 @@ where
 
     /// Appends an operation to the log and attempts to perform flat combining.
     /// Accepts a thread `tid` as an argument. Required to acquire the combiner lock.
-    fn try_combine(&self, slog: &Log<<D as Dispatch>::WriteOperation>, tid: usize) {
+    fn try_combine(
+        &self,
+        slog: &Log<<D as Dispatch>::WriteOperation>,
+        tid: usize,
+    ) -> Result<(), usize> {
         // First, check if there already is a flat combiner. If there is no active flat combiner
         // then try to acquire the combiner lock. If there is, then just return.
         for _i in 0..4 {
@@ -588,7 +597,7 @@ where
                 )
             } != 0
             {
-                return;
+                return Ok(());
             }
 
             #[cfg(loom)]
@@ -608,21 +617,27 @@ where
         {
             #[cfg(loom)]
             loom::thread::yield_now();
-            return;
+            return Ok(());
         }
 
         // Successfully became the combiner; perform one round of flat combining.
-        self.combine(slog);
+        self.combine(slog)?;
+        // If we get an error from combine(), note that we return and don't release the combiner lock
+        // the expecation is that the client ensure advances the slow replica and
+        // re-executes in combine() afterwards... (TODO: probably need smth like re_enter_combine which
+        // releases the lock without acquiring it)
 
         // Allow other threads to perform flat combining once we have finished all our work.
         // At this point, we've dropped all mutable references to thread contexts and to
         // the staging buffer as well.
         self.combiner.store(0, Ordering::Release);
+
+        Ok(())
     }
 
     /// Performs one round of flat combining. Collects, appends and executes operations.
     #[inline(always)]
-    fn combine(&self, slog: &Log<<D as Dispatch>::WriteOperation>) {
+    fn combine(&self, slog: &Log<<D as Dispatch>::WriteOperation>) -> Result<(), usize> {
         let mut buffer = self.buffer.borrow_mut();
         let mut operations = self.inflight.borrow_mut();
         let mut results = self.result.borrow_mut();
@@ -650,7 +665,7 @@ where
                     results.push(resp);
                 }
             };
-            slog.append(&buffer, self.log_tkn, f);
+            slog.append(&buffer, self.log_tkn, f)?;
         }
 
         // Execute any operations on the shared log against this replica.
@@ -677,6 +692,8 @@ where
             s += operations[i - 1];
             operations[i - 1] = 0;
         }
+
+        Ok(())
     }
 }
 
@@ -790,7 +807,7 @@ mod test {
         let _idx = repl.register();
 
         repl.make_pending(121, 1);
-        repl.try_combine(&slog, 1);
+        assert!(repl.try_combine(&slog, 1).is_ok());
 
         assert_eq!(repl.combiner.load(Ordering::SeqCst), 0);
         assert_eq!(repl.data.read(0).junk, 1);
@@ -806,7 +823,7 @@ mod test {
 
         repl.next.store(9, Ordering::SeqCst);
         repl.make_pending(121, 8);
-        repl.try_combine(&slog, 1);
+        assert!(repl.try_combine(&slog, 1).is_ok());
 
         assert_eq!(repl.data.read(0).junk, 1);
         assert_eq!(repl.contexts[7].res(), Some(Ok(107)));
@@ -822,7 +839,7 @@ mod test {
         repl.next.store(9, Ordering::SeqCst);
         repl.combiner.store(8, Ordering::SeqCst);
         repl.make_pending(121, 1);
-        repl.try_combine(&slog, 1);
+        assert!(repl.try_combine(&slog, 1).is_ok());
 
         assert_eq!(repl.data.read(0).junk, 0);
         assert_eq!(repl.contexts[0].res(), None);
@@ -836,7 +853,7 @@ mod test {
         let repl = Replica::<Data>::new(lt);
         let idx = repl.register().unwrap();
 
-        assert_eq!(Ok(107), repl.execute_mut(&slog, 121, idx));
+        assert_eq!(Ok(107), repl.execute_mut(&slog, 121, idx).unwrap());
         assert_eq!(1, repl.data.read(0).junk);
     }
 
@@ -851,7 +868,7 @@ mod test {
 
         repl.make_pending(121, 1);
 
-        assert_eq!(repl.get_response(&slog, 1), Ok(107));
+        assert_eq!(repl.get_response(&slog, 1).unwrap(), Ok(107));
     }
 
     // Tests whether we can issue a read-only operation against the replica.
@@ -862,8 +879,8 @@ mod test {
         let repl = Replica::<Data>::new(lt);
         let idx = repl.register().expect("Failed to register with replica.");
 
-        assert_eq!(Ok(107), repl.execute_mut(&slog, 121, idx));
-        assert_eq!(Ok(1), repl.execute(&slog, 11, idx));
+        assert_eq!(Ok(107), repl.execute_mut(&slog, 121, idx).unwrap());
+        assert_eq!(Ok(1), repl.execute(&slog, 11, idx).unwrap());
     }
 
     // Tests that execute() syncs up the replica with the log before
@@ -876,10 +893,10 @@ mod test {
 
         // Add in operations to the log off the side, not through the replica.
         let o = [121, 212];
-        slog.append(&o, 2, |_o: u64, _i: usize| {});
+        assert!(slog.append(&o, 2, |_o: u64, _i: usize| {}).is_ok());
         slog.exec(2, &mut |_o: u64, _i: usize| {});
 
         let t1 = repl.register().expect("Failed to register with replica.");
-        assert_eq!(Ok(2), repl.execute(&slog, 11, t1));
+        assert_eq!(Ok(2), repl.execute(&slog, 11, t1).unwrap());
     }
 }
