@@ -496,13 +496,25 @@ where
     /// // execute() can be used to read from the replicated data structure.
     /// let res = replica.execute((), idx);
     /// assert_eq!(Some(100), res);
+    ///
+    /// # Implementation
+    /// Issues a read-only operation against the replica and returns a response.
+    /// Makes sure the replica is synced up against the log before doing so.
     pub fn execute(
         &self,
         slog: &Log<<D as Dispatch>::WriteOperation>,
         op: <D as Dispatch>::ReadOperation,
         idx: ReplicaToken,
     ) -> Result<<D as Dispatch>::Response, (usize, CombinerLock<D>)> {
-        self.read_only(slog, op, idx.tid())
+        // We can perform the read only if our replica is synced up against
+        // the shared log. If it isn't, then try to combine until it is synced up.
+        let ctail = slog.get_ctail();
+        while !slog.is_replica_synced_for_reads(self.log_tkn, ctail) {
+            self.try_combine(slog)?;
+            spin_loop();
+        }
+
+        return Ok(self.data.read(idx.tid() - 1).dispatch(op));
     }
 
     /// Busy waits until a response is available within the thread's context.
@@ -579,25 +591,6 @@ where
             spin_loop();
         }
         Ok(())
-    }
-
-    /// Issues a read-only operation against the replica and returns a response.
-    /// Makes sure the replica is synced up against the log before doing so.
-    fn read_only(
-        &self,
-        slog: &Log<<D as Dispatch>::WriteOperation>,
-        op: <D as Dispatch>::ReadOperation,
-        tid: usize,
-    ) -> Result<<D as Dispatch>::Response, (usize, CombinerLock<D>)> {
-        // We can perform the read only if our replica is synced up against
-        // the shared log. If it isn't, then try to combine until it is synced up.
-        let ctail = slog.get_ctail();
-        while !slog.is_replica_synced_for_reads(self.log_tkn, ctail) {
-            self.try_combine(slog)?;
-            spin_loop();
-        }
-
-        return Ok(self.data.read(tid - 1).dispatch(op));
     }
 
     /// Enqueues an operation inside a thread local context. Returns a boolean
