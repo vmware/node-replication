@@ -587,25 +587,11 @@ where
     ) -> Result<(), usize> {
         // First, check if there already is a flat combiner. If there is no active flat combiner
         // then try to acquire the combiner lock. If there is, then just return.
-        for _i in 0..4 {
-            #[cfg(not(loom))]
-            if unsafe {
-                core::ptr::read_volatile(
-                    &self.combiner
-                        as *const crossbeam_utils::CachePadded<core::sync::atomic::AtomicUsize>
-                        as *const usize,
-                )
-            } != 0
-            {
+        for _ in 0..4 {
+            if self.combiner.load(Ordering::Relaxed) != 0 {
+                #[cfg(loom)]
+                loom::thread::yield_now();
                 return Ok(());
-            }
-
-            #[cfg(loom)]
-            {
-                if self.combiner.load(Ordering::Relaxed) != 0 {
-                    loom::thread::yield_now();
-                    return;
-                }
             }
         }
 
