@@ -518,6 +518,24 @@ where
         return Ok(self.data.read(idx.tid() - 1).dispatch(op));
     }
 
+    pub fn execute_w_lock<'lock>(
+        &'lock self,
+        slog: &Log<<D as Dispatch>::WriteOperation>,
+        op: <D as Dispatch>::ReadOperation,
+        idx: ReplicaToken,
+        combiner_lock: CombinerLock<'lock, D>,
+    ) -> Result<<D as Dispatch>::Response, (usize, CombinerLock<'lock, D>)> {
+        // We can perform the read only if our replica is synced up against
+        // the shared log. If it isn't, then try to combine until it is synced up.
+        let ctail = slog.get_ctail();
+        while !slog.is_replica_synced_for_reads(self.log_tkn, ctail) {
+            self.combine(slog, combiner_lock)?;
+            spin_loop();
+        }
+
+        return Ok(self.data.read(idx.tid() - 1).dispatch(op));
+    }
+
     /// Busy waits until a response is available within the thread's context.
     /// `idx` identifies this thread.
     pub(crate) fn get_response(
