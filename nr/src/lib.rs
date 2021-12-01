@@ -91,6 +91,7 @@ extern crate static_assertions;
 use alloc::vec::Vec;
 use core::marker::Sync;
 use core::num::NonZeroUsize;
+use replica::CombinerLock;
 
 mod context;
 mod log;
@@ -276,30 +277,48 @@ where
         }
     }
 
+    fn try_execute_mut<'a>(
+        &'a self,
+        op: <D as Dispatch>::WriteOperation,
+        tkn: ThreadToken,
+        cl: Option<CombinerLock<'a, D>>,
+    ) -> Result<<D as Dispatch>::Response, (usize, CombinerLock<'a, D>)> {
+        if let Some(combiner_lock) = cl {
+            self.replicas[tkn.rid].combine(&self.log, combiner_lock)?;
+            self.replicas[tkn.rid].get_response(&self.log, tkn.rtkn.tid())
+        } else {
+            self.replicas[tkn.rid].execute_mut(&self.log, op, tkn.rtkn)
+        }
+    }
+
     pub fn execute_mut(
         &self,
         op: <D as Dispatch>::WriteOperation,
         tkn: ThreadToken,
     ) -> <D as Dispatch>::Response {
-        let mut combiner = None;
+        let mut cl = None;
         loop {
-            let mut_op_res = if let Some(combiner_lock) = combiner {
-                assert!(self.replicas[tkn.rid]
-                    .combine(&self.log, combiner_lock)
-                    .is_ok());
-                self.replicas[tkn.rid].get_response(&self.log, tkn.rtkn.tid())
-            } else {
-                self.replicas[tkn.rid].execute_mut(&self.log, op.clone(), tkn.rtkn)
-            };
-
-            match mut_op_res {
-                Ok(r) => return r,
-                Err((stuck_ridx, combiner_lock)) => {
+            match self.try_execute_mut(op.clone(), tkn, cl) {
+                Ok(resp) => return resp,
+                Err((stuck_ridx, cl_acq)) => {
+                    cl = Some(cl_acq);
                     assert!(self.replicas[stuck_ridx].sync(&self.log).is_ok());
-                    combiner = Some(combiner_lock);
                     continue;
                 }
             }
+        }
+    }
+
+    pub fn try_execute<'a>(
+        &'a self,
+        op: <D as Dispatch>::ReadOperation,
+        tkn: ThreadToken,
+        cl: Option<CombinerLock<'a, D>>,
+    ) -> Result<<D as Dispatch>::Response, (usize, CombinerLock<'a, D>)> {
+        if let Some(combiner_lock) = cl {
+            self.replicas[tkn.rid].execute_w_lock(&self.log, op.clone(), tkn.rtkn, combiner_lock)
+        } else {
+            self.replicas[tkn.rid].execute(&self.log, op.clone(), tkn.rtkn)
         }
     }
 
@@ -308,20 +327,13 @@ where
         op: <D as Dispatch>::ReadOperation,
         tkn: ThreadToken,
     ) -> <D as Dispatch>::Response {
-        let mut combiner = None;
+        let mut cl = None;
         loop {
-            if let Some(combiner_lock) = combiner {
-                assert!(self.replicas[tkn.rid]
-                    .combine(&self.log, combiner_lock)
-                    .is_ok());
-            }
-
-            let op_res = self.replicas[tkn.rid].execute(&self.log, op.clone(), tkn.rtkn);
-            match op_res {
-                Ok(r) => return r,
-                Err((stuck_ridx, combiner_lock)) => {
+            match self.try_execute(op.clone(), tkn, cl) {
+                Ok(resp) => return resp,
+                Err((stuck_ridx, cl_acq)) => {
+                    cl = Some(cl_acq);
                     assert!(self.replicas[stuck_ridx].sync(&self.log).is_ok());
-                    combiner = Some(combiner_lock);
                     continue;
                 }
             }
@@ -331,7 +343,7 @@ where
     pub fn sync(&self, tkn: ThreadToken) {
         match self.replicas[tkn.rid].sync(&self.log) {
             Ok(r) => r,
-            Err((stuck_ridx, combiner_lock)) => panic!("replica#{} is stuck", stuck_ridx),
+            Err((stuck_ridx, _combiner_lock)) => panic!("replica#{} is stuck", stuck_ridx),
         }
     }
 }
