@@ -302,8 +302,8 @@ where
                 Ok(resp) => return resp,
                 Err((stuck_ridx, cl_acq)) => {
                     cl = Some(cl_acq);
+                    error!("trying to unstuck {}", stuck_ridx);
                     assert!(self.replicas[stuck_ridx].sync(&self.log).is_ok());
-                    continue;
                 }
             }
         }
@@ -334,7 +334,6 @@ where
                 Err((stuck_ridx, cl_acq)) => {
                     cl = Some(cl_acq);
                     assert!(self.replicas[stuck_ridx].sync(&self.log).is_ok());
-                    continue;
                 }
             }
         }

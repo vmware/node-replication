@@ -7,7 +7,6 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use node_replication::Dispatch;
-use node_replication::Log;
 use node_replication::NodeReplicated;
 
 /// The node-replicated hashmap uses a std hashmap internally.
@@ -54,6 +53,7 @@ impl Dispatch for NrHashMap {
 /// We initialize a log, and two replicas for a hashmap, register with the replica
 /// and then execute operations.
 fn main() {
+    let _r = env_logger::try_init();
     // Next, we create two replicas of the hashmap
     let num_replica = NonZeroUsize::new(4).unwrap();
     let nrht = Arc::new(NodeReplicated::<NrHashMap>::new(num_replica, |_rid| {}).unwrap());
@@ -61,7 +61,7 @@ fn main() {
     // The replica executes a Modify or Access operations by calling
     // `execute_mut` and `execute`. Eventually they end up in the `Dispatch` trait.
     let thread_loop = |replica: Arc<NodeReplicated<NrHashMap>>, ttkn| {
-        for i in 0..2_048_048 {
+        for i in 0..2_948_048 {
             let _r = match i % 2 {
                 0 => replica.execute_mut(Modify::Put(i, i + 1), ttkn),
                 1 => {

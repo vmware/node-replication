@@ -50,7 +50,7 @@ const_assert!(GC_FROM_HEAD >= 1 && (GC_FROM_HEAD & (GC_FROM_HEAD - 1) == 0));
 ///
 /// This helps with debugging to figure out where things may end up blocking.
 /// Should be a power of two to avoid divisions.
-const WARN_THRESHOLD: usize = 1 << 28;
+const WARN_THRESHOLD: usize = 1 << 22;
 
 /// An entry that sits on the log. Each entry consists of three fields: The operation to
 /// be performed when a thread reaches this entry on the log, the replica that appended
@@ -395,13 +395,14 @@ where
         // we succeed in doing so.
         loop {
             if iteration % WARN_THRESHOLD == 0 {
+                let (min_replica_idx, _min_local_tail) = self.find_min_tail();
                 warn!(
-                    "append(ops.len()={}, {}) takes too many iterations ({}) to complete...",
+                    "append(ops.len()={}, {}) takes too many iterations ({}) to complete (waiting for {})...",
                     ops.len(),
                     idx,
                     iteration,
+                    min_replica_idx,
                 );
-                let (min_replica_idx, _min_local_tail) = self.find_min_tail();
                 return Err(min_replica_idx);
             }
             iteration += 1;

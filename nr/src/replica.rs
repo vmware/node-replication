@@ -527,11 +527,12 @@ where
         // We can perform the read only if our replica is synced up against
         // the shared log. If it isn't, then try to combine until it is synced up.
         let ctail = slog.get_ctail();
-        while !slog.is_replica_synced_for_reads(self.log_tkn, ctail) {
+        if !slog.is_replica_synced_for_reads(self.log_tkn, ctail) {
             self.combine(slog, combiner_lock)?;
-            spin_loop();
+            while !slog.is_replica_synced_for_reads(self.log_tkn, ctail) {
+                self.try_combine(slog)?;
+            }
         }
-
         return Ok(self.data.read(idx.tid() - 1).dispatch(op));
     }
 
@@ -604,7 +605,7 @@ where
         slog: &Log<<D as Dispatch>::WriteOperation>,
     ) -> Result<(), (usize, CombinerLock<D>)> {
         let ctail = slog.get_ctail();
-        while slog.is_replica_synced_for_reads(self.log_tkn, ctail) {
+        while !slog.is_replica_synced_for_reads(self.log_tkn, ctail) {
             self.try_combine(slog)?;
             spin_loop();
         }
