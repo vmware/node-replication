@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
+use log::info;
 use node_replication::Dispatch;
 use node_replication::NodeReplicated;
 
@@ -77,7 +78,12 @@ fn main() {
     // Finally, we spawn three threads that issue operations, thread 1, 2, 3
     // will use replicas 1, 2, 3 -- 4th replica will implicitly be served by others
     // because we can in this model...
-    let mut threads = Vec::with_capacity(3);
+    let mut threads = Vec::with_capacity(4);
+    let nrht_cln = nrht.clone();
+    threads.push(std::thread::spawn(move || {
+        let ttkn = nrht_cln.register(0).expect("Unable to register thread");
+        thread_loop(nrht_cln, ttkn);
+    }));
     let nrht_cln = nrht.clone();
     threads.push(std::thread::spawn(move || {
         let ttkn = nrht_cln.register(0).expect("Unable to register thread");
