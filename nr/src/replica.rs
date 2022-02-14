@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use core::cell::RefCell;
+use core::fmt::Debug;
 use core::hint::spin_loop;
 #[cfg(not(loom))]
 use core::sync::atomic::{AtomicUsize, Ordering};
@@ -601,13 +602,10 @@ where
     /// on another replica are still active. The active replica will use all the entries
     /// in the log and won't be able perform garbage collection because of the inactive
     /// replica. So, this method syncs up the replica against the underlying log.
-    pub fn sync(
-        &self,
-        slog: &Log<<D as Dispatch>::WriteOperation>,
-    ) -> Result<(), (usize, CombinerLock<D>)> {
+    pub fn sync(&self, slog: &Log<<D as Dispatch>::WriteOperation>) -> Result<(), usize> {
         let ctail = slog.get_ctail();
         while !slog.is_replica_synced_for_reads(self.log_tkn, ctail) {
-            self.try_combine(slog)?;
+            self.try_exec(slog);
             spin_loop();
         }
         Ok(())
@@ -664,13 +662,49 @@ where
         }
     }
 
+    fn try_exec<'r>(&'r self, slog: &Log<<D as Dispatch>::WriteOperation>) {
+        // First, check if there already is a flat combiner. If there is no active flat combiner
+        // then try to acquire the combiner lock. If there is, then just return.
+        for _ in 0..4 {
+            if self.combiner.load(Ordering::Relaxed) != 0 {
+                return;
+            }
+        }
+
+        // Try to become the combiner here. If this fails, then simply return.
+        if let Some(combiner_lock) = self.acquire_combiner_lock() {
+            // Successfully became the combiner; perform one round of flat combining.
+            self.exec(slog, combiner_lock);
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn exec<'r>(
+        &'r self,
+        slog: &Log<<D as Dispatch>::WriteOperation>,
+        combiner_lock: CombinerLock<'r, D>,
+    ) {
+        // Execute any operations on the shared log against this replica.
+        let next = self.next.load(Ordering::Relaxed);
+        {
+            let mut data = self.data.write(next);
+            let mut f = |o: <D as Dispatch>::WriteOperation, i: usize| {
+                let resp = data.dispatch_mut(o);
+                if i == self.log_tkn {
+                    panic!("Ups -- we lost a result?");
+                };
+            };
+            slog.exec(self.log_tkn, &mut f);
+        }
+    }
+
     /// Performs one round of flat combining. Collects, appends and executes operations.
     #[inline(always)]
     pub(crate) fn combine<'r>(
         &'r self,
         slog: &Log<<D as Dispatch>::WriteOperation>,
         combiner_lock: CombinerLock<'r, D>,
-    ) -> Result<(), (usize, CombinerLock<'r, D>)> {
+    ) -> Result<Option<usize>, (usize, CombinerLock<'r, D>)> {
         let mut buffer = self.buffer.borrow_mut();
         let mut operations = self.inflight.borrow_mut();
         let mut results = self.result.borrow_mut();
@@ -687,7 +721,7 @@ where
 
         // Append all collected operations into the shared log. We pass a closure
         // in here because operations on the log might need to be consumed for GC.
-        {
+        let ok_res = {
             let mut data = self.data.write(next);
             let f = |o: <D as Dispatch>::WriteOperation, i: usize| {
                 #[cfg(not(loom))]
@@ -699,8 +733,8 @@ where
                 }
             };
             slog.append(&buffer, self.log_tkn, f)
-                .map_err(|ridx| (ridx, combiner_lock))?;
-        }
+                .map_err(|ridx| (ridx, combiner_lock))?
+        };
 
         // Execute any operations on the shared log against this replica.
         {
@@ -727,7 +761,7 @@ where
             operations[i - 1] = 0;
         }
 
-        Ok(())
+        Ok(ok_res)
     }
 
     pub async fn async_execute_mut(

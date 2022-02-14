@@ -50,7 +50,7 @@ const_assert!(GC_FROM_HEAD >= 1 && (GC_FROM_HEAD & (GC_FROM_HEAD - 1) == 0));
 ///
 /// This helps with debugging to figure out where things may end up blocking.
 /// Should be a power of two to avoid divisions.
-const WARN_THRESHOLD: usize = 1 << 22;
+const WARN_THRESHOLD: usize = 1 << 7;
 
 /// An entry that sits on the log. Each entry consists of three fields: The operation to
 /// be performed when a thread reaches this entry on the log, the replica that appended
@@ -386,7 +386,12 @@ where
     /// used by the benchmarking code.
     #[inline(always)]
     #[doc(hidden)]
-    pub fn append<F: FnMut(T, usize)>(&self, ops: &[T], idx: usize, mut s: F) -> Result<(), usize> {
+    pub fn append<F: FnMut(T, usize)>(
+        &self,
+        ops: &[T],
+        idx: usize,
+        mut s: F,
+    ) -> Result<Option<usize>, usize> {
         let nops = ops.len();
         let mut iteration = 1;
         let mut waitgc = 1;
@@ -403,6 +408,26 @@ where
                     iteration,
                     min_replica_idx,
                 );
+                let r = self.next.load(Ordering::Relaxed);
+                let (mut min_replica_idx, mut min_local_tail) =
+                    (0, self.ltails[0].load(Ordering::Relaxed));
+
+                // Find the smallest local tail across all replicas.
+                for idx in 1..r {
+                    let cur_local_tail = self.ltails[idx - 1].load(Ordering::Relaxed);
+                    info!(
+                        "Replica {} cur_local_tail {} head {}.",
+                        idx - 1,
+                        cur_local_tail,
+                        self.head.load(Ordering::Relaxed)
+                    );
+
+                    if cur_local_tail < min_local_tail {
+                        min_local_tail = cur_local_tail;
+                        min_replica_idx = idx - 1;
+                    }
+                }
+
                 return Err(min_replica_idx);
             }
             iteration += 1;
@@ -427,6 +452,7 @@ where
                 }
                 waitgc += 1;
                 self.exec(idx, &mut s);
+                self.advance_head(idx, &mut s);
 
                 #[cfg(loom)]
                 loom::thread::yield_now();
@@ -473,9 +499,19 @@ where
 
             // If needed, advance the head of the log forward to make room on the log.
             return if advance {
-                self.advance_head(idx, &mut s)
+                // If `advance_head()` fails to advance it will return the
+                // replica we're waiting for as an error. If a client calls
+                // `combine()` this isn't considered an error as we have
+                // succesfully applied the operations. But, we should still make
+                // sure to eventually `unstuck` the replica we're waited for, so
+                // we transform the error to an Ok(Option<usize>) to convey this
+                // information to clients.
+                match self.advance_head(idx, &mut s) {
+                    Ok(_) => Ok(None),
+                    Err(min_replica_idx) => Ok(Some(min_replica_idx)),
+                }
             } else {
-                Ok(())
+                Ok(None)
             };
         }
     }
@@ -597,7 +633,9 @@ where
         // Find the smallest local tail across all replicas.
         for idx in 1..r {
             let cur_local_tail = self.ltails[idx - 1].load(Ordering::Relaxed);
-            if min_local_tail > cur_local_tail {
+            //info!("Replica {} cur_local_tail {}.", idx - 1, cur_local_tail);
+
+            if cur_local_tail < min_local_tail {
                 min_local_tail = cur_local_tail;
                 min_replica_idx = idx - 1;
             }
@@ -625,7 +663,7 @@ where
             // any new entries on the log to prevent deadlock.
             if min_local_tail == global_head {
                 if iteration % WARN_THRESHOLD == 0 {
-                    warn!("Spending a long time in `advance_head`, are we starving?");
+                    warn!("Spending a long time in `advance_head`, are we starving (min_replica_idx = {})?", min_replica_idx);
                     return Err(min_replica_idx);
                 }
                 iteration += 1;

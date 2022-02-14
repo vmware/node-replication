@@ -69,7 +69,6 @@
     feature = "unstable",
     feature(new_uninit, get_mut_unchecked, negative_impls)
 )]
-#![feature(try_reserve)]
 #![feature(box_syntax)]
 #![feature(allocator_api)]
 #![feature(nonnull_slice_from_raw_parts)]
@@ -88,6 +87,7 @@ extern crate log as logging;
 #[macro_use]
 extern crate static_assertions;
 
+use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::marker::Sync;
 use core::num::NonZeroUsize;
@@ -214,7 +214,6 @@ pub struct NodeReplicated<D: Dispatch + Sync> {
     _affinity_changer: AffinityChanger,
 }
 
-use alloc::prelude::v1::Box;
 //use alloc::sync::Arc;
 use alloc::collections::TryReserveError;
 
@@ -298,15 +297,53 @@ where
         op: <D as Dispatch>::WriteOperation,
         tkn: ThreadToken,
     ) -> <D as Dispatch>::Response {
-        let mut cl = None;
+        enum ResolveOp<'a, D: core::marker::Sync + Dispatch + Sized> {
+            ExecuteMut(Option<CombinerLock<'a, D>>),
+            Sync(usize),
+            Combine(usize, CombinerLock<'a, D>),
+        }
+
+        let mut q = Vec::with_capacity(4);
         loop {
-            match self.try_execute_mut(op.clone(), tkn, cl) {
-                Ok(resp) => return resp,
-                Err((stuck_ridx, cl_acq)) => {
-                    cl = Some(cl_acq);
-                    error!("trying to unstuck {}", stuck_ridx);
-                    assert!(self.replicas[stuck_ridx].sync(&self.log).is_ok());
-                }
+            match q.pop().unwrap_or(ResolveOp::ExecuteMut(None)) {
+                ResolveOp::ExecuteMut(cl) => match self.try_execute_mut(op.clone(), tkn, cl) {
+                    Ok(resp) => {
+                        assert!(q.is_empty());
+                        return resp;
+                    }
+                    Err((stuck_ridx, cl_acq)) => {
+                        if stuck_ridx == tkn.rid {
+                            info!("q= {}", q.len());
+                            assert_ne!(stuck_ridx, tkn.rid);
+                        }
+                        q.push(ResolveOp::ExecuteMut(Some(cl_acq)));
+                        q.push(ResolveOp::Sync(stuck_ridx));
+                    }
+                },
+                ResolveOp::Sync(ridx) => match self.replicas[ridx].sync(&self.log) {
+                    Ok(resp) => continue,
+                    Err(stuck_ridx) => {
+                        //assert_ne!(stuck_ridx, tkn.rid);
+                        if stuck_ridx != tkn.rid {
+                            q.push(ResolveOp::Sync(stuck_ridx));
+                        }
+                    }
+                },
+                ResolveOp::Combine(ridx, cl) => unreachable!("old"),
+                /*ResolveOp::Combine(ridx, cl) => match self.replicas[ridx].combine(&self.log, cl) {
+                    Ok(None) => continue,
+                    Ok(Some(advance_ridx)) => {
+                        assert_ne!(advance_ridx, tkn.rid);
+                        q.push(ResolveOp::Sync(advance_ridx));
+                    }
+                    Err((stuck_ridx, cl_acq)) => {
+                        //assert_ne!(stuck_ridx, tkn.rid);
+                        q.push(ResolveOp::Combine(ridx, cl_acq));
+                        if stuck_ridx != tkn.rid {
+                            q.push(ResolveOp::Sync(stuck_ridx));
+                        }
+                    }
+                }*/
             }
         }
     }
@@ -329,14 +366,48 @@ where
         op: <D as Dispatch>::ReadOperation,
         tkn: ThreadToken,
     ) -> <D as Dispatch>::Response {
-        let mut cl = None;
+        enum ResolveOp<'a, D: core::marker::Sync + Dispatch + Sized> {
+            Execute(Option<CombinerLock<'a, D>>),
+            Sync(usize),
+            Combine(usize, CombinerLock<'a, D>),
+        }
+
+        let mut q = Vec::with_capacity(4);
         loop {
-            match self.try_execute(op.clone(), tkn, cl) {
-                Ok(resp) => return resp,
-                Err((stuck_ridx, cl_acq)) => {
-                    cl = Some(cl_acq);
-                    assert!(self.replicas[stuck_ridx].sync(&self.log).is_ok());
-                }
+            match q.pop().unwrap_or(ResolveOp::Execute(None)) {
+                ResolveOp::Execute(cl) => match self.try_execute(op.clone(), tkn, cl) {
+                    Ok(resp) => {
+                        assert!(q.is_empty());
+                        return resp;
+                    }
+                    Err((stuck_ridx, cl_acq)) => {
+                        assert!(stuck_ridx != tkn.rid);
+                        q.push(ResolveOp::Execute(Some(cl_acq)));
+                        q.push(ResolveOp::Sync(stuck_ridx));
+                    }
+                },
+                ResolveOp::Sync(ridx) => match self.replicas[ridx].sync(&self.log) {
+                    Ok(resp) => continue,
+                    Err(stuck_ridx) => {
+                        assert!(stuck_ridx != tkn.rid);
+                        //q.push(ResolveOp::Combine(ridx, cl_acq));
+                        q.push(ResolveOp::Sync(stuck_ridx));
+                    }
+                },
+                ResolveOp::Combine(ridx, cl) => unreachable!("old"),
+                /*
+                ResolveOp::Combine(ridx, cl) => match self.replicas[ridx].combine(&self.log, cl) {
+                    Ok(None) => continue,
+                    Ok(Some(advance_ridx)) => {
+                        assert_ne!(advance_ridx, tkn.rid);
+                        q.push(ResolveOp::Sync(advance_ridx));
+                    }
+                    Err((stuck_ridx, cl_acq)) => {
+                        assert!(stuck_ridx != tkn.rid);
+                        q.push(ResolveOp::Combine(ridx, cl_acq));
+                        q.push(ResolveOp::Sync(stuck_ridx));
+                    }
+                }, */
             }
         }
     }
@@ -344,7 +415,7 @@ where
     pub fn sync(&self, tkn: ThreadToken) {
         match self.replicas[tkn.rid].sync(&self.log) {
             Ok(r) => r,
-            Err((stuck_ridx, _combiner_lock)) => panic!("replica#{} is stuck", stuck_ridx),
+            Err(stuck_ridx) => panic!("replica#{} is stuck", stuck_ridx),
         }
     }
 }
