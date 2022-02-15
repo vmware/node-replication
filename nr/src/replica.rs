@@ -682,7 +682,7 @@ where
     pub(crate) fn exec<'r>(
         &'r self,
         slog: &Log<<D as Dispatch>::WriteOperation>,
-        combiner_lock: CombinerLock<'r, D>,
+        _combiner_lock: CombinerLock<'r, D>,
     ) {
         // Execute any operations on the shared log against this replica.
         let next = self.next.load(Ordering::Relaxed);
@@ -721,7 +721,7 @@ where
 
         // Append all collected operations into the shared log. We pass a closure
         // in here because operations on the log might need to be consumed for GC.
-        let ok_res = {
+        {
             let mut data = self.data.write(next);
             let f = |o: <D as Dispatch>::WriteOperation, i: usize| {
                 #[cfg(not(loom))]
@@ -732,8 +732,12 @@ where
                     results.push(resp);
                 }
             };
-            slog.append(&buffer, self.log_tkn, f)
-        };
+            match slog.append(&buffer, self.log_tkn, f) {
+                Ok(None) => (),
+                Ok(Some(r)) => return Err((r, combiner_lock)),
+                Err(r) => return Err((r, combiner_lock)),
+            };
+        }
 
         // Execute any operations on the shared log against this replica.
         {
@@ -764,11 +768,7 @@ where
         drop(operations);
         drop(results);
         drop(combiner_lock);*/
-
-        match ok_res {
-            Ok(r) => return Ok(r),
-            Err(usize) => Err((usize, combiner_lock))
-        }
+        Ok(None)
     }
 
     pub async fn async_execute_mut(
