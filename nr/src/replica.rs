@@ -688,10 +688,10 @@ where
         {
             let mut data = self.data.write(next);
             let mut f = |o: <D as Dispatch>::WriteOperation, i: usize| {
-                let resp = data.dispatch_mut(o);
+                let _resp = data.dispatch_mut(o);
                 if i == self.log_tkn {
-                    panic!("Ups -- we lost a result?");
-                };
+                    panic!("Ups -- we just lost a result?");
+                }
             };
             slog.exec(self.log_tkn, &mut f);
         }
@@ -703,7 +703,7 @@ where
         &'r self,
         slog: &Log<<D as Dispatch>::WriteOperation>,
         combiner_lock: CombinerLock<'r, D>,
-    ) -> Result<Option<usize>, (usize, CombinerLock<'r, D>)> {
+    ) -> Result<(), (usize, CombinerLock<'r, D>)> {
         let mut buffer = self.buffer.borrow_mut();
         let mut operations = self.inflight.borrow_mut();
         let mut results = self.result.borrow_mut();
@@ -763,11 +763,7 @@ where
             operations[i - 1] = 0;
         }
 
-        /*drop(buffer);
-        drop(operations);
-        drop(results);
-        drop(combiner_lock);*/
-        Ok(None)
+        Ok(())
     }
 }
 

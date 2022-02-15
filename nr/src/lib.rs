@@ -298,7 +298,6 @@ where
         enum ResolveOp<'a, D: core::marker::Sync + Dispatch + Sized> {
             ExecuteMut(Option<CombinerLock<'a, D>>),
             Sync(usize),
-            Combine(usize, CombinerLock<'a, D>),
         }
 
         let mut q = Vec::with_capacity(4);
@@ -310,38 +309,20 @@ where
                         return resp;
                     }
                     Err((stuck_ridx, cl_acq)) => {
-                        if stuck_ridx == tkn.rid {
-                            info!("q= {}", q.len());
-                            assert_ne!(stuck_ridx, tkn.rid);
-                        }
+                        assert_ne!(stuck_ridx, tkn.rid);
                         q.push(ResolveOp::ExecuteMut(Some(cl_acq)));
                         q.push(ResolveOp::Sync(stuck_ridx));
                     }
                 },
                 ResolveOp::Sync(ridx) => match self.replicas[ridx].sync(&self.log) {
-                    Ok(resp) => continue,
+                    Ok(()) => continue,
                     Err(stuck_ridx) => {
-                        //assert_ne!(stuck_ridx, tkn.rid);
+                        assert_ne!(stuck_ridx, tkn.rid);
                         if stuck_ridx != tkn.rid {
                             q.push(ResolveOp::Sync(stuck_ridx));
                         }
                     }
                 },
-                ResolveOp::Combine(ridx, cl) => unreachable!("old"),
-                /*ResolveOp::Combine(ridx, cl) => match self.replicas[ridx].combine(&self.log, cl) {
-                    Ok(None) => continue,
-                    Ok(Some(advance_ridx)) => {
-                        assert_ne!(advance_ridx, tkn.rid);
-                        q.push(ResolveOp::Sync(advance_ridx));
-                    }
-                    Err((stuck_ridx, cl_acq)) => {
-                        //assert_ne!(stuck_ridx, tkn.rid);
-                        q.push(ResolveOp::Combine(ridx, cl_acq));
-                        if stuck_ridx != tkn.rid {
-                            q.push(ResolveOp::Sync(stuck_ridx));
-                        }
-                    }
-                }*/
             }
         }
     }
@@ -367,7 +348,6 @@ where
         enum ResolveOp<'a, D: core::marker::Sync + Dispatch + Sized> {
             Execute(Option<CombinerLock<'a, D>>),
             Sync(usize),
-            Combine(usize, CombinerLock<'a, D>),
         }
 
         let mut q = Vec::with_capacity(4);
@@ -385,27 +365,12 @@ where
                     }
                 },
                 ResolveOp::Sync(ridx) => match self.replicas[ridx].sync(&self.log) {
-                    Ok(resp) => continue,
+                    Ok(()) => continue,
                     Err(stuck_ridx) => {
                         assert!(stuck_ridx != tkn.rid);
-                        //q.push(ResolveOp::Combine(ridx, cl_acq));
                         q.push(ResolveOp::Sync(stuck_ridx));
                     }
                 },
-                ResolveOp::Combine(ridx, cl) => unreachable!("old"),
-                /*
-                ResolveOp::Combine(ridx, cl) => match self.replicas[ridx].combine(&self.log, cl) {
-                    Ok(None) => continue,
-                    Ok(Some(advance_ridx)) => {
-                        assert_ne!(advance_ridx, tkn.rid);
-                        q.push(ResolveOp::Sync(advance_ridx));
-                    }
-                    Err((stuck_ridx, cl_acq)) => {
-                        assert!(stuck_ridx != tkn.rid);
-                        q.push(ResolveOp::Combine(ridx, cl_acq));
-                        q.push(ResolveOp::Sync(stuck_ridx));
-                    }
-                }, */
             }
         }
     }

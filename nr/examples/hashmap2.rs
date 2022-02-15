@@ -6,7 +6,6 @@ use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
-use log::info;
 use node_replication::Dispatch;
 use node_replication::NodeReplicated;
 
@@ -55,16 +54,16 @@ impl Dispatch for NrHashMap {
 /// and then execute operations.
 fn main() {
     let _r = env_logger::try_init();
-    // Next, we create two replicas of the hashmap
-
-    for i in 4..=4 {
-        let num_replica = NonZeroUsize::new(4).unwrap();
+    const PER_THREAD_OPS: u64 = 2_948_048;
+    // Next, we create the replicated the hashmap
+    for replica_cntr in 1..=4 {
+        let num_replica = NonZeroUsize::new(replica_cntr).unwrap();
         let nrht = Arc::new(NodeReplicated::<NrHashMap>::new(num_replica, |_rid| {}).unwrap());
 
         // The replica executes a Modify or Access operations by calling
         // `execute_mut` and `execute`. Eventually they end up in the `Dispatch` trait.
         let thread_loop = |replica: Arc<NodeReplicated<NrHashMap>>, ttkn| {
-            for i in 0..2_948_048 {
+            for i in 0..PER_THREAD_OPS {
                 let _r = match i % 2 {
                     0 => replica.execute_mut(Modify::Put(i, i + 1), ttkn),
                     1 => {
@@ -77,36 +76,40 @@ fn main() {
             }
         };
 
+        let now = std::time::Instant::now();
         // Finally, we spawn three threads that issue operations, thread 1, 2, 3
         // will use replicas 1, 2, 3 -- 4th replica will implicitly be served by others
         // because we can in this model...
-        let mut threads = Vec::with_capacity(4);
-        let nrht_cln = nrht.clone();
-        threads.push(std::thread::spawn(move || {
-            let ttkn = nrht_cln.register(0).expect("Unable to register thread");
-            thread_loop(nrht_cln, ttkn);
-        }));
-        let nrht_cln = nrht.clone();
-        threads.push(std::thread::spawn(move || {
-            let ttkn = nrht_cln.register(0).expect("Unable to register thread");
-            thread_loop(nrht_cln, ttkn);
-        }));
+        for thread_num in 1..=4 {
+            print!(
+                "Running with {} replicas and {} threads",
+                replica_cntr, thread_num
+            );
 
-        /*let nrht_cln = nrht.clone();
-        threads.push(std::thread::spawn(move || {
-            let ttkn = nrht_cln.register(1).expect("Unable to register thread");
-            thread_loop(nrht_cln, ttkn);
-        }));
+            let mut threads = Vec::with_capacity(thread_num);
+            for t in 0..thread_num {
+                let nrht_cln = nrht.clone();
+                threads.push(std::thread::spawn(move || {
+                    let ttkn = nrht_cln.register(t % replica_cntr).expect(
+                        format!(
+                            "Unable to register thread with replica {}",
+                            t % replica_cntr
+                        )
+                        .as_str(),
+                    );
+                    thread_loop(nrht_cln, ttkn);
+                }));
+            }
 
-        let nrht_cln = nrht.clone();
-        threads.push(std::thread::spawn(move || {
-            let ttkn = nrht_cln.register(2).expect("Unable to register thread");
-            thread_loop(nrht_cln, ttkn);
-        }));*/
+            // Wait for all the threads to finish
+            for thread in threads {
+                thread.join().unwrap();
+            }
 
-        // Wait for all the threads to finish
-        for thread in threads {
-            thread.join().unwrap();
+            println!(
+                " ({} ns/op)",
+                now.elapsed().as_nanos() / (thread_num as u128 * PER_THREAD_OPS as u128)
+            );
         }
     }
 }
