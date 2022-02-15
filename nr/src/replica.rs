@@ -733,7 +733,6 @@ where
                 }
             };
             slog.append(&buffer, self.log_tkn, f)
-                .map_err(|ridx| (ridx, combiner_lock))?
         };
 
         // Execute any operations on the shared log against this replica.
@@ -761,7 +760,15 @@ where
             operations[i - 1] = 0;
         }
 
-        Ok(ok_res)
+        /*drop(buffer);
+        drop(operations);
+        drop(results);
+        drop(combiner_lock);*/
+
+        match ok_res {
+            Ok(r) => return Ok(r),
+            Err(usize) => Err((usize, combiner_lock))
+        }
     }
 
     pub async fn async_execute_mut(

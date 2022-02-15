@@ -452,7 +452,7 @@ where
                 }
                 waitgc += 1;
                 self.exec(idx, &mut s);
-                self.advance_head(idx, &mut s);
+                self.advance_head(idx, &mut s)?;
 
                 #[cfg(loom)]
                 loom::thread::yield_now();
