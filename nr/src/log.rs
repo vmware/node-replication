@@ -31,7 +31,7 @@ const_assert!(DEFAULT_LOG_BYTES >= 1 && (DEFAULT_LOG_BYTES & (DEFAULT_LOG_BYTES 
 
 /// The maximum number of replicas that can be registered with the log.
 #[cfg(not(loom))]
-pub const MAX_REPLICAS_PER_LOG: usize = 192;
+pub const MAX_REPLICAS_PER_LOG: usize = 16;
 #[cfg(loom)] // Otherwise uses too much stack space wich crashes in loom...
 pub const MAX_REPLICAS_PER_LOG: usize = 3;
 

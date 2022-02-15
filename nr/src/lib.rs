@@ -91,6 +91,9 @@ use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::marker::Sync;
 use core::num::NonZeroUsize;
+
+use arrayvec::ArrayVec;
+
 use replica::CombinerLock;
 
 mod context;
@@ -206,6 +209,11 @@ impl<'a> Drop for CurrentAffinity<'a> {
     }
 }
 
+enum ResolveOp<'a, D: core::marker::Sync + Dispatch + Sized> {
+    Exec(Option<CombinerLock<'a, D>>),
+    Sync(usize),
+}
+
 pub struct NodeReplicated<D: Dispatch + Sync> {
     log: Log<D::WriteOperation>,
     replicas: Vec<Box<Replica<D>>>,
@@ -283,8 +291,9 @@ where
         cl: Option<CombinerLock<'a, D>>,
     ) -> Result<<D as Dispatch>::Response, (usize, CombinerLock<'a, D>)> {
         if let Some(combiner_lock) = cl {
-            self.replicas[tkn.rid].combine(&self.log, combiner_lock)?;
-            self.replicas[tkn.rid].get_response(&self.log, tkn.rtkn.tid())
+            // We expect to have already enqueued the op (it's a re-try since have the combiner lock),
+            // so technically its not needed to supply it again (but we currently do it anyways...)
+            self.replicas[tkn.rid].execute_mut_locked(&self.log, op, tkn.rtkn, combiner_lock)
         } else {
             self.replicas[tkn.rid].execute_mut(&self.log, op, tkn.rtkn)
         }
@@ -295,22 +304,17 @@ where
         op: <D as Dispatch>::WriteOperation,
         tkn: ThreadToken,
     ) -> <D as Dispatch>::Response {
-        enum ResolveOp<'a, D: core::marker::Sync + Dispatch + Sized> {
-            ExecuteMut(Option<CombinerLock<'a, D>>),
-            Sync(usize),
-        }
-
-        let mut q = Vec::with_capacity(4);
+        let mut q = ArrayVec::<ResolveOp<D>, { crate::log::MAX_REPLICAS_PER_LOG }>::new();
         loop {
-            match q.pop().unwrap_or(ResolveOp::ExecuteMut(None)) {
-                ResolveOp::ExecuteMut(cl) => match self.try_execute_mut(op.clone(), tkn, cl) {
+            match q.pop().unwrap_or(ResolveOp::Exec(None)) {
+                ResolveOp::Exec(cl) => match self.try_execute_mut(op.clone(), tkn, cl) {
                     Ok(resp) => {
                         assert!(q.is_empty());
                         return resp;
                     }
                     Err((stuck_ridx, cl_acq)) => {
                         assert_ne!(stuck_ridx, tkn.rid);
-                        q.push(ResolveOp::ExecuteMut(Some(cl_acq)));
+                        q.push(ResolveOp::Exec(Some(cl_acq)));
                         q.push(ResolveOp::Sync(stuck_ridx));
                     }
                 },
@@ -334,7 +338,7 @@ where
         cl: Option<CombinerLock<'a, D>>,
     ) -> Result<<D as Dispatch>::Response, (usize, CombinerLock<'a, D>)> {
         if let Some(combiner_lock) = cl {
-            self.replicas[tkn.rid].execute_w_lock(&self.log, op.clone(), tkn.rtkn, combiner_lock)
+            self.replicas[tkn.rid].execute_locked(&self.log, op.clone(), tkn.rtkn, combiner_lock)
         } else {
             self.replicas[tkn.rid].execute(&self.log, op.clone(), tkn.rtkn)
         }
@@ -345,22 +349,17 @@ where
         op: <D as Dispatch>::ReadOperation,
         tkn: ThreadToken,
     ) -> <D as Dispatch>::Response {
-        enum ResolveOp<'a, D: core::marker::Sync + Dispatch + Sized> {
-            Execute(Option<CombinerLock<'a, D>>),
-            Sync(usize),
-        }
-
-        let mut q = Vec::with_capacity(4);
+        let mut q = ArrayVec::<ResolveOp<D>, { crate::log::MAX_REPLICAS_PER_LOG }>::new();
         loop {
-            match q.pop().unwrap_or(ResolveOp::Execute(None)) {
-                ResolveOp::Execute(cl) => match self.try_execute(op.clone(), tkn, cl) {
+            match q.pop().unwrap_or(ResolveOp::Exec(None)) {
+                ResolveOp::Exec(cl) => match self.try_execute(op.clone(), tkn, cl) {
                     Ok(resp) => {
                         assert!(q.is_empty());
                         return resp;
                     }
                     Err((stuck_ridx, cl_acq)) => {
                         assert!(stuck_ridx != tkn.rid);
-                        q.push(ResolveOp::Execute(Some(cl_acq)));
+                        q.push(ResolveOp::Exec(Some(cl_acq)));
                         q.push(ResolveOp::Sync(stuck_ridx));
                     }
                 },
