@@ -16,14 +16,15 @@ readme = "README.md"
 version = "0.1.1"
 
 [dependencies]
+arrayvec = "0.7.2"
 crossbeam-utils = {version = "0.8.5", default-features = false}
 log = "0.4"
 static_assertions = "1.1.0"
 
 [target.'cfg(loom)'.dependencies]
 # Waiting for https://github.com/tokio-rs/loom/pull/221 to get merged
-loom = { git = "https://github.com/gz/loom.git", branch = "try_recv" }
 arr_macro = "0.1.3"
+loom = {git = "https://github.com/gz/loom.git", branch = "try_recv"}
 
 [target.'cfg(not(loom))'.dependencies]
 # Config based dependency due to https://github.com/tokio-rs/tokio/issues/2463
@@ -36,8 +37,8 @@ debug = true
 
 [dev-dependencies]
 chashmap = "2.2"
-rand = {version = "0.8", features = ["small_rng"]}
 env_logger = "0.9.0"
+rand = {version = "0.8", features = ["small_rng"]}
 
 [features]
 unstable = []

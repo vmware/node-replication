@@ -452,6 +452,18 @@ where
         self.get_response(slog, idx.tid())
     }
 
+    pub fn execute_mut_locked<'lock>(
+        &'lock self,
+        slog: &Log<<D as Dispatch>::WriteOperation>,
+        _op: <D as Dispatch>::WriteOperation,
+        idx: ReplicaToken,
+        combiner_lock: CombinerLock<'lock, D>,
+    ) -> Result<<D as Dispatch>::Response, (usize, CombinerLock<D>)> {
+        // Enqueue the operation onto the thread local batch and then try to flat combine.
+        self.combine(slog, combiner_lock)?;
+        self.get_response(slog, idx.tid())
+    }
+
     /// Executes a read-only operation against this replica and returns a response.
     /// `idx` is an identifier for the thread performing the execute operation.
     ///
@@ -519,7 +531,7 @@ where
         return Ok(self.data.read(idx.tid() - 1).dispatch(op));
     }
 
-    pub fn execute_w_lock<'lock>(
+    pub fn execute_locked<'lock>(
         &'lock self,
         slog: &Log<<D as Dispatch>::WriteOperation>,
         op: <D as Dispatch>::ReadOperation,
@@ -662,6 +674,7 @@ where
         }
     }
 
+    #[inline(always)]
     fn try_exec<'r>(&'r self, slog: &Log<<D as Dispatch>::WriteOperation>) {
         // First, check if there already is a flat combiner. If there is no active flat combiner
         // then try to acquire the combiner lock. If there is, then just return.
@@ -672,18 +685,14 @@ where
         }
 
         // Try to become the combiner here. If this fails, then simply return.
-        if let Some(combiner_lock) = self.acquire_combiner_lock() {
+        if let Some(_combiner_lock) = self.acquire_combiner_lock() {
             // Successfully became the combiner; perform one round of flat combining.
-            self.exec(slog, combiner_lock);
+            self.exec(slog);
         }
     }
 
     #[inline(always)]
-    pub(crate) fn exec<'r>(
-        &'r self,
-        slog: &Log<<D as Dispatch>::WriteOperation>,
-        _combiner_lock: CombinerLock<'r, D>,
-    ) {
+    fn exec<'r>(&'r self, slog: &Log<<D as Dispatch>::WriteOperation>) {
         // Execute any operations on the shared log against this replica.
         let next = self.next.load(Ordering::Relaxed);
         {
