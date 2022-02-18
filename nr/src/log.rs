@@ -292,8 +292,8 @@ where
         size_of::<Cell<Entry<T>>>()
     }
 
-    /// Registers a replica with the log. Returns an identifier that the replica
-    /// can use to execute operations on the log.
+    /// Registers a replica with the log. Returns an identifier that the replica can use
+    /// to execute operations on the log.
     ///
     /// # Example
     ///
@@ -315,7 +315,11 @@ where
     /// // to the log, and execute these operations.
     /// let idx = l.register().expect("Failed to register with the Log.");
     /// ```
-    pub(crate) fn register(&self) -> Option<LogToken> {
+    ///
+    /// # Visibility
+    /// There is no need to call this function from a client if you're not using the log
+    /// replica API directly.
+    pub fn register(&self) -> Option<LogToken> {
         // Loop until we either run out of identifiers or we manage to increment `next`.
         loop {
             let n = self.next.load(Ordering::Relaxed);

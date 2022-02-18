@@ -1,12 +1,13 @@
 // Copyright © 2019-2020 VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! A minimal example that implements a replicated stack
+//! A minimal example that implements a node-replicated stack
+
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use node_replication::Dispatch;
-use node_replication::Log;
-use node_replication::Replica;
+use node_replication::NodeReplicated;
 
 /// We support mutable push and pop operations on the stack.
 #[derive(Clone, Debug, PartialEq)]
@@ -21,17 +22,16 @@ enum Access {
     Peek,
 }
 
-/// The actual stack, it uses a single-threaded Vec.
+/// The actual stack is implemented with a (single-threaded) Vec.
 struct Stack {
     storage: Vec<u32>,
 }
 
 impl Default for Stack {
-    /// The stack Default implementation, as it is
-    /// executed for every Replica.
+    /// The stack Default implementation.
     ///
-    /// This should be deterministic as it is used to create multiple instances
-    /// of a Stack for every replica.
+    /// This should be deterministic as it is used to create multiple instances of a Stack
+    /// for every replica during initialization.
     fn default() -> Stack {
         const DEFAULT_STACK_SIZE: u32 = 1_000u32;
 
@@ -47,9 +47,8 @@ impl Default for Stack {
     }
 }
 
-/// The Dispatch traits executes `ReadOperation` (our Access enum)
-/// and `WriteOperation` (our `Modify` enum) against the replicated
-/// data-structure.
+/// The Dispatch traits executes `ReadOperation` (our Access enum) and `WriteOperation`
+/// (our `Modify` enum) against the replicated data-structure.
 impl Dispatch for Stack {
     type ReadOperation = Access;
     type WriteOperation = Modify;
@@ -74,51 +73,40 @@ impl Dispatch for Stack {
     }
 }
 
-/// We initialize a log, and two replicas for a stack, register with the replica
-/// and then execute operations.
+/// We initialize a replicated stack with two replicas, then spawn threads, assign them to
+/// replicas and execute operations.
 fn main() {
-    // The operation log for storing `WriteOperation`, it has a size of 2 MiB:
-    let log = Arc::new(Log::<<Stack as Dispatch>::WriteOperation>::new(
-        2 * 1024 * 1024,
-    ));
+    const NUM_REPLICAS: usize = 2;
+    const NUM_THREADS: usize = 3;
+    const NUM_OPS_PER_THREAD: usize = 2048;
 
-    // Next, we create two replicas of the stack
-    let replica1 = Replica::<Stack>::new(&log);
-    let replica2 = Replica::<Stack>::new(&log);
+    let two = NonZeroUsize::new(NUM_REPLICAS).expect("2 is not 0");
+    let stack =
+        Arc::new(NodeReplicated::new(two, |_node| {}).expect("Can't create NodeReplicated Stack"));
 
     // The replica executes a Modify or Access operations by calling
     // `execute_mut` and `execute`. Eventually they end up in the `Dispatch` trait.
-    let thread_loop = |replica: &Arc<Replica<Stack>>, ridx| {
-        for i in 0..2048 {
+    let thread_loop = |stack: &Arc<NodeReplicated<Stack>>, ridx| {
+        for i in 0..NUM_OPS_PER_THREAD {
             let _r = match i % 3 {
-                0 => replica.execute_mut(Modify::Push(i as u32), ridx),
-                1 => replica.execute_mut(Modify::Pop, ridx),
-                2 => replica.execute(Access::Peek, ridx),
+                0 => stack.execute_mut(Modify::Push(i as u32), ridx),
+                1 => stack.execute_mut(Modify::Pop, ridx),
+                2 => stack.execute(Access::Peek, ridx),
                 _ => unreachable!(),
             };
         }
     };
 
-    // Finally, we spawn three threads that issue operations, thread 1 and 2
-    // will use replica1 and thread 3 will use replica 2:
-    let replica11 = replica1.clone();
-
-    let mut threads = Vec::with_capacity(3);
-    threads.push(std::thread::spawn(move || {
-        let ridx = replica11.register().expect("Unable to register with log");
-        thread_loop(&replica11, ridx);
-    }));
-
-    let replica12 = replica1.clone();
-    threads.push(std::thread::spawn(move || {
-        let ridx = replica12.register().expect("Unable to register with log");
-        thread_loop(&replica12, ridx);
-    }));
-
-    threads.push(std::thread::spawn(move || {
-        let ridx = replica2.register().expect("Unable to register with log");
-        thread_loop(&replica2, ridx);
-    }));
+    let mut threads = Vec::with_capacity(NUM_THREADS);
+    for idx in 0..NUM_THREADS {
+        let stack = stack.clone();
+        threads.push(std::thread::spawn(move || {
+            let ridx = stack
+                .register(idx % NUM_REPLICAS)
+                .expect("Unable to register with stack");
+            thread_loop(&stack, ridx);
+        }));
+    }
 
     // Wait for all the threads to finish
     for thread in threads {
