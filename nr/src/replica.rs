@@ -185,7 +185,8 @@ where
     /// let log = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
     ///
     /// // Create a replica that uses the above log.
-    /// let replica = Replica::<Data>::new(1);
+    /// let ltkn = log.register().unwrap();
+    /// let replica = Replica::<Data>::new(ltkn);
     /// ```
     pub fn new(log_tkn: LogToken) -> Replica<D> {
         Replica::with_data(log_tkn, Default::default())
