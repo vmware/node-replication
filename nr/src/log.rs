@@ -20,8 +20,11 @@ use crossbeam_utils::CachePadded;
 use crate::context::MAX_PENDING_OPS;
 use crate::replica::MAX_THREADS_PER_REPLICA;
 
-/// A token that register a replica with a log.
-pub(crate) type LogToken = usize;
+/// A token that identifies a replica for a log.
+///
+/// The replica is supposed to call `Log.register()` to get the token.
+#[derive(Eq, PartialEq, Debug)]
+pub struct LogToken(usize);
 
 /// The default size of the shared log in bytes. If constructed using the
 /// default constructor, the log will be these many bytes in size. Currently
@@ -337,7 +340,7 @@ where
                 continue;
             };
 
-            return Some(n);
+            return Some(LogToken(n));
         }
     }
 
@@ -390,10 +393,10 @@ where
     /// used by the benchmarking code.
     #[inline(always)]
     #[doc(hidden)]
-    pub fn append<F: FnMut(T, usize)>(
+    pub fn append<F: FnMut(T, bool)>(
         &self,
         ops: &[T],
-        idx: usize,
+        idx: &LogToken,
         mut s: F,
     ) -> Result<Option<usize>, usize> {
         let nops = ops.len();
@@ -408,7 +411,7 @@ where
                 warn!(
                     "append(ops.len()={}, {}) takes too many iterations ({}) to complete (waiting for {})...",
                     ops.len(),
-                    idx,
+                    idx.0,
                     iteration,
                     min_replica_idx,
                 );
@@ -448,7 +451,7 @@ where
                     warn!(
                         "append(ops.len()={}, {}) takes too many iterations ({}) waiting for gc...",
                         ops.len(),
-                        idx,
+                        idx.0,
                         waitgc,
                     );
                     let (min_replica_idx, _min_local_tail) = self.find_min_tail();
@@ -485,7 +488,7 @@ where
             // Successfully reserved entries on the shared log. Add the operations in.
             for (i, op) in ops.iter().enumerate().take(nops) {
                 let e = self.slog[self.index(tail + i)].as_ptr();
-                let mut m = self.lmasks[idx - 1].get();
+                let mut m = self.lmasks[idx.0 - 1].get();
 
                 // This entry was just reserved so it should be dead (!= m). However, if
                 // the log has wrapped around, then the alive mask has flipped. In this
@@ -497,7 +500,7 @@ where
                 }
 
                 unsafe { (*e).operation = Some(op.clone()) };
-                unsafe { (*e).replica = idx };
+                unsafe { (*e).replica = idx.0 };
                 unsafe { (*e).alivef.store(m, Ordering::Release) };
             }
 
@@ -564,9 +567,9 @@ where
     /// The passed in closure is expected to take in two arguments: The operation
     /// from the shared log to be executed and the replica that issued it.
     #[inline(always)]
-    pub(crate) fn exec<F: FnMut(T, usize)>(&self, idx: usize, d: &mut F) {
+    pub(crate) fn exec<F: FnMut(T, bool)>(&self, idx: &LogToken, d: &mut F) {
         // Load the logical log offset from which we must execute operations.
-        let ltail = self.ltails[idx - 1].load(Ordering::Relaxed);
+        let ltail = self.ltails[idx.0 - 1].load(Ordering::Relaxed);
 
         // Check if we have any work to do by comparing our local tail with the log's
         // global tail. If they're equal, then we're done here and can simply return.
@@ -589,14 +592,14 @@ where
             let mut iteration = 1;
             let e = self.slog[self.index(i)].as_ptr();
 
-            while unsafe { (*e).alivef.load(Ordering::Acquire) != self.lmasks[idx - 1].get() } {
+            while unsafe { (*e).alivef.load(Ordering::Acquire) != self.lmasks[idx.0 - 1].get() } {
                 if iteration % WARN_THRESHOLD == 0 {
                     warn!(
                         "alivef not being set for self.index(i={}) = {} (self.lmasks[{}] is {})...",
                         i,
                         self.index(i),
-                        idx - 1,
-                        self.lmasks[idx - 1].get()
+                        idx.0 - 1,
+                        self.lmasks[idx.0 - 1].get()
                     );
                 }
                 iteration += 1;
@@ -605,11 +608,16 @@ where
                 loom::thread::yield_now();
             }
 
-            unsafe { d((*e).operation.as_ref().unwrap().clone(), (*e).replica) };
+            unsafe {
+                d(
+                    (*e).operation.as_ref().unwrap().clone(),
+                    (*e).replica == idx.0,
+                )
+            };
 
             // Looks like we're going to wrap around now; flip this replica's local mask.
             if self.index(i) == self.slog.len() - 1 {
-                self.lmasks[idx - 1].set(!self.lmasks[idx - 1].get());
+                self.lmasks[idx.0 - 1].set(!self.lmasks[idx.0 - 1].get());
                 //trace!("idx: {} lmask: {}", idx, self.lmasks[idx - 1].get());
             }
         }
@@ -617,7 +625,7 @@ where
         // Update the completed tail after we've executed these operations.
         // Also update this replica's local tail.
         self.ctail.fetch_max(gtail, Ordering::Relaxed);
-        self.ltails[idx - 1].store(gtail, Ordering::Relaxed);
+        self.ltails[idx.0 - 1].store(gtail, Ordering::Relaxed);
     }
 
     /// Returns a physical index given a logical index into the shared log.
@@ -652,7 +660,7 @@ where
     /// then this method will never return. Accepts a closure that is passed into exec()
     /// to ensure that this replica does not deadlock GC.
     #[inline(always)]
-    fn advance_head<F: FnMut(T, usize)>(&self, rid: usize, mut s: &mut F) -> Result<(), usize> {
+    fn advance_head<F: FnMut(T, bool)>(&self, rid: &LogToken, mut s: &mut F) -> Result<(), usize> {
         // Keep looping until we can advance the head and create some free space
         // on the log. If one of the replicas has stopped making progress, then
         // this method might never return.
@@ -781,8 +789,8 @@ where
     /// assert_eq!(true, l.is_replica_synced_for_reads(idx1, l.get_ctail()));
     /// ```
     #[inline(always)]
-    pub(crate) fn is_replica_synced_for_reads(&self, idx: usize, ctail: usize) -> bool {
-        self.ltails[idx - 1].load(Ordering::Relaxed) >= ctail
+    pub(crate) fn is_replica_synced_for_reads(&self, idx: &LogToken, ctail: usize) -> bool {
+        self.ltails[idx.0 - 1].load(Ordering::Relaxed) >= ctail
     }
 
     /// This method returns the current ctail value for the log.
@@ -924,7 +932,7 @@ mod tests {
     #[test]
     fn test_log_register() {
         let l = Log::<Operation>::new_with_bytes(1024);
-        assert_eq!(l.register(), Some(1));
+        assert_eq!(l.register(), Some(LogToken(1)));
         assert_eq!(l.next.load(Ordering::Relaxed), 2);
     }
 
@@ -941,8 +949,10 @@ mod tests {
     #[test]
     fn test_log_append() {
         let l = Log::<Operation>::default();
+        let lt = l.register().unwrap();
+
         let o = [Operation::Read];
-        assert!(l.append(&o, 1, |_o: Operation, _i: usize| {}).is_ok());
+        assert!(l.append(&o, &lt, |_o: Operation, _mine: bool| {}).is_ok());
 
         assert_eq!(l.head.load(Ordering::Relaxed), 0);
         assert_eq!(l.tail.load(Ordering::Relaxed), 1);
@@ -955,8 +965,10 @@ mod tests {
     #[test]
     fn test_log_append_multiple() {
         let l = Log::<Operation>::default();
+        let lt = l.register().unwrap();
+
         let o = [Operation::Read, Operation::Write(119)];
-        assert!(l.append(&o, 1, |_o: Operation, _i: usize| {}).is_ok());
+        assert!(l.append(&o, &lt, |_o: Operation, _mine: bool| {}).is_ok());
 
         assert_eq!(l.head.load(Ordering::Relaxed), 0);
         assert_eq!(l.tail.load(Ordering::Relaxed), 2);
@@ -966,6 +978,7 @@ mod tests {
     #[test]
     fn test_log_advance_head() {
         let l = Log::<Operation>::default();
+        let lt = l.register().unwrap();
 
         l.next.store(5, Ordering::Relaxed);
         l.ltails[0].store(1023, Ordering::Relaxed);
@@ -974,7 +987,7 @@ mod tests {
         l.ltails[3].store(799, Ordering::Relaxed);
 
         assert!(l
-            .advance_head(0, &mut |_o: Operation, _i: usize| {})
+            .advance_head(&lt, &mut |_o: Operation, mine: bool| {})
             .is_ok());
         assert_eq!(l.head.load(Ordering::Relaxed), 224);
     }
@@ -983,6 +996,8 @@ mod tests {
     #[test]
     fn test_log_append_gc() {
         let l = Log::<Operation>::default();
+        let lt = l.register().unwrap();
+
         let o: [Operation; 4] = unsafe {
             let mut a: [Operation; 4] = ::std::mem::MaybeUninit::zeroed().assume_init();
             for i in &mut a[..] {
@@ -995,7 +1010,7 @@ mod tests {
         l.tail
             .store(l.slog.len() - GC_FROM_HEAD - 1, Ordering::Relaxed);
         l.ltails[0].store(1024, Ordering::Relaxed);
-        assert!(l.append(&o, 1, |_o: Operation, _i: usize| {}).is_ok());
+        assert!(l.append(&o, &lt, |_o: Operation, mine: bool| {}).is_ok());
 
         assert_eq!(l.head.load(Ordering::Relaxed), 1024);
         assert_eq!(
@@ -1009,6 +1024,8 @@ mod tests {
     #[test]
     fn test_log_append_wrap() {
         let l = Log::<Operation>::default();
+        let lt = l.register().unwrap();
+
         let o: [Operation; 1024] = unsafe {
             let mut a: [Operation; 1024] = ::std::mem::MaybeUninit::zeroed().assume_init();
             for i in &mut a[..] {
@@ -1020,7 +1037,7 @@ mod tests {
         l.next.store(2, Ordering::Relaxed);
         l.head.store(2 * 8192, Ordering::Relaxed);
         l.tail.store(l.slog.len() - 10, Ordering::Relaxed);
-        assert!(l.append(&o, 1, |_o: Operation, _i: usize| {}).is_ok());
+        assert!(l.append(&o, &lt, |_o: Operation, mine: bool| {}).is_ok());
 
         assert_eq!(l.lmasks[0].get(), true);
         assert_eq!(l.tail.load(Ordering::Relaxed), l.slog.len() + 1014);
@@ -1030,14 +1047,16 @@ mod tests {
     #[test]
     fn test_log_exec() {
         let l = Log::<Operation>::default();
+        let lt = l.register().unwrap();
+
         let o = [Operation::Read];
-        let mut f = |op: Operation, i: usize| {
+        let mut f = |op: Operation, mine: bool| {
             assert_eq!(op, Operation::Read);
-            assert_eq!(i, 1);
+            assert!(mine);
         };
 
-        assert!(l.append(&o, 1, |_o: Operation, _i: usize| {}).is_ok());
-        l.exec(1, &mut f);
+        assert!(l.append(&o, &lt, |_o: Operation, mine: bool| {}).is_ok());
+        l.exec(&lt, &mut f);
 
         assert_eq!(
             l.tail.load(Ordering::Relaxed),
@@ -1053,45 +1072,51 @@ mod tests {
     #[test]
     fn test_log_exec_empty() {
         let l = Log::<Operation>::default();
-        let mut f = |_o: Operation, _i: usize| {
+        let lt = l.register().unwrap();
+
+        let mut f = |_o: Operation, _mine| {
             assert!(false);
         };
 
-        l.exec(1, &mut f);
+        l.exec(&lt, &mut f);
     }
 
     // Test that exec() doesn't do anything if we're already up-to-date.
     #[test]
     fn test_log_exec_zero() {
         let l = Log::<Operation>::default();
+        let lt = l.register().unwrap();
+
         let o = [Operation::Read];
-        let mut f = |op: Operation, i: usize| {
+        let mut f = |op: Operation, mine: bool| {
             assert_eq!(op, Operation::Read);
-            assert_eq!(i, 1);
+            assert!(mine);
         };
-        let mut g = |_op: Operation, _i: usize| {
+        let mut g = |_op: Operation, _mine: bool| {
             assert!(false);
         };
 
-        assert!(l.append(&o, 1, |_o: Operation, _i: usize| {}).is_ok());
-        l.exec(1, &mut f);
-        l.exec(1, &mut g);
+        assert!(l.append(&o, &lt, |_o: Operation, _mine| {}).is_ok());
+        l.exec(&lt, &mut f);
+        l.exec(&lt, &mut g);
     }
 
     // Test that multiple entries on the log can be executed correctly.
     #[test]
     fn test_log_exec_multiple() {
         let l = Log::<Operation>::default();
+        let lt = l.register().unwrap();
+
         let o = [Operation::Read, Operation::Write(119)];
         let mut s = 0;
-        let mut f = |op: Operation, _i: usize| match op {
+        let mut f = |op: Operation, _mine| match op {
             Operation::Read => s += 121,
             Operation::Write(v) => s += v,
             Operation::Invalid => assert!(false),
         };
 
-        assert!(l.append(&o, 1, |_o: Operation, _i: usize| {}).is_ok());
-        l.exec(1, &mut f);
+        assert!(l.append(&o, &lt, |_o: Operation, _mine: bool| {}).is_ok());
+        l.exec(&lt, &mut f);
         assert_eq!(s, 240);
 
         assert_eq!(
@@ -1109,6 +1134,8 @@ mod tests {
     #[test]
     fn test_log_exec_wrap() {
         let l = Log::<Operation>::default();
+        let lt = l.register().unwrap();
+
         let o: [Operation; 1024] = unsafe {
             let mut a: [Operation; 1024] = ::std::mem::MaybeUninit::zeroed().assume_init();
             for i in &mut a[..] {
@@ -1116,19 +1143,19 @@ mod tests {
             }
             a
         };
-        let mut f = |op: Operation, i: usize| {
+        let mut f = |op: Operation, mine: bool| {
             assert_eq!(op, Operation::Read);
-            assert_eq!(i, 1);
+            assert!(mine);
         };
 
-        assert!(l.append(&o, 1, |_o: Operation, _i: usize| {}).is_ok()); // Required for GC to work correctly.
+        assert!(l.append(&o, &lt, |_o: Operation, mine| {}).is_ok()); // Required for GC to work correctly.
         l.next.store(2, Ordering::SeqCst);
         l.head.store(2 * 8192, Ordering::SeqCst);
         l.tail.store(l.slog.len() - 10, Ordering::SeqCst);
-        assert!(l.append(&o, 1, |_o: Operation, _i: usize| {}).is_ok());
+        assert!(l.append(&o, &lt, |_o: Operation, mine| {}).is_ok());
 
         l.ltails[0].store(l.slog.len() - 10, Ordering::SeqCst);
-        l.exec(1, &mut f);
+        l.exec(&lt, &mut f);
 
         assert_eq!(l.lmasks[0].get(), false);
         assert_eq!(l.tail.load(Ordering::Relaxed), l.slog.len() + 1014);
@@ -1139,6 +1166,8 @@ mod tests {
     #[should_panic]
     fn test_exec_panic() {
         let l = Log::<Operation>::default();
+        let lt = l.register().unwrap();
+
         let o: [Operation; 1024] = unsafe {
             let mut a: [Operation; 1024] = ::std::mem::MaybeUninit::zeroed().assume_init();
             for i in &mut a[..] {
@@ -1146,14 +1175,14 @@ mod tests {
             }
             a
         };
-        let mut f = |_op: Operation, _i: usize| {
+        let mut f = |_op: Operation, mine| {
             assert!(false);
         };
 
-        assert!(l.append(&o, 1, |_o: Operation, _i: usize| {}).is_ok());
+        assert!(l.append(&o, &lt, |_o: Operation, mine| {}).is_ok());
         l.head.store(8192, Ordering::SeqCst);
 
-        l.exec(1, &mut f);
+        l.exec(&lt, &mut f);
     }
 
     // Tests that operations are cloned when added to the log, and that
@@ -1161,17 +1190,19 @@ mod tests {
     #[test]
     fn test_log_change_refcount() {
         let l = Log::<Arc<Operation>>::default();
+        let lt = l.register().unwrap();
+
         let o1 = [Arc::new(Operation::Read)];
         let o2 = [Arc::new(Operation::Read)];
         assert_eq!(Arc::strong_count(&o1[0]), 1);
         assert_eq!(Arc::strong_count(&o2[0]), 1);
 
         assert!(l
-            .append(&o1[..], 1, |_o: Arc<Operation>, _i: usize| {})
+            .append(&o1[..], &lt, |_o: Arc<Operation>, mine| {})
             .is_ok());
         assert_eq!(Arc::strong_count(&o1[0]), 2);
         assert!(l
-            .append(&o1[..], 1, |_o: Arc<Operation>, _i: usize| {})
+            .append(&o1[..], &lt, |_o: Arc<Operation>, mine| {})
             .is_ok());
         assert_eq!(Arc::strong_count(&o1[0]), 3);
 
@@ -1181,12 +1212,12 @@ mod tests {
         // previous appends. This decreases the refcount of o1 and increases
         // the refcount of o2.
         assert!(l
-            .append(&o2[..], 1, |_o: Arc<Operation>, _i: usize| {})
+            .append(&o2[..], &lt, |_o: Arc<Operation>, mine| {})
             .is_ok());
         assert_eq!(Arc::strong_count(&o1[0]), 2);
         assert_eq!(Arc::strong_count(&o2[0]), 2);
         assert!(l
-            .append(&o2[..], 1, |_o: Arc<Operation>, _i: usize| {})
+            .append(&o2[..], &lt, |_o: Arc<Operation>, mine| {})
             .is_ok());
         assert_eq!(Arc::strong_count(&o1[0]), 1);
         assert_eq!(Arc::strong_count(&o2[0]), 3);
@@ -1202,6 +1233,7 @@ mod tests {
         assert_eq!(Log::<Arc<Operation>>::entry_size(), entry_size);
         let size: usize = total_entries * entry_size;
         let l = Log::<Arc<Operation>>::new_with_bytes(size);
+        let lt = l.register().unwrap();
         let o1 = [Arc::new(Operation::Read)];
         let o2 = [Arc::new(Operation::Read)];
         assert_eq!(Arc::strong_count(&o1[0]), 1);
@@ -1209,7 +1241,7 @@ mod tests {
 
         for i in 1..(total_entries + 1) {
             assert!(l
-                .append(&o1[..], 1, |_o: Arc<Operation>, _i: usize| {})
+                .append(&o1[..], &lt, |_o: Arc<Operation>, mine| {})
                 .is_ok());
             assert_eq!(Arc::strong_count(&o1[0]), i + 1);
         }
@@ -1217,7 +1249,7 @@ mod tests {
 
         for i in 1..(total_entries + 1) {
             assert!(l
-                .append(&o2[..], 1, |_o: Arc<Operation>, _i: usize| {})
+                .append(&o2[..], &lt, |_o: Arc<Operation>, mine| {})
                 .is_ok());
             assert_eq!(Arc::strong_count(&o1[0]), (total_entries + 1) - i);
             assert_eq!(Arc::strong_count(&o2[0]), i + 1);
@@ -1234,21 +1266,25 @@ mod tests {
         let one = l.register().unwrap();
         let two = l.register().unwrap();
 
-        assert_eq!(one, 1);
-        assert_eq!(two, 2);
+        assert_eq!(one, LogToken(1));
+        assert_eq!(two, LogToken(2));
 
         let o = [Operation::Read];
-        let mut f = |op: Operation, i: usize| {
+        let mut f = |op: Operation, mine: bool| {
             assert_eq!(op, Operation::Read);
-            assert_eq!(i, 1);
+            assert!(mine);
         };
 
-        assert!(l.append(&o, one, |_o: Operation, _i: usize| {}).is_ok());
-        l.exec(one, &mut f);
-        assert_eq!(l.is_replica_synced_for_reads(one, l.get_ctail()), true);
-        assert_eq!(l.is_replica_synced_for_reads(two, l.get_ctail()), false);
+        assert!(l.append(&o, &one, |_o: Operation, mine| {}).is_ok());
+        l.exec(&one, &mut f);
+        assert_eq!(l.is_replica_synced_for_reads(&one, l.get_ctail()), true);
+        assert_eq!(l.is_replica_synced_for_reads(&two, l.get_ctail()), false);
 
-        l.exec(two, &mut f);
-        assert_eq!(l.is_replica_synced_for_reads(two, l.get_ctail()), true);
+        let mut f = |op: Operation, mine: bool| {
+            assert_eq!(op, Operation::Read);
+            assert!(!mine);
+        };
+        l.exec(&two, &mut f);
+        assert_eq!(l.is_replica_synced_for_reads(&two, l.get_ctail()), true);
     }
 }

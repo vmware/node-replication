@@ -464,6 +464,11 @@ where
         self.get_response(slog, idx.tid())
     }
 
+    /// Similar to `execute_mut` but this can be called when we already hold the combiner
+    /// lock so it is not reacquired.
+    ///
+    /// This should be called in case `execute_mut` returns an error (because another
+    /// replica was stuck).
     pub fn execute_mut_locked<'lock>(
         &'lock self,
         slog: &Log<<D as Dispatch>::WriteOperation>,
@@ -537,7 +542,7 @@ where
         // We can perform the read only if our replica is synced up against
         // the shared log. If it isn't, then try to combine until it is synced up.
         let ctail = slog.get_ctail();
-        while !slog.is_replica_synced_for_reads(self.log_tkn, ctail) {
+        while !slog.is_replica_synced_for_reads(&self.log_tkn, ctail) {
             self.try_combine(slog)?;
             spin_loop();
         }
@@ -545,6 +550,11 @@ where
         return Ok(self.data.read(idx.tid() - 1).dispatch(op));
     }
 
+    /// Similar to `execute` but this can be called when we already hold the combiner lock
+    /// so it is not reacquired.
+    ///
+    /// This should be called in case `execute` returns an error (because another
+    /// replica was stuck).
     pub fn execute_locked<'lock>(
         &'lock self,
         slog: &Log<<D as Dispatch>::WriteOperation>,
@@ -555,9 +565,9 @@ where
         // We can perform the read only if our replica is synced up against
         // the shared log. If it isn't, then try to combine until it is synced up.
         let ctail = slog.get_ctail();
-        if !slog.is_replica_synced_for_reads(self.log_tkn, ctail) {
+        if !slog.is_replica_synced_for_reads(&self.log_tkn, ctail) {
             self.combine(slog, combiner_lock)?;
-            while !slog.is_replica_synced_for_reads(self.log_tkn, ctail) {
+            while !slog.is_replica_synced_for_reads(&self.log_tkn, ctail) {
                 self.try_combine(slog)?;
             }
         }
@@ -613,11 +623,11 @@ where
         }
 
         let mut data = self.data.write(self.next.load(Ordering::Relaxed));
-        let mut f = |o: <D as Dispatch>::WriteOperation, _i: usize| {
+        let mut f = |o: <D as Dispatch>::WriteOperation, _mine: bool| {
             data.dispatch_mut(o);
         };
 
-        slog.exec(self.log_tkn, &mut f);
+        slog.exec(&self.log_tkn, &mut f);
 
         v(&data);
 
@@ -630,7 +640,7 @@ where
     /// replica. So, this method syncs up the replica against the underlying log.
     pub fn sync(&self, slog: &Log<<D as Dispatch>::WriteOperation>) -> Result<(), usize> {
         let ctail = slog.get_ctail();
-        while !slog.is_replica_synced_for_reads(self.log_tkn, ctail) {
+        while !slog.is_replica_synced_for_reads(&self.log_tkn, ctail) {
             self.try_exec(slog);
             spin_loop();
         }
@@ -711,13 +721,13 @@ where
         let next = self.next.load(Ordering::Relaxed);
         {
             let mut data = self.data.write(next);
-            let mut f = |o: <D as Dispatch>::WriteOperation, i: usize| {
+            let mut f = |o: <D as Dispatch>::WriteOperation, mine: bool| {
                 let _resp = data.dispatch_mut(o);
-                if i == self.log_tkn {
+                if mine {
                     panic!("Ups -- we just lost a result?");
                 }
             };
-            slog.exec(self.log_tkn, &mut f);
+            slog.exec(&self.log_tkn, &mut f);
         }
     }
 
@@ -746,16 +756,16 @@ where
         // in here because operations on the log might need to be consumed for GC.
         {
             let mut data = self.data.write(next);
-            let f = |o: <D as Dispatch>::WriteOperation, i: usize| {
+            let f = |o: <D as Dispatch>::WriteOperation, mine: bool| {
                 #[cfg(not(loom))]
                 let resp = data.dispatch_mut(o);
                 #[cfg(loom)]
                 let resp = data.dispatch_mut(o);
-                if i == self.log_tkn {
+                if mine {
                     results.push(resp);
                 }
             };
-            match slog.append(&buffer, self.log_tkn, f) {
+            match slog.append(&buffer, &self.log_tkn, f) {
                 Ok(None) => (),
                 Ok(Some(r)) => return Err((r, combiner_lock)),
                 Err(r) => return Err((r, combiner_lock)),
@@ -765,13 +775,13 @@ where
         // Execute any operations on the shared log against this replica.
         {
             let mut data = self.data.write(next);
-            let mut f = |o: <D as Dispatch>::WriteOperation, i: usize| {
+            let mut f = |o: <D as Dispatch>::WriteOperation, mine: bool| {
                 let resp = data.dispatch_mut(o);
-                if i == self.log_tkn {
+                if mine {
                     results.push(resp)
-                };
+                }
             };
-            slog.exec(self.log_tkn, &mut f);
+            slog.exec(&self.log_tkn, &mut f);
         }
 
         // Return/Enqueue responses back into the appropriate thread context(s).
@@ -857,7 +867,6 @@ mod test {
         let slog = Log::<<Data as Dispatch>::WriteOperation>::new_with_bytes(1024);
         let lt = slog.register().unwrap();
         let repl = Replica::<Data>::new(lt);
-        assert_eq!(repl.log_tkn, 1);
         assert_eq!(repl.combiner.load(Ordering::SeqCst), 0);
         assert_eq!(repl.next.load(Ordering::SeqCst), 1);
         assert_eq!(repl.contexts.len(), MAX_THREADS_PER_REPLICA);
@@ -1017,10 +1026,11 @@ mod test {
         let lt = slog.register().unwrap();
         let repl = Replica::<Data>::new(lt);
 
+        let lt = slog.register().unwrap();
         // Add in operations to the log off the side, not through the replica.
         let o = [121, 212];
-        assert!(slog.append(&o, 2, |_o: u64, _i: usize| {}).is_ok());
-        slog.exec(2, &mut |_o: u64, _i: usize| {});
+        assert!(slog.append(&o, &lt, |_o, _mine| {}).is_ok());
+        slog.exec(&lt, &mut |_o, _mine| {});
 
         let t1 = repl.register().expect("Failed to register with replica.");
         assert_eq!(Ok(2), repl.execute(&slog, 11, t1).unwrap());
