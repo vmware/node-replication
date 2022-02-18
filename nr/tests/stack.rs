@@ -101,14 +101,13 @@ impl Dispatch for Stack {
 /// against a known correct implementation.
 #[test]
 fn sequential_test() {
-    let log = Arc::new(Log::<<Stack as Dispatch>::WriteOperation>::new(
-        4 * 1024 * 1024,
-    ));
+    let log = Log::<<Stack as Dispatch>::WriteOperation>::new_with_bytes(4 * 1024 * 1024);
 
     let mut orng = thread_rng();
     let nop = 50;
 
-    let r = Replica::<Stack>::new(&log);
+    let ltkn = log.register().expect("Can't register with log");
+    let r = Replica::<Stack>::new(ltkn);
     let idx = r.register().expect("Failed to register with Replica.");
     let mut correct_stack: Vec<u32> = Vec::new();
     let mut correct_popped: Vec<Option<u32>> = Vec::new();
@@ -117,7 +116,7 @@ fn sequential_test() {
     // Populate with some initial data
     for _i in 0..50 {
         let element = orng.gen();
-        r.execute_mut(OpWr::Push(element), idx).unwrap();
+        r.execute_mut(&log, OpWr::Push(element), idx).unwrap();
         correct_stack.push(element);
     }
 
@@ -125,19 +124,19 @@ fn sequential_test() {
         let op: usize = orng.gen();
         match op % 3usize {
             0usize => {
-                let o = r.execute_mut(OpWr::Pop, idx);
+                let o = r.execute_mut(&log, OpWr::Pop, idx).unwrap();
                 let popped = correct_stack.pop();
                 assert_eq!(popped, o);
                 correct_popped.push(popped);
             }
             1usize => {
                 let element = orng.gen();
-                let pushed = r.execute_mut(OpWr::Push(element), idx);
+                let pushed = r.execute_mut(&log, OpWr::Push(element), idx).unwrap();
                 assert_eq!(pushed, Some(element));
                 correct_stack.push(element);
             }
             2usize => {
-                let o = r.execute(OpRd::Peek, idx);
+                let o = r.execute(&log, OpRd::Peek, idx).unwrap();
                 let mut ele = None;
                 let len = correct_stack.len();
                 if len > 0 {
@@ -164,7 +163,7 @@ fn sequential_test() {
             "Peek operation error detected"
         );
     };
-    r.verify(v);
+    r.verify(&log, v);
 }
 
 /// A stack to verify that the log works correctly with multiple threads.
@@ -286,13 +285,14 @@ fn parallel_push_sequential_pop_test() {
     let l = 1usize;
     let nop: u16 = 50000;
 
-    let log = Arc::new(Log::<<Stack as Dispatch>::WriteOperation>::new(
+    let log = Arc::new(Log::<<Stack as Dispatch>::WriteOperation>::new_with_bytes(
         l * 1024 * 1024 * 1024,
     ));
 
     let mut replicas = Vec::with_capacity(r);
     for _i in 0..r {
-        replicas.push(Arc::new(Replica::<VerifyStack>::new(&log)));
+        let ltkn = log.register().expect("Register should work");
+        replicas.push(Arc::new(Replica::<VerifyStack>::new(ltkn)));
     }
 
     let mut threads = Vec::new();
@@ -301,6 +301,7 @@ fn parallel_push_sequential_pop_test() {
     for i in 0..r {
         for j in 0..t {
             let replica = replicas[i].clone();
+            let log = log.clone();
             let b = barrier.clone();
             let child = thread::spawn(move || {
                 let tid: u32 = (i * t + j) as u32;
@@ -313,7 +314,7 @@ fn parallel_push_sequential_pop_test() {
                 b.wait();
                 for i in 0..nop {
                     replica
-                        .execute_mut(OpWr::Push((i as u32) << 16 | tid), idx)
+                        .execute_mut(&log, OpWr::Push((i as u32) << 16 | tid), idx)
                         .unwrap();
                 }
             });
@@ -335,8 +336,8 @@ fn parallel_push_sequential_pop_test() {
         let token = replica.register().unwrap();
         for _j in 0..t {
             for _z in 0..nop {
-                replica.execute(OpRd::Peek, token).unwrap();
-                replica.execute_mut(OpWr::Pop, token).unwrap();
+                replica.execute(&log, OpRd::Peek, token).unwrap();
+                replica.execute_mut(&log, OpWr::Pop, token).unwrap();
             }
         }
     }
@@ -352,13 +353,14 @@ fn parallel_push_and_pop_test() {
     let l = 1usize;
     let nop: u16 = 50000;
 
-    let log = Arc::new(Log::<<Stack as Dispatch>::WriteOperation>::new(
+    let log = Arc::new(Log::<<Stack as Dispatch>::WriteOperation>::new_with_bytes(
         l * 1024 * 1024 * 1024,
     ));
 
     let mut replicas = Vec::with_capacity(r);
     for _i in 0..r {
-        replicas.push(Arc::new(Replica::<VerifyStack>::new(&log)));
+        let ltkn = log.register().expect("Register should work");
+        replicas.push(Arc::new(Replica::<VerifyStack>::new(ltkn)));
     }
 
     let mut threads = Vec::new();
@@ -368,6 +370,7 @@ fn parallel_push_and_pop_test() {
         for j in 0..t {
             let replica = replicas[i].clone();
             let b = barrier.clone();
+            let log = log.clone();
             let child = thread::spawn(move || {
                 let tid: u32 = (i * t + j) as u32;
                 //println!("tid = {} i={} j={}", tid, i, j);
@@ -379,15 +382,15 @@ fn parallel_push_and_pop_test() {
                 b.wait();
                 for i in 0..nop {
                     replica
-                        .execute_mut(OpWr::Push((i as u32) << 16 | tid), idx)
+                        .execute_mut(&log, OpWr::Push((i as u32) << 16 | tid), idx)
                         .unwrap();
                 }
 
                 // 2. Dequeue phase, verification
                 b.wait();
                 for _i in 0..nop {
-                    replica.execute(OpRd::Peek, idx).unwrap();
-                    replica.execute_mut(OpWr::Pop, idx).unwrap();
+                    replica.execute(&log, OpRd::Peek, idx).unwrap();
+                    replica.execute_mut(&log, OpWr::Pop, idx).unwrap();
                 }
             });
             threads.push(child);
@@ -403,7 +406,7 @@ fn parallel_push_and_pop_test() {
     }
 }
 
-fn bench(r: Arc<Replica<Stack>>, nop: usize, barrier: Arc<Barrier>) -> (u64, u64) {
+fn bench(r: Arc<Replica<Stack>>, log: &Log<OpWr>, nop: usize, barrier: Arc<Barrier>) -> (u64, u64) {
     let idx = r.register().expect("Failed to register with Replica.");
 
     let mut orng = thread_rng();
@@ -421,7 +424,7 @@ fn bench(r: Arc<Replica<Stack>>, nop: usize, barrier: Arc<Barrier>) -> (u64, u64
     barrier.wait();
 
     for i in 0..nop {
-        r.execute_mut(ops[i], idx);
+        r.execute_mut(&log, ops[i], idx).expect("should work");
     }
 
     barrier.wait();
@@ -438,13 +441,14 @@ fn replicas_are_equal() {
     let l = 1usize;
     let n = 50usize;
 
-    let log = Arc::new(Log::<<Stack as Dispatch>::WriteOperation>::new(
+    let log = Arc::new(Log::<<Stack as Dispatch>::WriteOperation>::new_with_bytes(
         l * 1024 * 1024 * 1024,
     ));
 
     let mut replicas = Vec::with_capacity(r);
     for _i in 0..r {
-        replicas.push(Replica::<Stack>::new(&log));
+        let ltkn = log.register().expect("Register should work");
+        replicas.push(Arc::new(Replica::<Stack>::new(ltkn)));
     }
 
     let mut threads = Vec::new();
@@ -453,9 +457,10 @@ fn replicas_are_equal() {
     for i in 0..r {
         for _j in 0..t {
             let r = replicas[i].clone();
+            let log = log.clone();
             let o = n.clone();
             let b = barrier.clone();
-            let child = thread::spawn(move || bench(r, o, b));
+            let child = thread::spawn(move || bench(r, &log, o, b));
             threads.push(child);
         }
     }
@@ -474,7 +479,7 @@ fn replicas_are_equal() {
         d0.extend_from_slice(&data.storage);
         p0.extend_from_slice(&data.popped);
     };
-    replicas[0].verify(v);
+    replicas[0].verify(&log, v);
 
     let mut d1 = vec![];
     let mut p1 = vec![];
@@ -482,7 +487,7 @@ fn replicas_are_equal() {
         d1.extend_from_slice(&data.storage);
         p1.extend_from_slice(&data.popped);
     };
-    replicas[1].verify(v);
+    replicas[1].verify(&log, v);
 
     assert_eq!(d0, d1, "Data-structures don't match.");
     assert_eq!(p0, p1, "Removed elements in each replica dont match.");

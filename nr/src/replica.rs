@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use core::cell::RefCell;
-use core::fmt::Debug;
+use core::fmt::{self, Debug};
 use core::hint::spin_loop;
 #[cfg(not(loom))]
 use core::sync::atomic::{AtomicUsize, Ordering};
@@ -220,6 +220,15 @@ where
         // At this point, we've dropped all mutable references to thread contexts and to
         // the staging buffer as well.
         self.replica.combiner.store(0, Ordering::Release);
+    }
+}
+
+impl<D> Debug for CombinerLock<'_, D>
+where
+    D: Sized + Dispatch + Sync,
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "CombinerLock")
     }
 }
 
