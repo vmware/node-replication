@@ -186,7 +186,7 @@ where
     /// let log = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
     ///
     /// // Create a replica that uses the above log.
-    /// let replica = Replica::<Data>::new(&log);
+    /// let replica = Replica::<Data>::new(1);
     /// ```
     pub fn new(log_tkn: LogToken) -> Replica<D> {
         Replica::with_data(log_tkn, Default::default())
@@ -375,11 +375,12 @@ where
     /// }
     ///
     /// let log = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
-    /// let replica = Replica::<Data>::new(&log);
+    /// let logtkn = log.register().unwrap();
+    /// let replica = Replica::<Data>::new(logtkn);
     ///
-    /// // Calling register() returns an idx that can be used to execute
+    /// // Calling register() returns a thread token that can be used to execute
     /// // operations against the replica.
-    /// let idx = replica.register().expect("Failed to register with replica.");
+    /// let thrtkn = replica.register().expect("Failed to register with replica.");
     /// ```
     pub fn register(&self) -> Option<ReplicaToken> {
         // Loop until we either run out of identifiers or we manage to increment `next`.
@@ -441,12 +442,14 @@ where
     /// }
     ///
     /// let log = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
-    /// let replica = Replica::<Data>::new(&log);
-    /// let idx = replica.register().expect("Failed to register with replica.");
+    /// let logtkn = log.register().unwrap();
+    /// let replica = Replica::<Data>::new(logtkn);
+    /// let thrtkn = replica.register().expect("Failed to register with replica.");
     ///
     /// // execute_mut() can be used to write to the replicated data structure.
-    /// let res = replica.execute_mut(100, idx);
-    /// assert_eq!(None, res);
+    /// let res = replica.execute_mut(&log, 100, thrtkn);
+    /// assert_eq!(None, res.unwrap());
+    /// ```
     pub fn execute_mut(
         &self,
         slog: &Log<<D as Dispatch>::WriteOperation>,
@@ -512,13 +515,15 @@ where
     /// }
     ///
     /// let log = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
-    /// let replica = Replica::<Data>::new(&log);
-    /// let idx = replica.register().expect("Failed to register with replica.");
-    /// let _wr = replica.execute_mut(100, idx);
+    /// let logtkn = log.register().unwrap();
+    /// let replica = Replica::<Data>::new(logtkn);
+    /// let thrtkn = replica.register().expect("Failed to register with replica.");
+    /// let _wr = replica.execute_mut(&log, 100, thrtkn);
     ///
     /// // execute() can be used to read from the replicated data structure.
-    /// let res = replica.execute((), idx);
-    /// assert_eq!(Some(100), res);
+    /// let res = replica.execute(&log, (), thrtkn);
+    /// assert_eq!(Some(100), res.unwrap());
+    /// ```
     ///
     /// # Implementation
     /// Issues a read-only operation against the replica and returns a response.
