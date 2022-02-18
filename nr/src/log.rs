@@ -987,7 +987,7 @@ mod tests {
         l.ltails[3].store(799, Ordering::Relaxed);
 
         assert!(l
-            .advance_head(&lt, &mut |_o: Operation, mine: bool| {})
+            .advance_head(&lt, &mut |_o: Operation, _mine: bool| {})
             .is_ok());
         assert_eq!(l.head.load(Ordering::Relaxed), 224);
     }
@@ -1010,7 +1010,7 @@ mod tests {
         l.tail
             .store(l.slog.len() - GC_FROM_HEAD - 1, Ordering::Relaxed);
         l.ltails[0].store(1024, Ordering::Relaxed);
-        assert!(l.append(&o, &lt, |_o: Operation, mine: bool| {}).is_ok());
+        assert!(l.append(&o, &lt, |_o: Operation, _mine: bool| {}).is_ok());
 
         assert_eq!(l.head.load(Ordering::Relaxed), 1024);
         assert_eq!(
@@ -1037,7 +1037,7 @@ mod tests {
         l.next.store(2, Ordering::Relaxed);
         l.head.store(2 * 8192, Ordering::Relaxed);
         l.tail.store(l.slog.len() - 10, Ordering::Relaxed);
-        assert!(l.append(&o, &lt, |_o: Operation, mine: bool| {}).is_ok());
+        assert!(l.append(&o, &lt, |_o: Operation, _mine: bool| {}).is_ok());
 
         assert_eq!(l.lmasks[0].get(), true);
         assert_eq!(l.tail.load(Ordering::Relaxed), l.slog.len() + 1014);
@@ -1055,7 +1055,7 @@ mod tests {
             assert!(mine);
         };
 
-        assert!(l.append(&o, &lt, |_o: Operation, mine: bool| {}).is_ok());
+        assert!(l.append(&o, &lt, |_o: Operation, _mine: bool| {}).is_ok());
         l.exec(&lt, &mut f);
 
         assert_eq!(
@@ -1148,11 +1148,11 @@ mod tests {
             assert!(mine);
         };
 
-        assert!(l.append(&o, &lt, |_o: Operation, mine| {}).is_ok()); // Required for GC to work correctly.
+        assert!(l.append(&o, &lt, |_o: Operation, _mine| {}).is_ok()); // Required for GC to work correctly.
         l.next.store(2, Ordering::SeqCst);
         l.head.store(2 * 8192, Ordering::SeqCst);
         l.tail.store(l.slog.len() - 10, Ordering::SeqCst);
-        assert!(l.append(&o, &lt, |_o: Operation, mine| {}).is_ok());
+        assert!(l.append(&o, &lt, |_o: Operation, _mine| {}).is_ok());
 
         l.ltails[0].store(l.slog.len() - 10, Ordering::SeqCst);
         l.exec(&lt, &mut f);
@@ -1175,11 +1175,11 @@ mod tests {
             }
             a
         };
-        let mut f = |_op: Operation, mine| {
+        let mut f = |_op: Operation, _mine| {
             assert!(false);
         };
 
-        assert!(l.append(&o, &lt, |_o: Operation, mine| {}).is_ok());
+        assert!(l.append(&o, &lt, |_o: Operation, _mine| {}).is_ok());
         l.head.store(8192, Ordering::SeqCst);
 
         l.exec(&lt, &mut f);
@@ -1198,11 +1198,11 @@ mod tests {
         assert_eq!(Arc::strong_count(&o2[0]), 1);
 
         assert!(l
-            .append(&o1[..], &lt, |_o: Arc<Operation>, mine| {})
+            .append(&o1[..], &lt, |_o: Arc<Operation>, _mine| {})
             .is_ok());
         assert_eq!(Arc::strong_count(&o1[0]), 2);
         assert!(l
-            .append(&o1[..], &lt, |_o: Arc<Operation>, mine| {})
+            .append(&o1[..], &lt, |_o: Arc<Operation>, _mine| {})
             .is_ok());
         assert_eq!(Arc::strong_count(&o1[0]), 3);
 
@@ -1212,12 +1212,12 @@ mod tests {
         // previous appends. This decreases the refcount of o1 and increases
         // the refcount of o2.
         assert!(l
-            .append(&o2[..], &lt, |_o: Arc<Operation>, mine| {})
+            .append(&o2[..], &lt, |_o: Arc<Operation>, _mine| {})
             .is_ok());
         assert_eq!(Arc::strong_count(&o1[0]), 2);
         assert_eq!(Arc::strong_count(&o2[0]), 2);
         assert!(l
-            .append(&o2[..], &lt, |_o: Arc<Operation>, mine| {})
+            .append(&o2[..], &lt, |_o: Arc<Operation>, _mine| {})
             .is_ok());
         assert_eq!(Arc::strong_count(&o1[0]), 1);
         assert_eq!(Arc::strong_count(&o2[0]), 3);
@@ -1241,7 +1241,7 @@ mod tests {
 
         for i in 1..(total_entries + 1) {
             assert!(l
-                .append(&o1[..], &lt, |_o: Arc<Operation>, mine| {})
+                .append(&o1[..], &lt, |_o: Arc<Operation>, _mine| {})
                 .is_ok());
             assert_eq!(Arc::strong_count(&o1[0]), i + 1);
         }
@@ -1249,7 +1249,7 @@ mod tests {
 
         for i in 1..(total_entries + 1) {
             assert!(l
-                .append(&o2[..], &lt, |_o: Arc<Operation>, mine| {})
+                .append(&o2[..], &lt, |_o: Arc<Operation>, _mine| {})
                 .is_ok());
             assert_eq!(Arc::strong_count(&o1[0]), (total_entries + 1) - i);
             assert_eq!(Arc::strong_count(&o2[0]), i + 1);
@@ -1275,7 +1275,7 @@ mod tests {
             assert!(mine);
         };
 
-        assert!(l.append(&o, &one, |_o: Operation, mine| {}).is_ok());
+        assert!(l.append(&o, &one, |_o: Operation, _mine| {}).is_ok());
         l.exec(&one, &mut f);
         assert_eq!(l.is_replica_synced_for_reads(&one, l.get_ctail()), true);
         assert_eq!(l.is_replica_synced_for_reads(&two, l.get_ctail()), false);
