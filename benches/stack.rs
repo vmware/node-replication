@@ -8,8 +8,8 @@
 
 use std::cell::RefCell;
 
+use node_replication::replica::Replica;
 use node_replication::Dispatch;
-use node_replication::Replica;
 use rand::{thread_rng, Rng};
 
 mod mkbench;

@@ -14,8 +14,8 @@
 use crossbeam_utils::CachePadded;
 use rand::{thread_rng, Rng};
 
+use node_replication::replica::Replica;
 use node_replication::Dispatch;
-use node_replication::Replica;
 
 mod mkbench;
 mod utils;
