@@ -1,20 +1,17 @@
 // Copyright © 2019-2020 VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! Node Replication (NR) is a library which can be used to implement a
-//! concurrent version of any single threaded data structure. It takes in a
-//! single threaded implementation of said data structure, and scales it out to
-//! multiple cores and NUMA nodes by combining three techniques: reader-writer
-//! locks, operation logging and flat combining.
+//! Node Replication (NR) is a library which can be used to implement a concurrent version
+//! of any single-threaded data structure. It takes in a single threaded implementation of
+//! said data structure, and scales it out to multiple cores and NUMA nodes by combining
+//! three techniques: reader-writer locks, operation logging and flat combining.
 //!
 //! # How does it work
-//! To replicate a single-threaded data structure, one needs to implement the
-//! [Dispatch](trait.Dispatch.html) trait for it. The following snippet
-//! implements [Dispatch](trait.Dispatch.html) for
-//! [HashMap](https://doc.rust-lang.org/std/collections/struct.HashMap.html)
-//! as an example. A complete example
-//! (using [Replica](struct.Replica.html) and [Log](struct.Log.html)) can be found in the
-//! [examples](https://github.com/vmware/node-replication/tree/master/examples/hashmap.rs)
+//! To replicate a single-threaded data structure, one needs to implement the [`Dispatch`]
+//! trait for it. The following snippet implements [`Dispatch`] for
+//! `std::collections::HashMap` as an example. The full example (using [`NodeReplicated`]
+//! and [`Dispatch`] can be found in the
+//! [examples](https://github.com/vmware/node-replication/tree/master/nr/examples/hashmap.rs)
 //! folder.
 //!
 //! ```
@@ -108,20 +105,18 @@ pub mod rwlock;
 #[path = "loom_rwlock.rs"]
 pub mod rwlock;
 
-pub use crate::log::{Log, MAX_REPLICAS_PER_LOG};
-pub use context::MAX_PENDING_OPS;
-pub use replica::{Replica, ReplicaToken, MAX_THREADS_PER_REPLICA};
-pub use reusable_box::ReusableBoxFuture;
+use crate::log::{Log, MAX_REPLICAS_PER_LOG};
+use replica::{Replica, ReplicaToken};
 
 use core::fmt::Debug;
 
 /// Trait that a data structure must implement to be usable with this library.
 ///
-/// When this library executes a read-only operation against the data structure,
-/// it invokes the `dispatch()` method with the operation as an argument.
+/// When this library executes a read-only operation against the data structure, it
+/// invokes the `dispatch()` method with the operation as an argument.
 ///
-/// When this library executes a write operation against the data structure, it
-/// invokes the `dispatch_mut()` method with the operation as an argument.
+/// When this library executes a write operation against the data structure, it invokes
+/// the `dispatch_mut()` method with the operation as an argument.
 pub trait Dispatch {
     /// A read-only operation. When executed against the data structure, an operation
     /// of this type must not mutate the data structure in anyway. Otherwise, the
@@ -150,18 +145,15 @@ pub trait Dispatch {
 /// node that this replica corresponds to).
 pub type ReplicaId = usize;
 
-pub struct NodeReplicationError;
-
 /// A token handed out to threads registered with replicas.
 ///
 /// # Note
-/// Ideally this would be an affine type and returned again by
-/// `execute` and `execute_ro`. However it feels like this would
-/// hurt API ergonomics a lot.
+/// Ideally this would be an affine type and returned again by `execute` and `execute_ro`.
+/// However it feels like this would hurt API ergonomics a lot.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct ThreadToken {
-    pub rid: ReplicaId,
-    pub rtkn: ReplicaToken,
+    rid: ReplicaId,
+    rtkn: ReplicaToken,
 }
 
 /// To make it harder to use the same ThreadToken on multiple threads.
@@ -172,95 +164,95 @@ impl ThreadToken {
     /// Creates a new ThreadToken
     ///
     /// # Safety
-    /// This should only ever be used for the benchmark harness to create
-    /// additional fake replica implementations.
-    /// If we had a means to declare this as not-pub we should do that instead.
+    /// This method should only ever be used for the benchmark harness to create
+    /// additional, fake replica implementations. If we had something like `pub(test)` we
+    /// should declare it like that instead of just `pub`.
     #[doc(hidden)]
     pub fn new(rid: ReplicaId, rtkn: ReplicaToken) -> Self {
         Self { rid, rtkn }
     }
 }
 
-type AffinityChangeFn = Box<dyn Fn(Option<usize>) + Send + Sync>;
-
-struct AffinityChanger {
-    set_mem_affinity: AffinityChangeFn,
-}
-
-impl AffinityChanger {
-    fn switch(&self, node: usize) -> CurrentAffinity {
-        CurrentAffinity::new(self, node)
-    }
-}
-
-struct CurrentAffinity<'a> {
-    parent: &'a AffinityChanger,
-}
-
-impl<'a> CurrentAffinity<'a> {
-    fn new(parent: &'a AffinityChanger, affinity: usize) -> Self {
-        (parent.set_mem_affinity)(Some(affinity));
-
-        CurrentAffinity { parent }
-    }
-}
-
-impl<'a> Drop for CurrentAffinity<'a> {
-    fn drop(&mut self) {
-        (self.parent.set_mem_affinity)(None);
-    }
-}
-
+/// An enum to keep track of a stack of operations we should do on Replicas.
+///
+/// e.g., either `Sync` an out-of-date, behind replica, or call `execute_locked` or
+/// `execute_mut_locked` to resume the operation with a combiner lock.
 enum ResolveOp<'a, D: core::marker::Sync + Dispatch + Sized> {
+    /// Resumes a replica that earlier returned with an Error (and the CombinerLock).
     Exec(Option<CombinerLock<'a, D>>),
+    /// Indicates need to [`Replica::sync()`] a replica with the given ID.
     Sync(usize),
+}
+
+/// Erros that can be encountered when interacting with [`NodeReplicated`].
+pub enum NodeReplicatedError {
+    OutOfMemory,
+}
+
+impl From<core::alloc::AllocError> for NodeReplicatedError {
+    fn from(_: core::alloc::AllocError) -> Self {
+        NodeReplicatedError::OutOfMemory
+    }
+}
+
+impl From<alloc::collections::TryReserveError> for NodeReplicatedError {
+    fn from(_: alloc::collections::TryReserveError) -> Self {
+        NodeReplicatedError::OutOfMemory
+    }
 }
 
 pub struct NodeReplicated<D: Dispatch + Sync> {
     log: Log<D::WriteOperation>,
     replicas: Vec<Box<Replica<D>>>,
-    _affinity_changer: AffinityChanger,
 }
-
-//use alloc::sync::Arc;
-use alloc::collections::TryReserveError;
 
 impl<D> NodeReplicated<D>
 where
     D: Default + Dispatch + Sized + Sync,
 {
-    pub fn new<F>(num_replicas: NonZeroUsize, set_mem_affinity: F) -> Result<Self, TryReserveError>
+    /// Creates a new, replicated data-structure from a single-threaded data-structure
+    /// that implements [`Dispatch`]. It also uses the [`Default`] constructor to create
+    /// an initial data-structure on all replicas.
+    ///
+    /// # Arguments
+    /// - `num_replicas`: How many replicas you want to create. Typically the number of
+    ///   NUMA nodes in your system.
+    /// - `_set_mem_affinity`: A user-provided function that is called whenever the code
+    /// operates on a certain [`Replica`] to give the client the ability to e.g., change
+    /// the memory affinity of the underlying thread.
+    ///
+    /// # Example
+    /// TBD.
+    pub fn new<AffChgFn>(
+        num_replicas: NonZeroUsize,
+        _set_mem_affinity: AffChgFn,
+    ) -> Result<Self, NodeReplicatedError>
     where
-        F: Fn(Option<usize>) + Sized + 'static + Send + Sync,
+        AffChgFn: Fn(Option<usize>) + Sized + 'static + Send + Sync,
     {
         assert!(num_replicas.get() < MAX_REPLICAS_PER_LOG);
-        let affinity_changer = AffinityChanger {
-            set_mem_affinity: Box::new(set_mem_affinity),
-        };
         let log = Log::default();
 
         let mut replicas = Vec::new();
         replicas.try_reserve(num_replicas.get())?;
-        for replica_id in 0..num_replicas.get() {
+
+        for _replica_id in 0..num_replicas.get() {
             let log_token = log
                 .register()
                 .expect("Succeeds (num_replicas < MAX_REPLICAS_PER_LOG)");
 
             // Allocate replica on the proper NUMA node
             let r = {
-                let _aff = affinity_changer.switch(replica_id);
-                box Replica::new(log_token)
+                // TODO: change affinity
+                Box::try_new(Replica::new(log_token))?
+                // reset affinity
             };
 
             // Succeeds (try_reserve)
             replicas.push(r);
         }
 
-        Ok(NodeReplicated {
-            _affinity_changer: affinity_changer,
-            replicas,
-            log,
-        })
+        Ok(NodeReplicated { replicas, log })
     }
 }
 
@@ -268,7 +260,28 @@ impl<D> NodeReplicated<D>
 where
     D: Clone + Dispatch + Sized + Sync,
 {
-    pub fn with_data(_num_replicas: NonZeroUsize, _ds: D) -> Result<Self, TryReserveError> {
+    /// Creates a new, replicated data-structure from a single-threaded data-structure
+    /// (`ds`) that implements [`Dispatch`].
+    ///
+    /// # Arguments
+    /// - `num_replicas`: How many replicas you want to create. Typically the number of
+    ///   NUMA nodes in your system.
+    /// - `set_mem_affinity`: A user-provided function that is called whenever the code
+    /// operates on a certain [`Replica`] to give the client the ability to e.g., change
+    /// the memory affinity of the underlying thread.
+    /// - `ds`: The initial version of the data-structure. Will be cloned for each
+    ///   replica.
+    ///
+    /// # Example
+    /// TBD.
+    pub fn with_data<AffChgFn>(
+        _num_replicas: NonZeroUsize,
+        _set_mem_affinity: AffChgFn,
+        _ds: D,
+    ) -> Result<Self, NodeReplicatedError>
+    where
+        AffChgFn: Fn(Option<usize>) + Sized + 'static + Send + Sync,
+    {
         unreachable!("complete me")
     }
 }
@@ -277,6 +290,22 @@ impl<D> NodeReplicated<D>
 where
     D: Dispatch + Sized + Sync,
 {
+    /// Registers a thread with a given replica in the [`NodeReplicated`] data-structure.
+    /// Returns an Option containing a [`ThreadToken`] if the registration was
+    /// successfull. None if the registration failed.
+    ///
+    /// The [`ThreadToken`] is used to identify the thread to issue the operation for
+    /// subsequent [`NodeReplicated::execute()`] and [`NodeReplicated::execute_mut`]
+    /// calls.
+    ///
+    /// # Arguments
+    /// - `replica_id`: Which replica the thread should be registered with. This should be
+    /// less than the `num_replicas` argument provided in the constructor
+    /// ([`NodeReplicated::new()`]). In most cases, this will probably correspond to the
+    /// NUMA node that the thread is running on.
+    ///
+    /// # Example
+    /// TBD.
     pub fn register(&self, replica_id: ReplicaId) -> Option<ThreadToken> {
         if replica_id < self.replicas.len() {
             let rtkn = self.replicas[replica_id].register()?;
@@ -333,7 +362,7 @@ where
         }
     }
 
-    pub fn try_execute<'a>(
+    fn try_execute<'a>(
         &'a self,
         op: <D as Dispatch>::ReadOperation,
         tkn: ThreadToken,
@@ -376,7 +405,7 @@ where
         }
     }
 
-    pub fn sync(&self, tkn: ThreadToken) {
+    fn sync(&self, tkn: ThreadToken) {
         match self.replicas[tkn.rid].sync(&self.log) {
             Ok(r) => r,
             Err(stuck_ridx) => panic!("replica#{} is stuck", stuck_ridx),

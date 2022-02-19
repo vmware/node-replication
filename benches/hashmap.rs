@@ -13,8 +13,8 @@ use rand::seq::SliceRandom;
 use rand::{distributions::Distribution, Rng, RngCore};
 use zipf::ZipfDistribution;
 
+use node_replication::replica::Replica;
 use node_replication::Dispatch;
-use node_replication::Replica;
 use node_replication::MAX_PENDING_OPS;
 
 mod hashmap_comparisons;

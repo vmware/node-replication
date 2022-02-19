@@ -11,9 +11,9 @@ use std::sync::{Arc, Barrier, RwLock};
 use std::thread;
 use std::usize;
 
+use node_replication::log::Log;
+use node_replication::replica::Replica;
 use node_replication::Dispatch;
-use node_replication::Log;
-use node_replication::Replica;
 
 use rand::{thread_rng, Rng};
 
