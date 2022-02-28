@@ -86,7 +86,7 @@ evmap = "8"
 chashmap = "2.2"
 urcu-sys = "=0.0.5"
 csv = "1.1.3"
-flurry = "0.3.0"
+flurry = "0.4.0"
 core_affinity = "0.5.10"
 parking_lot = "0.11.1"
 serde = { version = "1", features = ["derive"] }
