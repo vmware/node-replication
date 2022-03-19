@@ -1,73 +1,78 @@
 [package]
-name = "nr-bench"
-version = "0.1.0"
-authors = ["Chinmay Kulkarni <chinmayk@cs.utah.edu>", "Gerd Zellweger <mail@gerdzellweger.com>", "Ankit Bhardwaj <bhrdwj.ankit@gmail.com>", "Irina Calciu <icalciu@vmware.com>"]
+authors = [
+  "Chinmay Kulkarni <chinmayk@cs.utah.edu>",
+  "Gerd Zellweger <mail@gerdzellweger.com>",
+  "Ankit Bhardwaj <bhrdwj.ankit@gmail.com>",
+  "Irina Calciu <icalciu@vmware.com>",
+]
 edition = "2018"
 license = "MIT OR Apache-2.0"
+name = "nr-bench"
+version = "0.1.0"
 
 [[bench]]
-name = "lockfree"
 harness = false
+name = "lockfree"
 path = "lockfree.rs"
 required-features = ["c_nr"]
 
 [[bench]]
-name = "nrfs"
 harness = false
+name = "nrfs"
 path = "nrfs.rs"
 required-features = ["c_nr"]
 
 [[bench]]
-name = "chashbench"
 harness = false
+name = "chashbench"
 path = "chashbench.rs"
 required-features = ["c_nr"]
 
 [[bench]]
-name = "hashbench"
 harness = false
+name = "hashbench"
 path = "hashbench.rs"
 required-features = ["nr"]
 
 [[bench]]
-name = "rwlockbench"
 harness = false
+name = "rwlockbench"
 path = "rwlockbench.rs"
 required-features = ["nr"]
 
 [[bench]]
-name = "log"
 harness = false
+name = "log"
 path = "log.rs"
 required-features = ["nr"]
 
 [[bench]]
-name = "stack"
 harness = false
+name = "stack"
 path = "stack.rs"
 required-features = ["nr"]
 
 [[bench]]
-name = "synthetic"
 harness = false
+name = "synthetic"
 path = "synthetic.rs"
 required-features = ["nr"]
 
 [[bench]]
-name = "hashmap"
 harness = false
+name = "hashmap"
 path = "hashmap.rs"
 required-features = ["nr"]
 
 [[bench]]
-name = "vspace"
 harness = false
+name = "vspace"
 path = "vspace.rs"
 required-features = ["nr"]
 
 [[bench]]
-name = "memfs"
 harness = false
+name = "memfs"
 path = "memfs.rs"
 required-features = ["nr"]
 
@@ -75,39 +80,39 @@ required-features = ["nr"]
 debug = true
 
 [dependencies]
-log = "0.4"
-hwloc2 = "2.2"
-env_logger = "0.9"
-num_cpus = "1.12"
-x86 = "0.43.0"
-btfs = "0.0.4"
-zipf = "7.0"
-evmap = "8"
-chashmap = "2.2"
-urcu-sys = "=0.0.5"
-csv = "1.1.3"
-flurry = "0.3.0"
-core_affinity = "0.5.10"
-parking_lot = "0.11.1"
-serde = { version = "1", features = ["derive"] }
-clap = { version = "2", features = ["yaml"] }
-rand = { version = "0.8", features = ["small_rng"] }
-dashmap = "4.0.2"
-lazy_static = "1.4"
-crossbeam = { git = "https://github.com/crossbeam-rs/crossbeam" }
-crossbeam-skiplist = { git = "https://github.com/crossbeam-rs/crossbeam" }
-nrfs = { git = "https://github.com/ankit-iitb/nrfs" }
-rand_xorshift = "0.3.0"
-crossbeam-utils = { version = "0.8", default-features = false }
 arr_macro = "0.1.2"
+btfs = "0.0.4"
+chashmap = "2.2"
+clap = {version = "2", features = ["yaml"]}
+cnr = {path = "../cnr"}
+core_affinity = "0.5.10"
+crossbeam = {git = "https://github.com/crossbeam-rs/crossbeam"}
+crossbeam-skiplist = {git = "https://github.com/crossbeam-rs/crossbeam"}
+crossbeam-utils = {version = "0.8", default-features = false}
+csv = "1.1.3"
+dashmap = "4.0.2"
+env_logger = "0.9"
+evmap = "8"
+flurry = "0.3.0"
+hwloc2 = "2.2"
+lazy_static = "1.4"
+log = "0.4"
+node-replication = {path = "../nr"}
+nrfs = {git = "https://github.com/gz/nrfs", branch = "patch-1"}
+num_cpus = "1.12"
+parking_lot = "0.11.1"
+rand = {version = "0.8", features = ["small_rng"]}
+rand_xorshift = "0.3.0"
+serde = {version = "1", features = ["derive"]}
 static_assertions = "1.1.0"
-node-replication = { path = "../nr" }
-cnr = { path = "../cnr" }
+urcu-sys = "=0.0.5"
+x86 = "0.46.0"
+zipf = "7.0"
 
 [features]
-smokebench = []
 cmp = []
+smokebench = []
 # Very exhaustive parameter sweep (may take a day to run on a big machine)
+c_nr = []
 exhaustive = []
 nr = []
-c_nr = []

@@ -405,7 +405,7 @@ where
         }
     }
 
-    fn sync(&self, tkn: ThreadToken) {
+    pub fn sync(&self, tkn: ThreadToken) {
         match self.replicas[tkn.rid].sync(&self.log) {
             Ok(r) => r,
             Err(stuck_ridx) => panic!("replica#{} is stuck", stuck_ridx),
