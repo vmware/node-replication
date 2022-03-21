@@ -68,6 +68,7 @@
 )]
 #![feature(box_syntax)]
 #![feature(allocator_api)]
+#![feature(try_reserve)]
 #![feature(nonnull_slice_from_raw_parts)]
 
 #[cfg(test)]
@@ -185,6 +186,7 @@ enum ResolveOp<'a, D: core::marker::Sync + Dispatch + Sized> {
 }
 
 /// Erros that can be encountered when interacting with [`NodeReplicated`].
+#[derive(Debug)]
 pub enum NodeReplicatedError {
     OutOfMemory,
 }

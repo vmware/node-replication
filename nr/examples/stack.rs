@@ -3,11 +3,14 @@
 
 //! A minimal example that implements a node-replicated stack
 
+#![feature(const_option)]
+
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use node_replication::Dispatch;
 use node_replication::NodeReplicated;
+use node_replication::NodeReplicatedError;
 
 /// We support mutable push and pop operations on the stack.
 #[derive(Clone, Debug, PartialEq)]
@@ -75,14 +78,13 @@ impl Dispatch for Stack {
 
 /// We initialize a replicated stack with two replicas, then spawn threads, assign them to
 /// replicas and execute operations.
-fn main() {
-    const NUM_REPLICAS: usize = 2;
+fn main() -> Result<(), NodeReplicatedError> {
+    const NUM_REPLICAS: NonZeroUsize = NonZeroUsize::new(2).unwrap();
     const NUM_THREADS: usize = 3;
     const NUM_OPS_PER_THREAD: usize = 2048;
 
-    let two = NonZeroUsize::new(NUM_REPLICAS).expect("2 is not 0");
     let stack =
-        Arc::new(NodeReplicated::new(two, |_node| {}).expect("Can't create NodeReplicated Stack"));
+        Arc::new(NodeReplicated::new(NUM_REPLICAS, |_node| {})?);
 
     // The replica executes a Modify or Access operations by calling
     // `execute_mut` and `execute`. Eventually they end up in the `Dispatch` trait.
@@ -112,4 +114,6 @@ fn main() {
     for thread in threads {
         thread.join().unwrap();
     }
+
+    Ok(())
 }
