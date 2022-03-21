@@ -68,7 +68,6 @@
 )]
 #![feature(box_syntax)]
 #![feature(allocator_api)]
-#![feature(try_reserve)]
 #![feature(nonnull_slice_from_raw_parts)]
 
 #[cfg(test)]
