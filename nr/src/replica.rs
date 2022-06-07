@@ -422,9 +422,9 @@ where
     /// // execute() can be used to read from the replicated data structure.
     /// let res = replica.execute((), idx);
     /// assert_eq!(Some(100), res);
-    pub fn execute(
+    pub fn execute<'rop>(
         &self,
-        op: <D as Dispatch>::ReadOperation,
+        op: <D as Dispatch>::ReadOperation<'rop>,
         idx: ReplicaToken,
     ) -> <D as Dispatch>::Response {
         self.read_only(op, idx.0)
@@ -501,9 +501,9 @@ where
 
     /// Issues a read-only operation against the replica and returns a response.
     /// Makes sure the replica is synced up against the log before doing so.
-    fn read_only(
+    fn read_only<'rop>(
         &self,
-        op: <D as Dispatch>::ReadOperation,
+        op: <D as Dispatch>::ReadOperation<'rop>,
         tid: usize,
     ) -> <D as Dispatch>::Response {
         // We can perform the read only if our replica is synced up against

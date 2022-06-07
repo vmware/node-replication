@@ -68,6 +68,7 @@
 #![feature(new_uninit)]
 #![feature(get_mut_unchecked)]
 #![feature(negative_impls)]
+#![feature(generic_associated_types)]
 
 #[cfg(test)]
 extern crate std;
@@ -104,7 +105,7 @@ pub trait Dispatch {
     /// A read-only operation. When executed against the data structure, an operation
     /// of this type must not mutate the data structure in anyway. Otherwise, the
     /// assumptions made by this library no longer hold.
-    type ReadOperation: Sized + Clone + PartialEq + Debug;
+    type ReadOperation<'a>: Sized + PartialEq + Debug;
 
     /// A write operation. When executed against the data structure, an operation of
     /// this type is allowed to mutate state. The library ensures that this is done so
@@ -117,7 +118,7 @@ pub trait Dispatch {
 
     /// Method on the data structure that allows a read-only operation to be
     /// executed against it.
-    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response;
+    fn dispatch<'a>(&self, op: Self::ReadOperation<'a>) -> Self::Response;
 
     /// Method on the data structure that allows a write operation to be
     /// executed against it.
