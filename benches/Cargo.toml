@@ -98,7 +98,7 @@ hwloc2 = "2.2"
 lazy_static = "1.4"
 log = "0.4"
 node-replication = {path = "../nr"}
-nrfs = {git = "https://github.com/ankit-iitb/nrfs.git"}
+nrfs = {git = "https://github.com/gz/nrfs.git", branch = "patch-1"}
 num_cpus = "1.12"
 parking_lot = "0.11.1"
 rand = {version = "0.8", features = ["small_rng"]}
@@ -106,7 +106,7 @@ rand_xorshift = "0.3.0"
 serde = {version = "1", features = ["derive"]}
 static_assertions = "1.1.0"
 urcu-sys = "=0.0.5"
-x86 = "0.47.0"
+x86 = "0.49.0"
 zipf = "7.0"
 
 [features]
