@@ -1,44 +1,32 @@
-// Copyright © 2019-2020 VMware, Inc. All Rights Reserved.
-// SPDX-License-Identifier: Apache-2.0 OR MIT
-
-//! A minimal example that implements a replicated BTreeSet
-use std::collections::BTreeSet;
 use std::sync::Arc;
+use std::collections::BTreeSet;
+use std::num::NonZeroUsize;
 
 use node_replication::Dispatch;
-use node_replication::Log;
-use node_replication::Replica;
+use node_replication::NodeReplicated;
 
-/// The node-replicated BTreeSet uses a std::collections::BTreeSet internally.
 #[derive(Default)]
 struct NrBtreeSet {
 	storage: BTreeSet<u64>,
 }
 
-/// We support mutable put and delete operations on the set.
 #[derive(Clone, Debug, PartialEq)]
 enum Modify {
 	Put(u64),
 	Delete(u64)
 }
 
-/// We support immutable get and contains operations on the set.
 #[derive(Clone, Debug, PartialEq)]
 enum Access {
 	Get(u64),
 	Contains(u64),
 }
 
-
-/// The Dispatch traits executes `ReadOperation` (our Access enum)
-/// and `WriteOperation` (our `Modify` enum) against the replicated
-/// data-structure.
 impl Dispatch for NrBtreeSet {
 	type ReadOperation = Access;
 	type WriteOperation = Modify;
 	type Response = Option<u64>;
 
-	/// Implement immutable read-only operations for the BTreeSet.
 	fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
 		match op {
 			Access::Get(key) => self.storage.get(&key).map(|v| *v),
@@ -49,7 +37,6 @@ impl Dispatch for NrBtreeSet {
 		}
 	}
 
-	/// Implement mutable write and read operations for the BTreeSet.
 	fn dispatch_mut(&mut self, op: Self::WriteOperation) -> Self::Response {
 		match op {
 			Modify::Put(key) => {
@@ -64,83 +51,74 @@ impl Dispatch for NrBtreeSet {
 	}
 }
 
-
-
-/// We initialize a log, and two replicas for a BTreeSet, register with the replica
-/// and then execute operations.
 fn main() {
-    let _r = env_logger::try_init().expect("init logging");
-    // The operation log for storing `WriteOperation`, it has a size of 2 MiB:
-    let log = Arc::new(Log::<<NrBtreeSet as Dispatch>::WriteOperation>::new(
-        2 * 1024 * 1024,
-    ));
 
-    // Next, we create two replicas of the hashmap
-    let replica1 = Replica::<NrBtreeSet>::new(&log);
-    let replica2 = Replica::<NrBtreeSet>::new(&log);
-    const N_OPS: u64 = 2_948_048;
+	let _r = env_logger::try_init();
+	const N_OPS: u64 = 2_948_048;
 
-    // The replica executes a Modify or Access operations by calling
-    // `execute_mut` and `execute`. Eventually they end up in the `Dispatch` trait.
-	let thread_loop = |replica: Arc<Replica<NrBtreeSet>>, ttkn, thread_id| {
-		println!("thread_id {} with assigned range: {:?}", thread_id, (thread_id as u64)*N_OPS..(thread_id as u64 + 1)*N_OPS);
-		assert_eq!((thread_id as u64) * N_OPS % 4, 0);
-		for i in (thread_id as u64)*N_OPS..(thread_id as u64 + 1)*N_OPS{
-			let _r = match i % 4 {
-				0 => {
-					replica.execute_mut(Modify::Put(i), ttkn)
-				},
-				1 => {
-					let val = replica.execute(Access::Contains(i-1), ttkn);
-					assert_eq!(val, Some(1));
-					val
-				},
-				2 => {
-					let val = replica.execute(Access::Get(i-2), ttkn);
-					assert_eq!(val, Some(i-2));
-					val
-				},
-				3 => {
-					let val = replica.execute_mut(Modify::Delete(i-3), ttkn);
-					assert_eq!(val, Some(i-3));
-					val
+	for n_replicas in 1..=4 {
+
+		for thread_num in 1..=4 {
+
+			let num_replica = NonZeroUsize::new(n_replicas).unwrap();
+			let nrht = Arc::new(NodeReplicated::<NrBtreeSet>::new(num_replica, |_rid| {}).unwrap());
+
+			let thread_loop = |replica: Arc<NodeReplicated<NrBtreeSet>>, ttkn, thread_id| {
+				println!("thread_id {} assigned range {:?}.", thread_id, (thread_id as u64)*N_OPS..(thread_id as u64 + 1)*N_OPS);
+				for i in (thread_id as u64)*N_OPS..(thread_id as u64 + 1)*N_OPS{
+					let _r = match i % 4 {
+						0 => {
+							replica.execute_mut(Modify::Put(i), ttkn)
+						},
+						1 => {
+							let val = replica.execute(Access::Contains(i-1), ttkn);
+							assert_eq!(val, Some(1));
+							val
+						},
+						2 => {
+							let val = replica.execute(Access::Get(i-2), ttkn);
+							assert_eq!(val, Some(i-2));
+							val
+						},
+						3 => {
+							let val = replica.execute_mut(Modify::Delete(i-3), ttkn);
+							assert_eq!(val, Some(i-3));
+							val
+						}
+						_ => unreachable!(),
+					};
 				}
-				_ => unreachable!(),
 			};
+
+		let t_now = std::time::Instant::now();
+
+			println!(
+				"Running with {} replicas and {} threads",
+				n_replicas, thread_num
+			);
+
+			let mut threads = Vec::with_capacity(thread_num);
+			for t in 0..thread_num {
+				let nrht_cln = nrht.clone();
+				threads.push(std::thread::spawn(move || {
+					let ttkn = nrht_cln.register(t % n_replicas).expect(
+						format!(
+							"Unable to register thread with replica {}.",
+							t % n_replicas
+						).as_str(),
+					);
+					thread_loop(nrht_cln, ttkn, t);
+				}));
+			}
+
+			for thread in threads {
+				thread.join().unwrap();
+			}
+
+			println!(
+				"({} ns/op)",
+				t_now.elapsed().as_nanos() / (thread_num as u128 * N_OPS as u128)
+			);
 		}
-	};
-
-    // Finally, we spawn three threads that issue operations, thread 1 and 2
-    // will use replica1 and thread 3 will use replica 2:
-    let mut threads = Vec::with_capacity(3);
-    let replica11 = replica1.clone();
-    threads.push(std::thread::spawn(move || {
-        let ridx = replica11.register().expect("Unable to register with log");
-        thread_loop(replica11, ridx, 0);
-    }));
-
-    let replica12 = replica1.clone();
-    threads.push(std::thread::spawn(move || {
-        let ridx = replica12.register().expect("Unable to register with log");
-        thread_loop(replica12, ridx, 1);
-    }));
-
-    let replica21 = replica2.clone();
-    let _bgthread = std::thread::spawn(move || {
-        let ridx = replica21.register().expect("Unable to register with log");
-        loop {
-            replica21.sync(ridx);
-        }
-    });
-
-    let replica22 = replica2.clone();
-    threads.push(std::thread::spawn(move || {
-        let ridx = replica22.register().expect("Unable to register with log");
-        thread_loop(replica22, ridx, 2);
-    }));
-
-    // Wait for all the threads to finish
-    for thread in threads {
-        thread.join().unwrap();
-    }
+	}
 }
