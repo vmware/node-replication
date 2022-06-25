@@ -91,7 +91,7 @@ use core::num::NonZeroUsize;
 
 use arrayvec::ArrayVec;
 
-use replica::CombinerLock;
+use replica::{CombinerLock, ReplicaError};
 
 mod context;
 mod log;
@@ -321,7 +321,7 @@ where
         op: <D as Dispatch>::WriteOperation,
         tkn: ThreadToken,
         cl: Option<CombinerLock<'a, D>>,
-    ) -> Result<<D as Dispatch>::Response, (usize, CombinerLock<'a, D>)> {
+    ) -> Result<<D as Dispatch>::Response, ReplicaError<D>> {
         if let Some(combiner_lock) = cl {
             // We expect to have already enqueued the op (it's a re-try since have the combiner lock),
             // so technically its not needed to supply it again (but we currently do it anyways...)
@@ -344,10 +344,18 @@ where
                         assert!(q.is_empty());
                         return resp;
                     }
-                    Err((stuck_ridx, cl_acq)) => {
+                    Err(ReplicaError::NoLogSpace(stuck_ridx, cl_acq)) => {
                         assert_ne!(stuck_ridx, tkn.rid);
                         q.push(ResolveOp::Exec(Some(cl_acq)));
                         q.push(ResolveOp::Sync(stuck_ridx));
+                    }
+                    Err(ReplicaError::GcFailed(stuck_ridx)) => {
+                        assert_ne!(stuck_ridx, tkn.rid);
+                        let _r = self.replicas[stuck_ridx].sync(&self.log);
+
+                        return self.replicas[tkn.rid]
+                            .get_response(&self.log, tkn.rtkn.tid())
+                            .expect("GcFailed has to produced a response");
                     }
                 },
                 ResolveOp::Sync(ridx) => match self.replicas[ridx].sync(&self.log) {
@@ -368,7 +376,7 @@ where
         op: <D as Dispatch>::ReadOperation,
         tkn: ThreadToken,
         cl: Option<CombinerLock<'a, D>>,
-    ) -> Result<<D as Dispatch>::Response, (usize, CombinerLock<'a, D>)> {
+    ) -> Result<<D as Dispatch>::Response, ReplicaError<D>> {
         if let Some(combiner_lock) = cl {
             self.replicas[tkn.rid].execute_locked(&self.log, op.clone(), tkn.rtkn, combiner_lock)
         } else {
@@ -389,10 +397,15 @@ where
                         assert!(q.is_empty());
                         return resp;
                     }
-                    Err((stuck_ridx, cl_acq)) => {
+                    Err(ReplicaError::NoLogSpace(stuck_ridx, cl_acq)) => {
                         assert!(stuck_ridx != tkn.rid);
                         q.push(ResolveOp::Exec(Some(cl_acq)));
                         q.push(ResolveOp::Sync(stuck_ridx));
+                    }
+                    Err(ReplicaError::GcFailed(stuck_ridx)) => {
+                        assert_ne!(stuck_ridx, tkn.rid);
+                        q.push(ResolveOp::Sync(stuck_ridx));
+                        unreachable!("GC should not fail for reads");
                     }
                 },
                 ResolveOp::Sync(ridx) => match self.replicas[ridx].sync(&self.log) {

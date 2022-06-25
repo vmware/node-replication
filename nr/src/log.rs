@@ -411,15 +411,23 @@ where
     /// l.append(&ops, &idx, f);
     /// ```
     ///
-    /// If there isn't enough space to perform the append, this method busy
-    /// waits until the head is advanced. Accepts a replica `idx`; all appended
-    /// operations/entries will be marked with this replica-identifier. Also
-    /// accepts a closure `s`; when waiting for GC, this closure is passed into
-    /// exec() to ensure that this replica does'nt cause a deadlock.
+    /// If there isn't enough space to perform the append, this method busy for
+    /// a while waits to see if it can advance the head. Accepts a replica
+    /// `idx`; all appended operations/entries will be marked with this
+    /// replica-identifier. Also accepts a closure `s`; when waiting for GC,
+    /// this closure is passed into exec() to ensure that this replica does'nt
+    /// cause a deadlock.
+    ///
+    /// # Returns
+    /// This will return Ok if all `ops` were successfully appended to the log.
+    /// It might return `Ok(Some(usize))` if all operations were added, but we
+    /// couldn't run GC after adding the ops (`usize` indicating which replica
+    /// we're waiting for). This will return `Err(usize)` if the append failed
+    /// because we waited too long for the replica indicated by the `usize`.
     ///
     /// # Note
-    /// Documentation for this function is hidden since `append` is currently not
-    /// intended as a public interface. It is marked as public due to being
+    /// Documentation for this function is hidden since `append` is currently
+    /// not intended as a public interface. It is marked as public due to being
     /// used by the benchmarking code.
     #[inline(always)]
     #[doc(hidden)]
@@ -540,7 +548,7 @@ where
                 // replica we're waiting for as an error. If a client calls
                 // `combine()` this isn't considered an error as we have
                 // succesfully applied the operations. But, we should still make
-                // sure to eventually `unstuck` the replica we're waited for, so
+                // sure to eventually `unstuck` the replica we waited for, so
                 // we transform the error to an Ok(Option<usize>) to convey this
                 // information to clients.
                 match self.advance_head(idx, &mut s) {
