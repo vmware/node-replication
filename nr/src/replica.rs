@@ -23,6 +23,30 @@ use super::log::{Log, LogToken};
 use super::rwlock::RwLock;
 use super::Dispatch;
 
+pub enum ReplicaError<'r, D>
+where
+    D: Sized + Dispatch + Sync,
+{
+    NoLogSpace(usize, CombinerLock<'r, D>),
+    GcFailed(usize),
+}
+
+impl<D> Debug for ReplicaError<'_, D>
+where
+    D: Sized + Dispatch + Sync,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ReplicaError::NoLogSpace(rid, _cl) => {
+                write!(f, "ReplicaError::NoLogSpace(rid = {})", rid)
+            }
+            ReplicaError::GcFailed(rid) => {
+                write!(f, "ReplicaError::GcFailed(rid = {})", rid)
+            }
+        }
+    }
+}
+
 /// A (monotoically increasing) number that uniquely identifies a thread that's registered
 /// with the replica.
 pub type ThreadIdx = usize;
@@ -442,7 +466,7 @@ where
         slog: &Log<<D as Dispatch>::WriteOperation>,
         op: <D as Dispatch>::WriteOperation,
         idx: ReplicaToken,
-    ) -> Result<<D as Dispatch>::Response, (usize, CombinerLock<D>)> {
+    ) -> Result<<D as Dispatch>::Response, ReplicaError<D>> {
         // Enqueue the operation onto the thread local batch and then try to flat combine.
         while !self.make_pending(op.clone(), idx.tid()) {}
         self.try_combine(slog)?;
@@ -467,7 +491,7 @@ where
         _op: <D as Dispatch>::WriteOperation,
         idx: ReplicaToken,
         combiner_lock: CombinerLock<'lock, D>,
-    ) -> Result<<D as Dispatch>::Response, (usize, CombinerLock<D>)> {
+    ) -> Result<<D as Dispatch>::Response, ReplicaError<D>> {
         // Enqueue the operation onto the thread local batch and then try to flat combine.
         self.combine(slog, combiner_lock)?;
         self.get_response(slog, idx.tid())
@@ -544,7 +568,7 @@ where
         slog: &Log<<D as Dispatch>::WriteOperation>,
         op: <D as Dispatch>::ReadOperation,
         idx: ReplicaToken,
-    ) -> Result<<D as Dispatch>::Response, (usize, CombinerLock<D>)> {
+    ) -> Result<<D as Dispatch>::Response, ReplicaError<D>> {
         // We can perform the read only if our replica is synced up against
         // the shared log. If it isn't, then try to combine until it is synced up.
         let ctail = slog.get_ctail();
@@ -572,7 +596,7 @@ where
         op: <D as Dispatch>::ReadOperation,
         idx: ReplicaToken,
         combiner_lock: CombinerLock<'lock, D>,
-    ) -> Result<<D as Dispatch>::Response, (usize, CombinerLock<'lock, D>)> {
+    ) -> Result<<D as Dispatch>::Response, ReplicaError<D>> {
         // We can perform the read only if our replica is synced up against
         // the shared log. If it isn't, then try to combine until it is synced up.
         let ctail = slog.get_ctail();
@@ -594,7 +618,7 @@ where
         &self,
         slog: &Log<<D as Dispatch>::WriteOperation>,
         idx: usize,
-    ) -> Result<<D as Dispatch>::Response, (usize, CombinerLock<D>)> {
+    ) -> Result<<D as Dispatch>::Response, ReplicaError<D>> {
         let mut iter = 0;
         let interval = 1 << 29;
 
@@ -692,7 +716,7 @@ where
     fn try_combine<'r>(
         &'r self,
         slog: &Log<<D as Dispatch>::WriteOperation>,
-    ) -> Result<(), (usize, CombinerLock<'r, D>)> {
+    ) -> Result<(), ReplicaError<D>> {
         // First, check if there already is a flat combiner. If there is no active flat combiner
         // then try to acquire the combiner lock. If there is, then just return.
         for _ in 0..4 {
@@ -748,31 +772,40 @@ where
         }
     }
 
+    #[inline(always)]
+    fn collect_thread_ops(
+        &self,
+        buffer: &mut Vec<D::WriteOperation>,
+        operations: &mut [usize; 256],
+    ) {
+        let num_registered_threads = self.next.load(Ordering::Relaxed);
+
+        // Collect operations from each thread registered with this replica.
+        for i in 1..num_registered_threads {
+            operations[i - 1] = self.contexts[i - 1].ops(buffer);
+        }
+    }
+
     /// Performs one round of flat combining. Collects, appends and executes operations.
     #[inline(always)]
     pub(crate) fn combine<'r>(
         &'r self,
         slog: &Log<<D as Dispatch>::WriteOperation>,
         combiner_lock: CombinerLock<'r, D>,
-    ) -> Result<(), (usize, CombinerLock<'r, D>)> {
+    ) -> Result<(), ReplicaError<D>> {
+        let num_registered_threads = self.next.load(Ordering::Relaxed);
+        let mut results = self.result.borrow_mut();
         let mut buffer = self.buffer.borrow_mut();
         let mut operations = self.inflight.borrow_mut();
-        let mut results = self.result.borrow_mut();
-
-        buffer.clear();
         results.clear();
+        buffer.clear();
 
-        let next = self.next.load(Ordering::Relaxed);
-
-        // Collect operations from each thread registered with this replica.
-        for i in 1..next {
-            operations[i - 1] = self.contexts[i - 1].ops(&mut buffer);
-        }
+        self.collect_thread_ops(&mut buffer, &mut operations);
 
         // Append all collected operations into the shared log. We pass a closure
         // in here because operations on the log might need to be consumed for GC.
-        {
-            let mut data = self.data.write(next);
+        let res = {
+            let mut data = self.data.write(num_registered_threads);
             let f = |o: <D as Dispatch>::WriteOperation, mine: bool| {
                 #[cfg(not(loom))]
                 let resp = data.dispatch_mut(o);
@@ -783,15 +816,24 @@ where
                 }
             };
             match slog.append(&buffer, &self.log_tkn, f) {
-                Ok(None) => (),
-                Ok(Some(r)) => return Err((r, combiner_lock)),
-                Err(r) => return Err((r, combiner_lock)),
-            };
-        }
+                Ok(None) => Ok(()),
+                Ok(Some(r)) => {
+                    // We inserted the entries (and can apply them below), but
+                    // we want to also notify about the slow `r` so it can be
+                    // forced to make some progress
+                    Err(ReplicaError::GcFailed(r))
+                }
+                Err(r) => {
+                    // return here because we couldn't insert our entries and
+                    // need to try again later
+                    return Err(ReplicaError::NoLogSpace(r, combiner_lock));
+                }
+            }
+        };
 
-        // Execute any operations on the shared log against this replica.
+        // Execute outstanding operations on the shared log against this replica
         {
-            let mut data = self.data.write(next);
+            let mut data = self.data.write(num_registered_threads);
             let mut f = |o: <D as Dispatch>::WriteOperation, mine: bool| {
                 let resp = data.dispatch_mut(o);
                 if mine {
@@ -803,7 +845,7 @@ where
 
         // Return/Enqueue responses back into the appropriate thread context(s).
         let (mut s, mut f) = (0, 0);
-        for i in 1..next {
+        for i in 1..num_registered_threads {
             if operations[i - 1] == 0 {
                 continue;
             };
@@ -814,7 +856,7 @@ where
             operations[i - 1] = 0;
         }
 
-        Ok(())
+        res
     }
 }
 
