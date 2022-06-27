@@ -34,6 +34,8 @@ debug = true
 chashmap = "2.2"
 env_logger = "0.9.0"
 rand = {version = "0.8", features = ["small_rng"]}
+nr-dispatch-derive = { path = "../nr-dispatch-derive" }
+
 
 [features]
 unstable = []
