@@ -62,9 +62,7 @@ struct Record {
     iterations: usize,
 }
 
-//type ArcNr<R> = Arc<NodeReplicated<<R as DsInterface>::D>>;
-
-#[cfg(feature = "nr")]
+/// The function that executes the benchmark operation.
 type BenchFn<R> = fn(
     crate::utils::ThreadId,
     ThreadToken,
@@ -76,41 +74,37 @@ type BenchFn<R> = fn(
     usize,
 );
 
-/*
-#[cfg(feature = "c_nr")]
-type BenchFn<R> = fn(
-    crate::utils::ThreadId,
-    ThreadToken,
-    &Arc<NodeReplicated<<<R as DsInterface>::D as Dispatch>>>,
-    &Operation<
-        <<R as DsInterface>::D as Dispatch>::ReadOperation,
-        <<R as DsInterface>::D as Dispatch>::WriteOperation,
-    >,
-    usize,
-);
- */
-
+/// The interface a data-structure must implement to be benchmarked by
+/// `ScaleBench`.
 pub trait DsInterface {
     type D: Dispatch + Default + Sync;
 
+    /// Allocate a new data-structure.
+    ///
+    /// - `replicas`: How many replicas the data-structure should maintain.
+    /// - `logs`: How many logs the data-structure should be partitioned over.
     fn new(replicas: NonZeroUsize, logs: NonZeroUsize) -> Arc<Self>;
 
+    /// Register a thread with a data-structure.
+    ///
+    /// - `rid` indicates which replica the thread should use.
     fn register(&self, rid: ReplicaId) -> Option<ThreadToken>;
 
-    fn sync(&self, idx: ThreadToken, log_id: usize);
-
+    /// Apply a mutable operation to the data-structure.
     fn execute_mut(
         &self,
         op: <Self::D as Dispatch>::WriteOperation,
         idx: ThreadToken,
     ) -> <Self::D as Dispatch>::Response;
 
+    /// Apply a mutable scan-operation to the data-structure.
     fn execute_scan(
         &self,
         op: <Self::D as Dispatch>::WriteOperation,
         idx: ThreadToken,
     ) -> <Self::D as Dispatch>::Response;
 
+    /// Apply a immutable operation to the data-structure.
     fn execute(
         &self,
         op: <Self::D as Dispatch>::ReadOperation,
@@ -123,10 +117,6 @@ impl<'a, T: Dispatch + Sync + Default> DsInterface for NodeReplicated<T> {
 
     fn new(replicas: NonZeroUsize, logs: NonZeroUsize) -> Arc<Self> {
         Arc::new(NodeReplicated::new(replicas, |_node| {}).expect("Can't allocate NodeReplicated"))
-    }
-
-    fn sync(&self, idx: ThreadToken, _log_id: usize) {
-        NodeReplicated::sync(self, idx);
     }
 
     fn register(&self, rid: ReplicaId) -> Option<ThreadToken> {
@@ -146,7 +136,7 @@ impl<'a, T: Dispatch + Sync + Default> DsInterface for NodeReplicated<T> {
         op: <Self::D as Dispatch>::WriteOperation,
         idx: ThreadToken,
     ) -> <Self::D as Dispatch>::Response {
-        unimplemented!("scans not supported for node-replication")
+        unreachable!("scan-ops are non-sensical for node_replication::NodeReplicated<T>")
     }
 
     fn execute(
