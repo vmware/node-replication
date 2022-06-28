@@ -121,12 +121,12 @@ pub trait Dispatch {
     /// A read-only operation. When executed against the data structure, an operation
     /// of this type must not mutate the data structure in anyway. Otherwise, the
     /// assumptions made by this library no longer hold.
-    type ReadOperation: Sized + Clone + PartialEq + Debug + Send;
+    type ReadOperation: Sized;
 
     /// A write operation. When executed against the data structure, an operation of
     /// this type is allowed to mutate state. The library ensures that this is done so
     /// in a thread-safe manner.
-    type WriteOperation: Sized + Clone + PartialEq + Debug + Send;
+    type WriteOperation: Sized + Clone + PartialEq + Send;
 
     /// The type on the value returned by the data structure when a `ReadOperation` or a
     /// `WriteOperation` successfully executes against it.
@@ -171,17 +171,6 @@ impl ThreadToken {
     pub fn new(rid: ReplicaId, rtkn: ReplicaToken) -> Self {
         Self { rid, rtkn }
     }
-}
-
-/// An enum to keep track of a stack of operations we should do on Replicas.
-///
-/// e.g., either `Sync` an out-of-date, behind replica, or call `execute_locked` or
-/// `execute_mut_locked` to resume the operation with a combiner lock.
-enum ResolveOp<'a, D: core::marker::Sync + Dispatch + Sized> {
-    /// Resumes a replica that earlier returned with an Error (and the CombinerLock).
-    Exec(Option<CombinerLock<'a, D>>),
-    /// Indicates need to [`Replica::sync()`] a replica with the given ID.
-    Sync(usize),
 }
 
 /// Erros that can be encountered when interacting with [`NodeReplicated`].
@@ -336,6 +325,17 @@ where
         op: <D as Dispatch>::WriteOperation,
         tkn: ThreadToken,
     ) -> <D as Dispatch>::Response {
+        /// An enum to keep track of a stack of operations we should do on Replicas.
+        ///
+        /// e.g., either `Sync` an out-of-date, behind replica, or call `execute_locked` or
+        /// `execute_mut_locked` to resume the operation with a combiner lock.
+        enum ResolveOp<'a, D: core::marker::Sync + Dispatch + Sized> {
+            /// Resumes a replica that earlier returned with an Error (and the CombinerLock).
+            Exec(Option<CombinerLock<'a, D>>),
+            /// Indicates need to [`Replica::sync()`] a replica with the given ID.
+            Sync(usize),
+        }
+
         let mut q = ArrayVec::<ResolveOp<D>, { crate::log::MAX_REPLICAS_PER_LOG }>::new();
         loop {
             match q.pop().unwrap_or(ResolveOp::Exec(None)) {
@@ -376,11 +376,11 @@ where
         op: <D as Dispatch>::ReadOperation,
         tkn: ThreadToken,
         cl: Option<CombinerLock<'a, D>>,
-    ) -> Result<<D as Dispatch>::Response, ReplicaError<D>> {
+    ) -> Result<<D as Dispatch>::Response, (ReplicaError<D>, <D as Dispatch>::ReadOperation)> {
         if let Some(combiner_lock) = cl {
-            self.replicas[tkn.rid].execute_locked(&self.log, op.clone(), tkn.rtkn, combiner_lock)
+            self.replicas[tkn.rid].execute_locked(&self.log, op, tkn.rtkn, combiner_lock)
         } else {
-            self.replicas[tkn.rid].execute(&self.log, op.clone(), tkn.rtkn)
+            self.replicas[tkn.rid].execute(&self.log, op, tkn.rtkn)
         }
     }
 
@@ -389,20 +389,32 @@ where
         op: <D as Dispatch>::ReadOperation,
         tkn: ThreadToken,
     ) -> <D as Dispatch>::Response {
+        /// An enum to keep track of a stack of operations we should do on Replicas.
+        ///
+        /// e.g., either `Sync` an out-of-date, behind replica, or call `execute_locked` or
+        /// `execute_mut_locked` to resume the operation with a combiner lock.
+        enum ResolveOp<'a, D: core::marker::Sync + Dispatch + Sized> {
+            /// Resumes a replica that earlier returned with an Error (and the CombinerLock).
+            Exec(Option<CombinerLock<'a, D>>, D::ReadOperation),
+            /// Indicates need to [`Replica::sync()`] a replica with the given ID.
+            Sync(usize),
+        }
+
         let mut q = ArrayVec::<ResolveOp<D>, { crate::log::MAX_REPLICAS_PER_LOG }>::new();
+        q.push(ResolveOp::Exec(None, op));
         loop {
-            match q.pop().unwrap_or(ResolveOp::Exec(None)) {
-                ResolveOp::Exec(cl) => match self.try_execute(op.clone(), tkn, cl) {
+            match q.pop().unwrap() {
+                ResolveOp::Exec(cl, op) => match self.try_execute(op, tkn, cl) {
                     Ok(resp) => {
                         assert!(q.is_empty());
                         return resp;
                     }
-                    Err(ReplicaError::NoLogSpace(stuck_ridx, cl_acq)) => {
+                    Err((ReplicaError::NoLogSpace(stuck_ridx, cl_acq), op)) => {
                         assert!(stuck_ridx != tkn.rid);
-                        q.push(ResolveOp::Exec(Some(cl_acq)));
+                        q.push(ResolveOp::Exec(Some(cl_acq), op));
                         q.push(ResolveOp::Sync(stuck_ridx));
                     }
-                    Err(ReplicaError::GcFailed(stuck_ridx)) => {
+                    Err((ReplicaError::GcFailed(stuck_ridx), _op)) => {
                         assert_ne!(stuck_ridx, tkn.rid);
                         q.push(ResolveOp::Sync(stuck_ridx));
                         unreachable!("GC should not fail for reads");
