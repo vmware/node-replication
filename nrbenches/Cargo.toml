@@ -1,0 +1,118 @@
+[package]
+authors = [
+  "Chinmay Kulkarni <chinmayk@cs.utah.edu>",
+  "Gerd Zellweger <mail@gerdzellweger.com>",
+  "Ankit Bhardwaj <bhrdwj.ankit@gmail.com>",
+  "Irina Calciu <icalciu@vmware.com>",
+]
+edition = "2018"
+license = "MIT OR Apache-2.0"
+name = "nr-bench"
+version = "0.1.0"
+
+[[bench]]
+harness = false
+name = "lockfree"
+path = "lockfree.rs"
+required-features = ["c_nr"]
+
+[[bench]]
+harness = false
+name = "nrfs"
+path = "nrfs.rs"
+required-features = ["c_nr"]
+
+[[bench]]
+harness = false
+name = "chashbench"
+path = "chashbench.rs"
+required-features = ["c_nr"]
+
+[[bench]]
+harness = false
+name = "hashbench"
+path = "hashbench.rs"
+required-features = ["nr"]
+
+[[bench]]
+harness = false
+name = "rwlockbench"
+path = "rwlockbench.rs"
+required-features = ["nr"]
+
+[[bench]]
+harness = false
+name = "log"
+path = "log.rs"
+required-features = ["nr"]
+
+[[bench]]
+harness = false
+name = "stack"
+path = "stack.rs"
+required-features = ["nr"]
+
+[[bench]]
+harness = false
+name = "synthetic"
+path = "synthetic.rs"
+required-features = ["nr"]
+
+[[bench]]
+harness = false
+name = "hashmap"
+path = "hashmap.rs"
+required-features = ["nr"]
+
+[[bench]]
+harness = false
+name = "vspace"
+path = "vspace.rs"
+required-features = ["nr"]
+
+[[bench]]
+harness = false
+name = "memfs"
+path = "memfs.rs"
+required-features = ["nr"]
+
+[profile.bench]
+debug = true
+
+[dependencies]
+arr_macro = "0.1.2"
+btfs = "0.0.4"
+chashmap = "2.2"
+clap = {version = "2", features = ["yaml"]}
+cnr = {path = "../cnr"}
+core_affinity = "0.5.10"
+crossbeam = {git = "https://github.com/crossbeam-rs/crossbeam"}
+crossbeam-skiplist = {git = "https://github.com/crossbeam-rs/crossbeam"}
+crossbeam-utils = {version = "0.8", default-features = false}
+csv = "1.1.3"
+dashmap = "4.0.2"
+env_logger = "0.9"
+evmap = "8"
+flurry = "0.3.0"
+hwloc2 = "2.2"
+lazy_static = "1.4"
+log = "0.4"
+node-replication = {path = "../nr"}
+nrfs = {git = "https://github.com/gz/nrfs.git", branch = "patch-1"}
+num_cpus = "1.12"
+parking_lot = "0.11.1"
+rand = {version = "0.8", features = ["small_rng"]}
+rand_xorshift = "0.3.0"
+serde = {version = "1", features = ["derive"]}
+static_assertions = "1.1.0"
+urcu-sys = "=0.0.5"
+x86 = "0.49.0"
+zipf = "7.0"
+
+[features]
+cmp = []
+smokebench = []
+c_nr = []
+nr = []
+# Very exhaustive parameter sweep (may take a day to run on a big machine)
+exhaustive = []

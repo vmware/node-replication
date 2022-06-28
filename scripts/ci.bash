@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Usage: $ CI_MACHINE_TYPE='skylake2x' bash scripts/ci.bash
+# Usage: $ CI_MACHINE_TYPE='cascadelake4x' bash scripts/ci.bash
 #
 set -ex
 
@@ -11,16 +11,16 @@ sudo sh -c "echo 0 > /sys/kernel/mm/ksm/merge_across_nodes"
 sudo sh -c "echo never > /sys/kernel/mm/transparent_hugepage/enabled"
 
 cd benches
-RUST_TEST_THREADS=1 timeout 1h cargo bench --bench log --features="nr"
+#RUST_TEST_THREADS=1 timeout 1h cargo bench --bench log --features="nr"
 RUST_TEST_THREADS=1 timeout 1h cargo bench --bench synthetic --features="nr"
 RUST_TEST_THREADS=1 timeout 1h cargo bench --bench stack --features="nr"
 RUST_TEST_THREADS=1 timeout 20h cargo bench --bench hashmap --features="nr"
 RUST_TEST_THREADS=1 timeout 1h cargo bench --bench vspace --features="nr"
-RUST_TEST_THREADS=1 timeout 1h cargo bench --bench nrfs --features="c_nr"
-RUST_TEST_THREADS=1 timeout 20h cargo bench --bench lockfree --features="c_nr"
+#RUST_TEST_THREADS=1 timeout 1h cargo bench --bench nrfs --features="c_nr"
+#RUST_TEST_THREADS=1 timeout 20h cargo bench --bench lockfree --features="c_nr"
 
-timeout 1.5h bash hashbench_run.sh
-timeout 1.5h bash rwlockbench_run.sh
+#timeout 1.5h bash hashbench_run.sh
+#timeout 1.5h bash rwlockbench_run.sh
 
 # Move results to root repo.
 cd ..
@@ -54,21 +54,21 @@ gzip ${SCALEBENCH_DEPLOY}/scaleout_benchmarks.csv
 gzip ${SCALEBENCH_DEPLOY}/scaleout_benchmarks_cnr.csv
 
 # Copy hashbench results
-HASHBENCH_DEPLOY="gh-pages/hashbench/${CI_MACHINE_TYPE}/${GIT_REV_CURRENT}"
-rm -rf ${HASHBENCH_DEPLOY}
-mkdir -p ${HASHBENCH_DEPLOY}
-mv results.log write-throughput.png read-throughput.png ${HASHBENCH_DEPLOY}
+#HASHBENCH_DEPLOY="gh-pages/hashbench/${CI_MACHINE_TYPE}/${GIT_REV_CURRENT}"
+#rm -rf ${HASHBENCH_DEPLOY}
+#mkdir -p ${HASHBENCH_DEPLOY}
+#mv results.log write-throughput.png read-throughput.png ${HASHBENCH_DEPLOY}
 
 # Copy rwlockbench results
-RWLOCKBENCH_DEPLOY="gh-pages/rwlockbench/${CI_MACHINE_TYPE}/${GIT_REV_CURRENT}"
-rm -rf ${RWLOCKBENCH_DEPLOY}
-mkdir -p ${RWLOCKBENCH_DEPLOY}
-mv rwlockbench_results.log rwlock-write-throughput.png rwlock-read-throughput.png ${RWLOCKBENCH_DEPLOY}
+#RWLOCKBENCH_DEPLOY="gh-pages/rwlockbench/${CI_MACHINE_TYPE}/${GIT_REV_CURRENT}"
+#rm -rf ${RWLOCKBENCH_DEPLOY}
+#mkdir -p ${RWLOCKBENCH_DEPLOY}
+#mv rwlockbench_results.log rwlock-write-throughput.png rwlock-read-throughput.png ${RWLOCKBENCH_DEPLOY}
 
 # Setup html layouts
 cp gh-pages/scalebench/index.markdown ${SCALEBENCH_DEPLOY}
-cp gh-pages/hashbench/index.markdown ${HASHBENCH_DEPLOY}
-cp gh-pages/rwlockbench/index.markdown ${RWLOCKBENCH_DEPLOY}
+#cp gh-pages/hashbench/index.markdown ${HASHBENCH_DEPLOY}
+#cp gh-pages/rwlockbench/index.markdown ${RWLOCKBENCH_DEPLOY}
 
 # Update CI time plots
 cd gh-pages
