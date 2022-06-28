@@ -17,25 +17,27 @@ use std::fs::OpenOptions;
 use std::hint::black_box;
 use std::io::Write;
 use std::marker::{PhantomData, Send, Sync};
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc, Barrier, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
-use std::num::NonZeroUsize;
 
 #[cfg(feature = "c_nr")]
 use cnr::{Dispatch, Log, Replica, ThreadToken};
 use csv::WriterBuilder;
 use log::*;
 #[cfg(feature = "nr")]
-use node_replication::{log::Log,ReplicaId, replica::Replica, ThreadToken, Dispatch, NodeReplicated};
+use node_replication::{
+    log::Log, replica::Replica, Dispatch, NodeReplicated, ReplicaId, ThreadToken,
+};
 use rand::seq::SliceRandom;
 use rand::{rngs::SmallRng, Rng, SeedableRng};
 use serde::Serialize;
 
-use crate::utils::{self, benchmark::*, topology::*, Operation};
 pub use crate::utils::topology::ThreadMapping;
+use crate::utils::{self, benchmark::*, topology::*, Operation};
 
 use arr_macro::arr;
 
@@ -45,11 +47,28 @@ use arr_macro::arr;
 /// Should be a power of two to avoid divisions.
 pub const WARN_THRESHOLD: usize = 1 << 28;
 
+/// Record a thread records during benchmarking, stored to a file later.
+#[derive(Serialize)]
+struct Record {
+    name: String,
+    rs: ReplicaStrategy,
+    tm: ThreadMapping,
+    batch_size: usize,
+    threads: usize,
+    duration: f64,
+    thread_id: usize,
+    core_id: u64,
+    exp_time_in_sec: usize,
+    iterations: usize,
+}
+
+//type ArcNr<R> = Arc<NodeReplicated<<R as DsInterface>::D>>;
+
 #[cfg(feature = "nr")]
 type BenchFn<R> = fn(
     crate::utils::ThreadId,
     ThreadToken,
-    &Arc<NodeReplicated<<<R as DsInterface>::D as Dispatch>>>,
+    &Arc<R>,
     &Operation<
         <<R as DsInterface>::D as Dispatch>::ReadOperation,
         <<R as DsInterface>::D as Dispatch>::WriteOperation,
@@ -79,7 +98,6 @@ pub trait DsInterface {
     fn register(&self, rid: ReplicaId) -> Option<ThreadToken>;
 
     fn sync(&self, idx: ThreadToken, log_id: usize);
-
 
     fn execute_mut(
         &self,
@@ -385,8 +403,8 @@ impl fmt::Debug for LogStrategy {
 
 pub struct ScaleBenchmark<R: DsInterface>
 where
-    <R::D as Dispatch>::WriteOperation: Sync + Send + 'static,
-    <R::D as Dispatch>::ReadOperation: Sync + Send,
+    <R::D as Dispatch>::WriteOperation: Sync + Send + Copy + 'static,
+    <R::D as Dispatch>::ReadOperation: Sync + Send + Copy,
     <R::D as Dispatch>::Response: Send,
     R::D: Sync + Dispatch + Default + Send,
 {
@@ -401,7 +419,7 @@ where
     /// ReplicaStrategy used by the benchmark
     ls: LogStrategy,
     /// Replica <-> Thread/Cpu mapping as used by the benchmark.
-    rm: HashMap<usize, Vec<Cpu>>,
+    rm: HashMap<ReplicaId, Vec<Cpu>>,
     /// An Arc reference to operations executed on the log.
     operations:
         Arc<Vec<Operation<<R::D as Dispatch>::ReadOperation, <R::D as Dispatch>::WriteOperation>>>,
@@ -416,12 +434,10 @@ where
     batch_size: usize,
     /// Benchmark function to execute
     f: BenchFn<R>,
-    /// A series of channels to communicate iteration count to every worker.
-    cmd_channels: Vec<Sender<Duration>>,
-    /// A result channel
-    result_channel: (Sender<(Core, Vec<usize>)>, Receiver<(Core, Vec<usize>)>),
     /// Thread handles
     handles: Vec<JoinHandle<()>>,
+    /// Where to write the results
+    file_name: &'static str,
 }
 
 impl<R: 'static> ScaleBenchmark<R>
@@ -444,12 +460,16 @@ where
             Operation<<R::D as Dispatch>::ReadOperation, <R::D as Dispatch>::WriteOperation>,
         >,
         batch_size: usize,
-        sync: bool,
         f: BenchFn<R>,
     ) -> ScaleBenchmark<R>
     where
         R: Sync,
     {
+        // Log the per-thread runtimes to the CSV file
+        let file_name = "scaleout_benchmarks.csv";
+        #[cfg(feature = "c_nr")]
+        let file_name = "scaleout_benchmarks_cnr.csv";
+
         ScaleBenchmark {
             name,
             rs,
@@ -461,9 +481,8 @@ where
             operations: Arc::new(operations),
             batch_size,
             f,
-            cmd_channels: Default::default(),
-            result_channel: channel(),
             handles: Default::default(),
+            file_name,
         }
     }
 
@@ -480,23 +499,11 @@ where
 
     /// Terminate the worker threads by sending 0 to the iter channel:
     fn terminate(&self) -> std::io::Result<()> {
-        for tx in self.cmd_channels.iter() {
-            tx.send(Duration::from_secs(0))
-                .expect("Can't send termination.");
-        }
-
-        // Log the per-thread runtimes to the CSV file
-        // TODO: Ideally this can go into the runner that was previously
-        // not possible since we used criterion for the runner.
-        #[cfg(feature = "nr")]
-        let file_name = "scaleout_benchmarks.csv";
-        #[cfg(feature = "c_nr")]
-        let file_name = "scaleout_benchmarks_cnr.csv";
-        let write_headers = !Path::new(file_name).exists(); // write headers only to new file
+        let write_headers = !Path::new(self.file_name).exists(); // write headers only to new file
         let mut csv_file = OpenOptions::new()
             .append(true)
             .create(true)
-            .open(file_name)?;
+            .open(self.file_name)?;
         let results = self.results.lock().expect("Can't lock results");
 
         let mut wtr = WriterBuilder::new()
@@ -505,20 +512,6 @@ where
 
         for (duration, thread_results) in results.iter() {
             for (tid, (cid, ops_per_sec)) in thread_results.iter().enumerate() {
-                #[derive(Serialize)]
-                struct Record {
-                    name: String,
-                    rs: ReplicaStrategy,
-                    tm: ThreadMapping,
-                    batch_size: usize,
-                    threads: usize,
-                    duration: f64,
-                    thread_id: usize,
-                    core_id: u64,
-                    exp_time_in_sec: usize,
-                    iterations: usize,
-                };
-
                 for (idx, ops) in ops_per_sec.iter().enumerate() {
                     let record = Record {
                         name: self.name.clone(),
@@ -546,30 +539,8 @@ where
     /// finally it returns the minimal Duration over all threads
     /// after ensuring the run was fair.
     fn execute_mut(&self, duration: Duration) -> usize {
-        for tx in self.cmd_channels.iter() {
-            tx.send(duration).expect("Can't send iter.");
-        }
-
-        // Wait for all threads to finish and gather runtimes
-        let mut core_iteratios: Vec<(Core, Vec<usize>)> = Vec::with_capacity(self.threads());
-        let mut intervals = 0;
-        for i in 0..self.threads() {
-            let core_ops: (Core, Vec<usize>) = self
-                .result_channel
-                .1
-                .recv()
-                .expect("Can't receive a per-thread result?");
-            if intervals > 0 && intervals != core_ops.1.len() {
-                error!(
-                    "Receveived different no. of measurements from individual threads {:?}",
-                    core_ops
-                );
-            }
-            if intervals < core_ops.1.len() {
-                intervals = core_ops.1.len();
-            }
-            core_iteratios.push(core_ops);
-        }
+        /*
+        for i in 0..self.threads() {}
 
         let core_aggregate_tput: Vec<usize> = core_iteratios
             .iter()
@@ -588,43 +559,18 @@ where
         let mut results = self.results.lock().unwrap();
         results.insert(duration, core_iteratios.clone());
         0usize
+        */
+        0usize
     }
 
     fn startup(&mut self) {
-        let stuck = Arc::new(arr![AtomicUsize::new(0); 192]);
-        let nlogs = self.log.len();
-
-        #[cfg(feature = "c_nr")]
-        {
-            use core::sync::atomic::AtomicBool;
-            for i in 0..nlogs {
-                let stuck = stuck.clone();
-                let func = move |rid: &[AtomicBool; 192], idx: usize| {
-                    for replia in 0..192 {
-                        if rid[replia].compare_exchange_weak(
-                            true,
-                            false,
-                            Ordering::Relaxed,
-                            Ordering::Relaxed,
-                        ) == Ok(true)
-                        {
-                            stuck[replia].compare_exchange_weak(
-                                0,
-                                idx,
-                                Ordering::Release,
-                                Ordering::Relaxed,
-                            );
-                        }
-                    }
-                };
-                unsafe { Arc::get_mut_unchecked(&mut self.log[i]).update_closure(func) };
-            }
-        }
-
         let thread_num = self.threads();
-        // Need a barrier to synchronize starting of threads
-        let barrier = Arc::new(Barrier::new(thread_num));
-        let complete = Arc::new(arr![AtomicUsize::default(); 128]);
+
+        let start_sync = Arc::new(Barrier::new(thread_num));
+        let complete_sync = Arc::new(Barrier::new(thread_num));
+
+        let replicas = NonZeroUsize::new(self.replicas()).unwrap();
+        let ds = R::new(replicas, NonZeroUsize::new(1).unwrap());
 
         debug!(
             "Execute benchmark {} with the following replica: [core_id] mapping: {:#?}",
@@ -638,30 +584,20 @@ where
                 // with the correct NUMA affinity
                 utils::pin_thread(core_id);
 
-                let b = barrier.clone();
-                #[cfg(feature = "c_nr")]
-                let log = self.log.clone();
+                let start_sync = start_sync.clone();
+
+                let ds = ds.clone();
                 let f = self.f.clone();
                 let batch_size = self.batch_size;
-
-                let (duration_tx, duration_rx) = channel();
-                self.cmd_channels.push(duration_tx);
-                let com = complete.clone();
-                let result_channel = self.result_channel.0.clone();
-
-                let com = complete.clone();
-                let nre = replicas.len();
-                let rmc = self.rm.clone();
                 let log_period = Duration::from_secs(1);
                 let name = self.name.clone();
-                // Clone the Arc<>
                 let operations = self.operations.clone();
-                let stuck = stuck.clone();
 
                 self.handles.push(thread::spawn(move || {
                     utils::pin_thread(core_id);
-                    let replica_token = replica
-                        .register_me()
+
+                    let thread_token = ds
+                        .register(rid)
                         .expect("Can't register replica, out of slots?");
                     // Copy the actual Vec<Operations> data within the thread
                     let mut operations = (*operations).clone();
@@ -672,22 +608,15 @@ where
                             urcu_sys::rcu_register_thread();
                         }
                     }
-                    loop {
-                        let duration = duration_rx.recv().expect("Can't get iter from channel?");
-                        if duration.as_nanos() == 0 {
-                            debug!(
-                                "Finished with this ScaleBench, worker thread {} is done.",
-                                tid
-                            );
-                            return;
-                        }
 
+                    loop {
+                        let duration = Duration::from_secs(10);
                         debug!(
                             "Running {:?} on core {} replica#{} rtoken#{:?} for {:?}",
                             thread::current().id(),
                             core_id,
                             rid,
-                            replica_token,
+                            thread_token,
                             duration
                         );
 
@@ -696,17 +625,17 @@ where
                         let mut iter: usize = 0;
                         let nop: usize = operations.len();
 
-                        b.wait();
+                        start_sync.wait();
                         let start = Instant::now();
                         let end_experiment = start + duration;
                         let mut next_log = start + log_period;
+
                         while Instant::now() < end_experiment {
                             for _i in 0..batch_size {
                                 black_box((f)(
                                     core_id,
-                                    replica_token,
-                                    &log,
-                                    &replica,
+                                    thread_token,
+                                    &ds,
                                     &operations[iter],
                                     batch_size,
                                 ));
@@ -721,23 +650,6 @@ where
                                 operations_completed = 0;
                                 next_log += log_period;
                             }
-
-                            let log_id = stuck[rid].load(Ordering::Relaxed);
-                            if log_id != 0 {
-                                stuck[rid].compare_exchange_weak(
-                                    log_id,
-                                    0,
-                                    Ordering::Release,
-                                    Ordering::Relaxed,
-                                );
-                                replica.log_sync(replica_token, log_id);
-                            }
-                        }
-
-                        // Some threads may not end up adding the last second of measuring due to bad timing,
-                        // so make sure we remove it everywhere:
-                        if operations_per_second.len() == duration.as_secs() as usize {
-                            operations_per_second.pop(); // Get rid of last second of measurements
                         }
 
                         debug!(
@@ -745,12 +657,10 @@ where
                             thread::current().id(),
                             core_id,
                             rid,
-                            replica_token,
+                            thread_token,
                             operations_completed,
                             duration
                         );
-
-                        result_channel.send((core_id, operations_per_second));
 
                         if name.starts_with("urcu") {
                             unsafe {
@@ -758,32 +668,7 @@ where
                             }
                         }
 
-                        if !do_sync {
-                            b.wait();
-                            continue;
-                        } else if com[rid].fetch_add(1, Ordering::Relaxed) == num - 1 {
-                            // Periodically sync/advance all, and return once all
-                            // replicas have completed.
-                            let sync_thread = rmc.get(&rid).unwrap()[0];
-                            loop {
-                                let mut done = 0; // How many replicas are done with the operations
-                                for (r, c) in rmc.clone().into_iter() {
-                                    if com[r].load(Ordering::Relaxed) == c.len() {
-                                        done += 1;
-                                    }
-                                }
-                                if done == nre {
-                                    break;
-                                }
-
-                                for i in 1..(nlogs + 1) {
-                                    replica.log_sync(replica_token, i);
-                                }
-                            }
-                        }
-
-                        b.wait();
-                        com[rid].store(0, Ordering::Relaxed);
+                        start_sync.wait();
                     }
                 }));
 
@@ -1036,8 +921,8 @@ where
     /// possible triplet: (replica strategy, thread mapping, #threads).
     pub(crate) fn configure(&self, c: &mut TestHarness, name: &str, f: BenchFn<R>)
     where
-        <R::D as Dispatch>::WriteOperation: Sync + Send + 'static,
-        <R::D as Dispatch>::ReadOperation: Sync + Send + Clone,
+        <R::D as Dispatch>::WriteOperation: Sync + Send + Copy + 'static,
+        <R::D as Dispatch>::ReadOperation: Sync + Send + Copy + Clone,
         <R::D as Dispatch>::Response: Send,
         R: DsInterface + Sync + Send,
         R::D: 'static + Send + Sync,
@@ -1076,9 +961,7 @@ where
                                 BenchmarkId::new(name, *ts),
                                 &runner,
                                 |cb, runner| {
-                                    cb.iter_custom(|duration| {
-                                        runner.execute_mut(duration)
-                                    })
+                                    cb.iter_custom(|duration| runner.execute_mut(duration))
                                 },
                             );
 

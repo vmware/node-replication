@@ -122,17 +122,13 @@ fn stack_scale_out(c: &mut TestHarness) {
     mkbench::ScaleBenchBuilder::<NodeReplicated<Stack>>::new(ops)
         .machine_defaults()
         .log_strategy(mkbench::LogStrategy::One)
-        .configure(
-            c,
-            "stack-scaleout",
-            |_cid, rid, log, replica, op, _batch_size| {
-                match op {
-                    Operation::WriteOperation(op) => replica.execute_mut(log, *op, rid),
-                    Operation::ReadOperation(op) => unreachable!(),
-                    _ => unreachable!(),
-                };
-            },
-        );
+        .configure(c, "stack-scaleout", |_cid, rid, ds, op, _batch_size| {
+            match op {
+                Operation::WriteOperation(op) => ds.execute_mut(*op, rid),
+                Operation::ReadOperation(op) => unreachable!(),
+                _ => unreachable!(),
+            };
+        });
 }
 
 fn main() {
