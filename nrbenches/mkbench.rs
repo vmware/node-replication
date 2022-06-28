@@ -116,7 +116,10 @@ impl<'a, T: Dispatch + Sync + Default> DsInterface for NodeReplicated<T> {
     type D = T;
 
     fn new(replicas: NonZeroUsize, logs: NonZeroUsize) -> Arc<Self> {
-        Arc::new(NodeReplicated::new(replicas, |_node| {}).expect("Can't allocate NodeReplicated"))
+        Arc::new(
+            NodeReplicated::new(replicas, |_node| unimplemented!("Define affinity function"))
+                .expect("Can't allocate NodeReplicated"),
+        )
     }
 
     fn register(&self, rid: ReplicaId) -> Option<ThreadToken> {
