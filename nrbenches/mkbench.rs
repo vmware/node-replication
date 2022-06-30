@@ -29,9 +29,11 @@ use cnr::{Dispatch, Log, Replica, ThreadToken};
 use csv::WriterBuilder;
 use log::*;
 #[cfg(feature = "nr")]
-use node_replication::{
-    log::Log, replica::Replica, Dispatch, NodeReplicated, ReplicaId, ThreadToken,
-};
+use node_replication::log::Log;
+#[cfg(feature = "nr")]
+use node_replication::replica::{Replica, ReplicaId};
+#[cfg(feature = "nr")]
+use node_replication::{Dispatch, NodeReplicated, ThreadToken};
 use rand::seq::SliceRandom;
 use rand::{rngs::SmallRng, Rng, SeedableRng};
 use serde::Serialize;
