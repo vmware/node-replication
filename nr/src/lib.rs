@@ -148,12 +148,96 @@ pub type ReplicaId = usize;
 /// A token handed out to threads registered with replicas.
 ///
 /// # Note
-/// Ideally this would be an affine type and returned again by `execute` and `execute_ro`.
-/// However it feels like this would hurt API ergonomics a lot.
+/// For maximum type-safety this would be an affine type, then we'd have to
+/// return it again in `execute` and `execute_mut`. However it feels like this
+/// would hurt API ergonomics a lot.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct ThreadToken {
+    /// Which replica we're registered with.
     rid: ReplicaId,
+    /// The registration token for this thread that we got from the replica
+    /// (through [`Replica::register`]) identified by `rid`.
     rtkn: ReplicaToken,
+}
+
+/// Passed to the user specified function to indicate that we change the replica
+/// we're operating on to one that is *not* the replica which we're registered
+/// (e.g., not the one identified by `rid` in [`ThreadToken`]).
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum AffinityChange {
+    /// Indicates that the system will execute operation on behalf of a
+    /// different replica. The user-specified function likely should either
+    /// migrate the thread this is called on to a NUMA node that's local to the
+    /// replica or otherwise change the memory affinity.
+    Replica(ReplicaId),
+    /// Indicates that we're done the thread should revert back to it's previous
+    /// behavior. The `usize` that was returned by the [`AffinityChangeFn`] for
+    /// the previous call is passed back into the function.
+    ///
+    /// For example, this can be used to remember the original core id where the
+    /// thread was running on in case of a affinity change by thread migration.
+    Revert(usize),
+}
+
+/// User provided function to inform that the system should change the memory
+/// allocation affinity for a current thread, to wherever the memory from the
+/// replica (passed as an argument) should come from.
+///
+/// See also [`AffinityChange`] and [`AffinityToken`].
+type AffinityChangeFn = dyn Fn(AffinityChange) -> usize + Send + Sync;
+
+/// The [`AffinityManager`] creates affinity tokens whenever we request to
+/// change the memory allocation affinity for a given thread.
+///
+/// The tokens take care of calling the `af_change_fn` that's usually provided
+/// by a user.
+struct AffinityManager {
+    af_change_fn: Box<AffinityChangeFn>,
+}
+
+impl AffinityManager {
+    /// Creates a new instance of the AffinityManager.
+    ///
+    /// # Arguments
+    /// - `af_change_fn`: User provided function, or can be some default for
+    /// e.g., Linux that relies on migrating threads a NUMA aware mallocs and
+    /// the first-touch policy.
+    fn new(af_change_fn: Box<AffinityChangeFn>) -> Self {
+        Self { af_change_fn }
+    }
+
+    /// Creates an [`AffinityToken`] for the given `rid`.
+    ///
+    /// The token will call the user-provided function to change the memory
+    /// affinity and once it gets dropped, it will tell the user to revert the
+    /// change.
+    fn switch(&self, rid: ReplicaId) -> AffinityToken<'_> {
+        AffinityToken::new(&self.af_change_fn, rid)
+    }
+}
+
+/// A token that is in charge of orchestrating memory affinity changes for a
+/// thread.
+struct AffinityToken<'f> {
+    af_chg_fn: &'f dyn Fn(AffinityChange) -> usize,
+    old: usize,
+}
+
+impl<'f> AffinityToken<'f> {
+    /// Creating the token will request the memory affinity to be changes to to
+    /// match the memory affinity of `rid`.
+    fn new(af_chg_fn: &'f dyn Fn(AffinityChange) -> usize, rid: ReplicaId) -> Self {
+        let old = af_chg_fn(AffinityChange::Replica(rid));
+        Self { af_chg_fn, old }
+    }
+}
+
+impl<'f> Drop for AffinityToken<'f> {
+    /// Dropping the token will request to revert the affinity change that was
+    /// made during creation.
+    fn drop(&mut self) {
+        (self.af_chg_fn)(AffinityChange::Revert(self.old));
+    }
 }
 
 /// To make it harder to use the same ThreadToken on multiple threads.
@@ -194,55 +278,62 @@ impl From<alloc::collections::TryReserveError> for NodeReplicatedError {
 pub struct NodeReplicated<D: Dispatch + Sync> {
     log: Log<D::WriteOperation>,
     replicas: Vec<Box<Replica<D>>>,
+    affinity_mngr: AffinityManager,
 }
 
 impl<D> NodeReplicated<D>
 where
     D: Default + Dispatch + Sized + Sync,
 {
-    /// Creates a new, replicated data-structure from a single-threaded data-structure
-    /// that implements [`Dispatch`]. It also uses the [`Default`] constructor to create
-    /// an initial data-structure on all replicas.
+    /// Creates a new, replicated data-structure from a single-threaded
+    /// data-structure that implements [`Dispatch`]. It also uses the
+    /// [`Default`] constructor to create a initial data-structure on all
+    /// replicas (`num_replicas` times).
     ///
     /// # Arguments
-    /// - `num_replicas`: How many replicas you want to create. Typically the number of
-    ///   NUMA nodes in your system.
-    /// - `_set_mem_affinity`: A user-provided function that is called whenever the code
-    /// operates on a certain [`Replica`] to give the client the ability to e.g., change
-    /// the memory affinity of the underlying thread.
-    ///
-    /// # Example
-    /// TBD.
-    pub fn new<AffChgFn>(
+    /// - `num_replicas`: How many replicas you want to create. Typically the
+    ///   number of NUMA nodes in your system.
+    /// - `chg_mem_affinity`: A user-provided function that is called whenever
+    ///   the code operates on a certain [`Replica`] that is not local to the
+    ///   thread that we're running on (can happen if a replica falls behind and
+    ///   we're temporarily executing operation on behalf of this replica so we
+    ///   can make progress on our own replica). This function is used to ensure
+    ///   that memory will still be allocated from the right NUMA node. See
+    ///   [`AffinityChange`] for more information on how implement this function
+    ///   and handle its arguments.
+    pub fn new(
         num_replicas: NonZeroUsize,
-        _set_mem_affinity: AffChgFn,
-    ) -> Result<Self, NodeReplicatedError>
-    where
-        AffChgFn: Fn(Option<usize>) + Sized + 'static + Send + Sync,
-    {
+        chg_mem_affinity: impl Fn(AffinityChange) -> usize + Send + Sync + 'static,
+    ) -> Result<Self, NodeReplicatedError> {
         assert!(num_replicas.get() < MAX_REPLICAS_PER_LOG);
+        let affinity_mngr = AffinityManager::new(Box::try_new(chg_mem_affinity)?);
         let log = Log::default();
 
         let mut replicas = Vec::new();
         replicas.try_reserve(num_replicas.get())?;
 
-        for _replica_id in 0..num_replicas.get() {
+        for replica_id in 0..num_replicas.get() {
             let log_token = log
                 .register()
                 .expect("Succeeds (num_replicas < MAX_REPLICAS_PER_LOG)");
 
-            // Allocate replica on the proper NUMA node
             let r = {
-                // TODO: change affinity
+                // Allocate the replica on the proper NUMA node
+                let _aff_tkn = affinity_mngr.switch(replica_id);
                 Box::try_new(Replica::new(log_token))?
-                // reset affinity
+                // aff_tkn is dropped here
             };
 
-            // Succeeds (try_reserve)
+            // This succeeds, we did `try_reserve` earlier so no `try_push` is
+            // necessary.
             replicas.push(r);
         }
 
-        Ok(NodeReplicated { replicas, log })
+        Ok(NodeReplicated {
+            replicas,
+            log,
+            affinity_mngr,
+        })
     }
 }
 
@@ -254,25 +345,16 @@ where
     /// (`ds`) that implements [`Dispatch`].
     ///
     /// # Arguments
-    /// - `num_replicas`: How many replicas you want to create. Typically the number of
-    ///   NUMA nodes in your system.
-    /// - `set_mem_affinity`: A user-provided function that is called whenever the code
-    /// operates on a certain [`Replica`] to give the client the ability to e.g., change
-    /// the memory affinity of the underlying thread.
-    /// - `ds`: The initial version of the data-structure. Will be cloned for each
-    ///   replica.
+    /// See [`NodeReplicated::new`].
     ///
     /// # Example
     /// TBD.
-    pub fn with_data<AffChgFn>(
+    pub fn with_data(
         _num_replicas: NonZeroUsize,
-        _set_mem_affinity: AffChgFn,
+        _chg_mem_affinity: impl Fn(AffinityChange) -> usize + Send + Sync + 'static,
         _ds: D,
-    ) -> Result<Self, NodeReplicatedError>
-    where
-        AffChgFn: Fn(Option<usize>) + Sized + 'static + Send + Sync,
-    {
-        unreachable!("complete me")
+    ) -> Result<Self, NodeReplicatedError> {
+        unimplemented!("complete me")
     }
 }
 
@@ -280,19 +362,19 @@ impl<D> NodeReplicated<D>
 where
     D: Dispatch + Sized + Sync,
 {
-    /// Registers a thread with a given replica in the [`NodeReplicated`] data-structure.
-    /// Returns an Option containing a [`ThreadToken`] if the registration was
-    /// successfull. None if the registration failed.
+    /// Registers a thread with a given replica in the [`NodeReplicated`]
+    /// data-structure. Returns an Option containing a [`ThreadToken`] if the
+    /// registration was successful. None if the registration failed.
     ///
-    /// The [`ThreadToken`] is used to identify the thread to issue the operation for
-    /// subsequent [`NodeReplicated::execute()`] and [`NodeReplicated::execute_mut`]
-    /// calls.
+    /// The [`ThreadToken`] is used to identify the thread to issue the
+    /// operation for subsequent [`NodeReplicated::execute()`] and
+    /// [`NodeReplicated::execute_mut`] calls.
     ///
     /// # Arguments
-    /// - `replica_id`: Which replica the thread should be registered with. This should be
-    /// less than the `num_replicas` argument provided in the constructor
-    /// ([`NodeReplicated::new()`]). In most cases, this will probably correspond to the
-    /// NUMA node that the thread is running on.
+    /// - `replica_id`: Which replica the thread should be registered with. This
+    /// should be less than the `num_replicas` argument provided in the
+    /// constructor (see [`NodeReplicated::new()`]). In most cases, `replica_id`
+    /// will correspond to the NUMA node that the thread is running on.
     ///
     /// # Example
     /// TBD.
@@ -333,7 +415,7 @@ where
             /// Resumes a replica that earlier returned with an Error (and the CombinerLock).
             Exec(Option<CombinerLock<'a, D>>),
             /// Indicates need to [`Replica::sync()`] a replica with the given ID.
-            Sync(usize),
+            Sync(ReplicaId),
         }
 
         let mut q = ArrayVec::<ResolveOp<D>, { crate::log::MAX_REPLICAS_PER_LOG }>::new();
@@ -350,23 +432,32 @@ where
                         q.push(ResolveOp::Sync(stuck_ridx));
                     }
                     Err(ReplicaError::GcFailed(stuck_ridx)) => {
-                        assert_ne!(stuck_ridx, tkn.rid);
-                        let _r = self.replicas[stuck_ridx].sync(&self.log);
-
+                        {
+                            assert_ne!(stuck_ridx, tkn.rid);
+                            let _aftkn = self.affinity_mngr.switch(stuck_ridx);
+                            let _r = self.replicas[stuck_ridx].sync(&self.log);
+                            // Affinity is reverted here, _aftkn is dropped.
+                        }
                         return self.replicas[tkn.rid]
                             .get_response(&self.log, tkn.rtkn.tid())
                             .expect("GcFailed has to produced a response");
                     }
                 },
-                ResolveOp::Sync(ridx) => match self.replicas[ridx].sync(&self.log) {
-                    Ok(()) => continue,
-                    Err(stuck_ridx) => {
-                        assert_ne!(stuck_ridx, tkn.rid);
-                        if stuck_ridx != tkn.rid {
+                ResolveOp::Sync(ridx) => {
+                    // Holds trivially because of all the other asserts in this function
+                    debug_assert_ne!(ridx, tkn.rid);
+                    let _aftkn = self.affinity_mngr.switch(ridx);
+                    match self.replicas[ridx].sync(&self.log) {
+                        Ok(()) => continue,
+                        Err(stuck_ridx) => {
+                            assert_ne!(stuck_ridx, tkn.rid);
+                            // This doesn't do an allocation so it's ok that
+                            // we're in a different affinity.
                             q.push(ResolveOp::Sync(stuck_ridx));
                         }
                     }
-                },
+                    // _aftkn is dropped here, reverting affinity change
+                }
             }
         }
     }
@@ -397,7 +488,7 @@ where
             /// Resumes a replica that earlier returned with an Error (and the CombinerLock).
             Exec(Option<CombinerLock<'a, D>>, D::ReadOperation),
             /// Indicates need to [`Replica::sync()`] a replica with the given ID.
-            Sync(usize),
+            Sync(ReplicaId),
         }
 
         let mut q = ArrayVec::<ResolveOp<D>, { crate::log::MAX_REPLICAS_PER_LOG }>::new();
@@ -420,13 +511,19 @@ where
                         unreachable!("GC should not fail for reads");
                     }
                 },
-                ResolveOp::Sync(ridx) => match self.replicas[ridx].sync(&self.log) {
-                    Ok(()) => continue,
-                    Err(stuck_ridx) => {
-                        assert!(stuck_ridx != tkn.rid);
-                        q.push(ResolveOp::Sync(stuck_ridx));
+                ResolveOp::Sync(ridx) => {
+                    // Holds trivially because of all the other asserts in this function
+                    debug_assert_ne!(ridx, tkn.rid);
+                    let _aftkn = self.affinity_mngr.switch(ridx);
+                    match self.replicas[ridx].sync(&self.log) {
+                        Ok(()) => continue,
+                        Err(stuck_ridx) => {
+                            assert!(stuck_ridx != tkn.rid);
+                            q.push(ResolveOp::Sync(stuck_ridx));
+                        }
                     }
-                },
+                    // _aftkn is dropped here, reverting affinity change
+                }
             }
         }
     }

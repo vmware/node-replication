@@ -117,8 +117,11 @@ impl<'a, T: Dispatch + Sync + Default> DsInterface for NodeReplicated<T> {
 
     fn new(replicas: NonZeroUsize, logs: NonZeroUsize) -> Arc<Self> {
         Arc::new(
-            NodeReplicated::new(replicas, |_node| unimplemented!("Define affinity function"))
-                .expect("Can't allocate NodeReplicated"),
+            NodeReplicated::new(replicas, |node| {
+                log::error!("implement chg affinity {:?}", node);
+                0xbeef
+            })
+            .expect("Can't allocate NodeReplicated"),
         )
     }
 
@@ -271,7 +274,7 @@ pub(crate) fn baseline_comparison<R: DsInterface>(
     #[cfg(feature = "nr")]
     let r = {
         let replicas = NonZeroUsize::new(1).expect("Can't create NonZeroUsize");
-        NodeReplicated::<R::D>::new(replicas, |rid| {}).expect("Can't create NodeReplicated")
+        NodeReplicated::<R::D>::new(replicas, |rid| 0).expect("Can't create NodeReplicated")
     };
     #[cfg(feature = "c_nr")]
     let log = Arc::new(Log::<<R::D as Dispatch>::WriteOperation>::new(log_size, 1));
