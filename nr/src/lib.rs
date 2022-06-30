@@ -112,24 +112,26 @@ use core::fmt::Debug;
 
 /// Trait that a data structure must implement to be usable with this library.
 ///
-/// When this library executes a read-only operation against the data structure, it
-/// invokes the `dispatch()` method with the operation as an argument.
+/// When this library executes a read-only operation against the data structure,
+/// it invokes the [`Dispatch::dispatch`] method with the `ReadOperation` as an
+/// argument.
 ///
-/// When this library executes a write operation against the data structure, it invokes
-/// the `dispatch_mut()` method with the operation as an argument.
+/// When this library executes a write operation against the data structure, it
+/// invokes the [`Dispatch::dispatch_mut`] method with the `WriteOperation` as
+/// an argument.
 pub trait Dispatch {
-    /// A read-only operation. When executed against the data structure, an operation
-    /// of this type must not mutate the data structure in anyway. Otherwise, the
-    /// assumptions made by this library no longer hold.
+    /// A read-only operation. When executed against the data structure, an
+    /// operation of this type must not mutate the data structure in anyway.
+    /// Otherwise, the assumptions made by this library no longer hold.
     type ReadOperation: Sized;
 
-    /// A write operation. When executed against the data structure, an operation of
-    /// this type is allowed to mutate state. The library ensures that this is done so
-    /// in a thread-safe manner.
+    /// A write operation. When executed against the data structure, an
+    /// operation of this type is allowed to mutate state. The library ensures
+    /// that this is done so in a thread-safe manner.
     type WriteOperation: Sized + Clone + PartialEq + Send;
 
-    /// The type on the value returned by the data structure when a `ReadOperation` or a
-    /// `WriteOperation` successfully executes against it.
+    /// The type on the value returned by the data structure when a
+    /// `ReadOperation` or a `WriteOperation` successfully executes against it.
     type Response: Sized + Clone;
 
     /// Method on the data structure that allows a read-only operation to be

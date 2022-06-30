@@ -23,13 +23,49 @@ use super::log::{Log, LogToken};
 use super::rwlock::RwLock;
 use super::Dispatch;
 use super::ReusableBoxFuture;
+use super::ReplicaId;
 
+/// Errors a replica can encounter (and return to clients) when they execute
+/// operations.
 pub enum ReplicaError<'r, D>
 where
     D: Sized + Dispatch + Sync,
 {
-    NoLogSpace(usize, CombinerLock<'r, D>),
-    GcFailed(usize),
+    /// We don't have space in the log to enqueue our batch of operations.
+    ///
+    /// This can happen if one or more replicas (not our own) stopped making
+    /// progress and have not applied the outstanding operations in the log. If
+    /// they fall behind too much we will eventually run out of space since the
+    /// log is implemented as a bounded, circular buffer.
+    ///
+    /// If this happens the ReplicaId reported in this error is one of the
+    /// replicas that is behind (it can definitely happen that more than one
+    /// replicas are slow and behind and need to be poked, then the [`Replica`]
+    /// will just return this error multiple times, until we re-tried enough
+    /// times and have adanved all the replicas which are behind). The system
+    /// should "poke" replicas which are behind using [`Replica::sync`].
+    ///
+    /// After poking a replica, the system should resume the original operation
+    /// on the current replica using the already acquired (and returned, as part
+    /// of this error) [`CombinerLock`] of our local replica. A client is
+    /// supposed to call [`Replica::execute_locked`] or
+    /// [`Replica::execute_mut_locked`] with the combiner lock.
+    NoLogSpace(ReplicaId, CombinerLock<'r, D>),
+
+    /// After we enqueue operations in the log there is a process known as
+    /// garbage-collection of old entries from the log. It tries to occasionally
+    /// advance the (global) log head pointer.
+    ///
+    /// If we can't do this (because a replica is behind and has it's own head
+    /// pointer at the same index as the global head pointer of the log), we
+    /// report an error back to the client. The error contains the ID of the
+    /// replica that is behind so we can go and poke it e.g., with
+    /// [`Replica::sync`].
+    ///
+    /// Note that if we get this error during [`Replica::execute_mut`] it means
+    /// that the system did manage to execute the operations since GC happens
+    /// afterwards.
+    GcFailed(ReplicaId),
 }
 
 impl<D> Debug for ReplicaError<'_, D>
