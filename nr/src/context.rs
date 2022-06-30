@@ -6,6 +6,7 @@ use core::cell::Cell;
 use core::default::Default;
 
 use crossbeam_utils::CachePadded;
+use static_assertions::const_assert;
 
 /// The maximum number of operations that can be batched inside this context.
 #[cfg(not(loom))]

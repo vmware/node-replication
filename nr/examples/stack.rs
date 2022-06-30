@@ -127,7 +127,7 @@ fn main() -> Result<(), NodeReplicatedError> {
     const NUM_THREADS: usize = 3;
     const NUM_OPS_PER_THREAD: usize = 2048;
 
-    let stack = Arc::new(NodeReplicated::new(NUM_REPLICAS, |_node| {})?);
+    let stack = Arc::new(NodeReplicated::new(NUM_REPLICAS, |_node| 0)?);
 
     // The replica executes a Modify or Access operations by calling
     // `execute_mut` and `execute`. Eventually they end up in the `Dispatch` trait.

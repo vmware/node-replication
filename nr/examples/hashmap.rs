@@ -62,7 +62,7 @@ fn main() {
     // amounts of replicas for demonstration purposes)
     for replica_cntr in 1..=4 {
         let num_replica = NonZeroUsize::new(replica_cntr).unwrap();
-        let nrht = Arc::new(NodeReplicated::<NrHashMap>::new(num_replica, |_rid| {}).unwrap());
+        let nrht = Arc::new(NodeReplicated::<NrHashMap>::new(num_replica, |_rid| 0).unwrap());
 
         // The replica executes a Modify or Access operations by calling
         // `execute_mut` and `execute`. Eventually they end up in the `Dispatch` trait.

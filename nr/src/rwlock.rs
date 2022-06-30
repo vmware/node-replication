@@ -21,6 +21,7 @@ use core::ops::{Deref, DerefMut};
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use crossbeam_utils::CachePadded;
+use static_assertions::const_assert;
 
 /// Maximum number of reader threads that this lock supports.
 const MAX_READER_THREADS: usize = 192;

@@ -6,24 +6,27 @@
 //! A replica holds one instance of a data-structure and ensures all accesses to the
 //! data-structure are synchronized with respect to the order in the shared [`Log`].
 
+use alloc::vec::Vec;
 use core::cell::RefCell;
 use core::fmt::{self, Debug};
 use core::hint::spin_loop;
 #[cfg(not(loom))]
 use core::sync::atomic::{AtomicUsize, Ordering};
-#[cfg(loom)]
-use loom::sync::atomic::{AtomicUsize, Ordering};
-
-use alloc::vec::Vec;
 
 use crossbeam_utils::CachePadded;
+#[cfg(loom)]
+use loom::sync::atomic::{AtomicUsize, Ordering};
+use static_assertions::const_assert;
 
 use super::context::Context;
 use super::log::{Log, LogToken};
 use super::rwlock::RwLock;
 use super::Dispatch;
 use super::ReusableBoxFuture;
-use super::ReplicaId;
+
+/// Unique identifier for the given replica (it's probably the same as the NUMA
+/// node that this replica corresponds to).
+pub type ReplicaId = usize;
 
 /// Errors a replica can encounter (and return to clients) when they execute
 /// operations.

@@ -81,17 +81,13 @@ extern crate crossbeam_utils;
 #[macro_use]
 extern crate log as logging;
 
-#[macro_use]
-extern crate static_assertions;
-
 use alloc::boxed::Box;
 use alloc::vec::Vec;
+use core::fmt::Debug;
 use core::marker::Sync;
 use core::num::NonZeroUsize;
 
 use arrayvec::ArrayVec;
-
-use replica::{CombinerLock, ReplicaError};
 
 mod context;
 mod log;
@@ -106,9 +102,7 @@ pub mod rwlock;
 pub mod rwlock;
 
 use crate::log::{Log, MAX_REPLICAS_PER_LOG};
-use replica::{Replica, ReplicaToken};
-
-use core::fmt::Debug;
+use replica::{CombinerLock, Replica, ReplicaError, ReplicaId, ReplicaToken};
 
 /// Trait that a data structure must implement to be usable with this library.
 ///
@@ -143,10 +137,6 @@ pub trait Dispatch {
     fn dispatch_mut(&mut self, op: Self::WriteOperation) -> Self::Response;
 }
 
-/// Unique identifier for the given replica (it's probably the same as the NUMA
-/// node that this replica corresponds to).
-pub type ReplicaId = usize;
-
 /// A token handed out to threads registered with replicas.
 ///
 /// # Note
@@ -165,6 +155,14 @@ pub struct ThreadToken {
 /// Passed to the user specified function to indicate that we change the replica
 /// we're operating on to one that is *not* the replica which we're registered
 /// (e.g., not the one identified by `rid` in [`ThreadToken`]).
+///
+/// # Note
+/// The pattern for the enum arguments that are passed to the affinity function
+/// always comes in pairs of `Replica` followed by `Revert`:
+///
+/// 1. `old = affinty_function(AffinityChange::Replica(some_non_local_rid))`
+/// 2. library does some stuff with different affinity...
+/// 3. `affinity_change_function(AffinityChange::Revert(old))`
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum AffinityChange {
     /// Indicates that the system will execute operation on behalf of a
@@ -172,12 +170,15 @@ pub enum AffinityChange {
     /// migrate the thread this is called on to a NUMA node that's local to the
     /// replica or otherwise change the memory affinity.
     Replica(ReplicaId),
-    /// Indicates that we're done the thread should revert back to it's previous
-    /// behavior. The `usize` that was returned by the [`AffinityChangeFn`] for
-    /// the previous call is passed back into the function.
+    /// Indicates that we're done and the thread should revert back to it's
+    /// previous/original affinity. The `usize` that was returned by the
+    /// user-provided affinity change function (when we called it with
+    /// [`AffinityChange::Replica`] as an argument) is passed back as the
+    /// argument of [`AffinityChange::Revert`].
     ///
-    /// For example, this can be used to remember the original core id where the
-    /// thread was running on in case of a affinity change by thread migration.
+    /// For example, this can be useful to "remember" the original core id where
+    /// the thread was running on in case of an affinity change by thread
+    /// migration.
     Revert(usize),
 }
 

@@ -12,13 +12,13 @@ use core::default::Default;
 use core::fmt;
 use core::mem::size_of;
 use core::ops::FnMut;
-
 #[cfg(not(loom))]
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-#[cfg(loom)]
-pub use loom::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use crossbeam_utils::CachePadded;
+#[cfg(loom)]
+pub use loom::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use static_assertions::const_assert;
 
 use crate::context::MAX_PENDING_OPS;
 use crate::replica::MAX_THREADS_PER_REPLICA;

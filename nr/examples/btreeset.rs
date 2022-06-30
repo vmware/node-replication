@@ -58,7 +58,7 @@ fn main() {
     for n_replicas in 1..=4 {
         for thread_num in 1..=4 {
             let num_replica = NonZeroUsize::new(n_replicas).unwrap();
-            let nrht = Arc::new(NodeReplicated::<NrBtreeSet>::new(num_replica, |_rid| {}).unwrap());
+            let nrht = Arc::new(NodeReplicated::<NrBtreeSet>::new(num_replica, |_rid| 0).unwrap());
 
             let thread_loop = |replica: Arc<NodeReplicated<NrBtreeSet>>, ttkn, thread_id| {
                 println!(
