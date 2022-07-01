@@ -1,7 +1,10 @@
 # Benchmarks
 
 This folder contains a few different benchmarks to evaluate the performance of
-both [node-replication](../nr) and [cnr](../cnr) library. They are described in more detail in the following subsections. Use feature flag to distinguish between node-replication (`--features nr`) and cnr (`--features cnr`) benchmarks.
+both [node-replication](../nr) and [cnr](../cnr) library. They are described in
+more detail in the following subsections. Use feature flag to distinguish
+between node-replication (`--features nr`) and cnr (`--features cnr`)
+benchmarks.
 
 Please ensure to always set `RUST_TEST_THREADS=1` in your environment for
 benchmarking since the scale-out benchmarks will spawn multiple threads
@@ -43,10 +46,6 @@ git checkout v.0.11.0
 make
 make install
 ```
-
-The `memfs` benchmarks depends on btfs which uses FUSE. The easiest way to
-install FUSE for MacOS is through downloading the packages on
-[osxfuse](https://osxfuse.github.io/).
 
 ## Log append [[benchmark](log.rs)]
 
@@ -99,21 +98,12 @@ replication (using an x86-64 4-level address space layout).
 To run these benchmarks execute:
 `RUST_TEST_THREADS=1 cargo bench --bench vspace --features nr`
 
-## MemFS [[benchmark](memfs.rs)]
-
-A benchmark to evaluate the performance of the NR library for file-system like
-operations, by using a very simple in-memory file-system
-([btfs](https://crates.io/crates/btfs)).
-
-To run these benchmarks execute:
-`RUST_TEST_THREADS=1 cargo bench --bench memfs --features nr`
-
 ## Hashbench [[benchmark](hashbench.rs)]
 
 A benchmark to compare various concurrent Hashtables (originally
 from [evmap](https://github.com/jonhoo/rust-evmap)).
 
-Use `RUST_TEST_THREADS=1 cargo bench --bench hashbench -- --help` to see an
+Use `RUST_TEST_THREADS=1 cargo bench --bench hashbench --features nr -- --help` to see an
 overview of supported configuration or check the `hashbench_run.sh` script.
 
 ## RWLock bench [[benchmark](rwlockbench.rs)]
@@ -121,5 +111,5 @@ overview of supported configuration or check the `hashbench_run.sh` script.
 A benchmark to measure the performance of the readers-writer lock
 implementation.
 
-Use `RUST_TEST_THREADS=1 cargo bench --bench rwlockbench -- --help` to see an
+Use `RUST_TEST_THREADS=1 cargo bench --bench rwlockbench --features nr -- --help` to see an
 overview of supported configuration or check the `rwlockbench_run.sh` script.

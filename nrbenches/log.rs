@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use node_replication::log::Log;
 use node_replication::replica::Replica;
-use node_replication::Dispatch;
+use node_replication::{Dispatch, NodeReplicated};
 use rand::distributions::Distribution;
 use rand::{Rng, RngCore};
 
@@ -23,7 +23,7 @@ use zipf::ZipfDistribution;
 mod mkbench;
 mod utils;
 
-use mkbench::{ReplicaStrategy, ReplicaTrait, ThreadMapping};
+use mkbench::{ReplicaStrategy, ThreadMapping};
 
 use utils::benchmark::*;
 use utils::Operation;
@@ -37,11 +37,11 @@ impl Dispatch for Nop {
     type Response = ();
 
     fn dispatch(&self, _op: Self::ReadOperation) -> Self::Response {
-        unreachable!();
+        ()
     }
 
     fn dispatch_mut(&mut self, _op: Self::WriteOperation) -> Self::Response {
-        unreachable!();
+        ()
     }
 }
 
@@ -49,7 +49,7 @@ impl Dispatch for Nop {
 fn log_scale_bench(c: &mut TestHarness) {
     env_logger::try_init();
 
-    /// Log size (needs to be big as we don't have GC in this case but high tput)
+    /// Log size (needs to be big as we don't want GC but max tput)
     const LOG_SIZE_BYTES: usize = 12 * 1024 * 1024 * 1024;
 
     /// Benchmark #operations per iteration
@@ -60,25 +60,20 @@ fn log_scale_bench(c: &mut TestHarness) {
         operations.push(Operation::WriteOperation(e));
     }
 
-    mkbench::ScaleBenchBuilder::<Replica<Nop>>::new(operations)
+    mkbench::ScaleBenchBuilder::<NodeReplicated<Nop>>::new(operations)
         .thread_defaults()
         .thread_mapping(ThreadMapping::Sequential)
         .replica_strategy(ReplicaStrategy::One)
-        .log_size(LOG_SIZE_BYTES)
         .log_strategy(mkbench::LogStrategy::One)
         .update_batch(8)
-        .reset_log()
-        .disable_sync()
-        .configure(
-            c,
-            "log-append",
-            |_cid, rid, log, replica, op, batch_size| match op {
-                Operation::WriteOperation(o) => {
-                    let _r = log.append(&vec![*o], rid.id(), |_o, _i| {});
+        .configure(c, "log-append", |_cid, tkn, ds, op, batch_size| match op {
+            Operation::WriteOperation(o) => {
+                for _i in 0..batch_size {
+                    let _r = ds.execute_mut(0xffff_ffff_ffff_ffff, tkn);
                 }
-                _ => unreachable!(),
-            },
-        );
+            }
+            _ => unreachable!(),
+        });
 }
 
 fn main() {

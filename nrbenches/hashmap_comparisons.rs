@@ -1,23 +1,22 @@
 // Copyright © 2019-2020 VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! Implements ReplicaTrait for a bunch of different concurrent hashmap implementations.
+//! Implements DsInterface for a bunch of different concurrent hashmap implementations.
 
 use std::cell::UnsafeCell;
 use std::ffi::c_void;
 use std::marker::Sync;
 use std::mem;
+use std::num::NonZeroUsize;
 use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+use node_replication::{replica::ReplicaId, replica::ReplicaToken, Dispatch, ThreadToken};
 use urcu_sys;
 
-use node_replication::{Dispatch, Log, ReplicaToken};
-
-use crate::mkbench::ReplicaTrait;
-
 use super::{OpConcurrent, INITIAL_CAPACITY};
+use crate::mkbench::DsInterface;
 
 /// It looks like a Replica but it's really a fully partitioned data-structure.
 ///
@@ -31,67 +30,57 @@ pub struct Partitioner<T: Dispatch> {
 // This implies we have to run with `ReplicaStrategy::PerThread`.
 unsafe impl<T> Sync for Partitioner<T> where T: Dispatch + Default + Sync {}
 
-impl<T> ReplicaTrait for Partitioner<T>
+impl<T> DsInterface for Partitioner<T>
 where
     T: Dispatch + Default + Sync,
 {
     type D = T;
 
-    fn new_arc(
-        _log: Vec<Arc<Log<'static, <Self::D as Dispatch>::WriteOperation>>>,
-    ) -> std::sync::Arc<Self> {
+    fn new(_replicas: NonZeroUsize, _logs: NonZeroUsize) -> std::sync::Arc<Self> {
         Arc::new(Partitioner {
             registered: AtomicUsize::new(0),
             data_structure: UnsafeCell::new(T::default()),
         })
     }
 
-    fn register_me(&self) -> Option<ReplicaToken> {
+    fn register(&self, rid: ReplicaId) -> Option<ThreadToken> {
         let r = self
             .registered
             .compare_exchange_weak(0, 1, Ordering::SeqCst, Ordering::SeqCst);
         if r == Ok(0) {
-            Some(unsafe { ReplicaToken::new(0) })
+            Some(unsafe { ThreadToken::new(rid, ReplicaToken::new(1)) })
         } else {
             // Can't register more than one thread on partitioned DS
             None
         }
     }
 
-    fn sync_me(&self, _idx: ReplicaToken) {
-        /* NOP */
-    }
-
-    fn log_sync(&self, _idx: ReplicaToken, _logid: usize) {
-        /* NOP */
-    }
-
-    fn exec(
+    fn execute_mut(
         &self,
         op: <Self::D as Dispatch>::WriteOperation,
-        _idx: ReplicaToken,
+        _idx: ThreadToken,
     ) -> <Self::D as Dispatch>::Response {
         unsafe { (&mut *self.data_structure.get()).dispatch_mut(op) }
     }
 
-    fn exec_scan(
+    fn execute_scan(
         &self,
         op: <Self::D as Dispatch>::WriteOperation,
-        _idx: ReplicaToken,
+        _idx: ThreadToken,
     ) -> <Self::D as Dispatch>::Response {
         unsafe { (&mut *self.data_structure.get()).dispatch_mut(op) }
     }
 
-    fn exec_ro(
+    fn execute(
         &self,
         op: <T as Dispatch>::ReadOperation,
-        _idx: ReplicaToken,
+        _idx: ThreadToken,
     ) -> <T as Dispatch>::Response {
         unsafe { (&*self.data_structure.get()).dispatch(op) }
     }
 }
 
-/// A wrapper that implements ReplicaTrait which just submits everything against
+/// A wrapper that implements DsInterface which just submits everything against
 /// the data-structure that is already concurrent.
 ///
 /// Useful to compare against the competition.
@@ -104,54 +93,49 @@ pub struct ConcurrentDs<T: Dispatch + Sync> {
 
 unsafe impl<T> Sync for ConcurrentDs<T> where T: Dispatch + Default + Sync {}
 
-impl<T> ReplicaTrait for ConcurrentDs<T>
+impl<T> DsInterface for ConcurrentDs<T>
 where
     T: Dispatch + Default + Sync,
 {
     type D = T;
 
-    fn new_arc(
-        _log: Vec<Arc<Log<'static, <Self::D as Dispatch>::WriteOperation>>>,
-    ) -> std::sync::Arc<Self> {
+    fn new(_replicas: NonZeroUsize, _logs: NonZeroUsize) -> std::sync::Arc<Self> {
         Arc::new(ConcurrentDs {
             registered: AtomicUsize::new(0),
             data_structure: T::default(),
         })
     }
 
-    fn register_me(&self) -> Option<ReplicaToken> {
-        let rt = unsafe { ReplicaToken::new(self.registered.fetch_add(1, Ordering::SeqCst)) };
+    fn register(&self, rid: ReplicaId) -> Option<ThreadToken> {
+        let rt = unsafe {
+            ThreadToken::new(
+                rid,
+                ReplicaToken::new(self.registered.fetch_add(1, Ordering::SeqCst)),
+            )
+        };
         Some(rt)
     }
 
-    fn sync_me(&self, _idx: ReplicaToken) {
-        /* NOP */
-    }
-
-    fn log_sync(&self, _idx: ReplicaToken, _logid: usize) {
-        /* NOP */
-    }
-
-    fn exec(
+    fn execute_mut(
         &self,
         _op: <Self::D as Dispatch>::WriteOperation,
-        _idx: ReplicaToken,
+        _idx: ThreadToken,
     ) -> <Self::D as Dispatch>::Response {
-        unreachable!("All opertations must be read ops")
+        unreachable!("All operations must go through execute()")
     }
 
-    fn exec_scan(
+    fn execute_scan(
         &self,
         _op: <Self::D as Dispatch>::WriteOperation,
-        _idx: ReplicaToken,
+        _idx: ThreadToken,
     ) -> <Self::D as Dispatch>::Response {
-        unreachable!("All opertations must be read ops")
+        unreachable!("All operations must go through execute()")
     }
 
-    fn exec_ro(
+    fn execute(
         &self,
         op: <Self::D as Dispatch>::ReadOperation,
-        _idx: ReplicaToken,
+        _idx: ThreadToken,
     ) -> <Self::D as Dispatch>::Response {
         self.data_structure.dispatch(op)
     }
@@ -187,7 +171,7 @@ impl Dispatch for CHashMapWrapper {
 
     /// Implements how we execute operation from the log against our local stack
     fn dispatch_mut(&mut self, _op: Self::WriteOperation) -> Self::Response {
-        unreachable!("dispatch_mut should not be called here")
+        unreachable!("dispatch_mut should not be called")
     }
 }
 

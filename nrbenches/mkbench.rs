@@ -29,11 +29,11 @@ use cnr::{Dispatch, Log, Replica, ThreadToken};
 use csv::WriterBuilder;
 use log::*;
 #[cfg(feature = "nr")]
-use node_replication::log::Log;
-#[cfg(feature = "nr")]
-use node_replication::replica::{Replica, ReplicaId};
-#[cfg(feature = "nr")]
-use node_replication::{Dispatch, NodeReplicated, ThreadToken};
+use node_replication::{
+    log::Log,
+    replica::{Replica, ReplicaId},
+    AffinityChange, Dispatch, NodeReplicated, ThreadToken,
+};
 use rand::seq::SliceRandom;
 use rand::{rngs::SmallRng, Rng, SeedableRng};
 use serde::Serialize;
@@ -42,6 +42,35 @@ pub use crate::utils::topology::ThreadMapping;
 use crate::utils::{self, benchmark::*, topology::*, Operation};
 
 use arr_macro::arr;
+
+fn chg_affinity(af: AffinityChange) -> usize {
+    match af {
+        AffinityChange::Replica(rid) => {
+            let mut cpu: usize = 0;
+            let mut node: usize = 0;
+            unsafe { nix::libc::syscall(nix::libc::SYS_getcpu, &mut cpu, &mut node, 0) };
+
+            let mut cpu_set = nix::sched::CpuSet::new();
+            for ncpu in MACHINE_TOPOLOGY.cpus_on_node(rid as u64) {
+                debug!("ncpu is {:?}", ncpu);
+                cpu_set.set(ncpu.cpu as usize);
+            }
+            debug!(
+                "we are on cpu {} node {} and should handle things for replica {} now, changing affinity to {:?}",
+                cpu, node, rid, cpu_set
+            );
+            nix::sched::sched_setaffinity(nix::unistd::Pid::from_raw(0), &cpu_set);
+
+            cpu as usize
+        }
+        AffinityChange::Revert(core_id) => {
+            let mut cpu_set = nix::sched::CpuSet::new();
+            cpu_set.set(core_id);
+            nix::sched::sched_setaffinity(nix::unistd::Pid::from_raw(0), &cpu_set);
+            0xdead
+        }
+    }
+}
 
 /// Threshold after how many iterations we log a warning for busy spinning loops.
 ///
@@ -119,11 +148,7 @@ impl<'a, T: Dispatch + Sync + Default> DsInterface for NodeReplicated<T> {
 
     fn new(replicas: NonZeroUsize, logs: NonZeroUsize) -> Arc<Self> {
         Arc::new(
-            NodeReplicated::new(replicas, |node| {
-                log::error!("implement chg affinity {:?}", node);
-                0xbeef
-            })
-            .expect("Can't allocate NodeReplicated"),
+            NodeReplicated::new(replicas, chg_affinity).expect("Can't allocate NodeReplicated"),
         )
     }
 
@@ -156,7 +181,7 @@ impl<'a, T: Dispatch + Sync + Default> DsInterface for NodeReplicated<T> {
     }
 }
 
-/// Log the baseline comparision results to a CSV file
+/// Log the baseline comparison results to a CSV file
 ///
 /// # TODO
 /// Ideally this can go into the runner that was previously

@@ -4,21 +4,20 @@
 
 //! Integration of the rust-evmap benchmarks (https://github.com/jonhoo/rust-evmap/)
 //! for various hash-maps; added a node-replicated and urcu hash-table for comparison.
-use chashmap::CHashMap;
-use clap::{crate_version, value_t, App, Arg};
-use rand::distributions::Distribution;
-use rand::RngCore;
 use std::collections::HashMap;
-
 use std::ffi::c_void;
 use std::mem;
+use std::num::NonZeroUsize;
 use std::ptr;
 use std::sync;
 use std::thread;
 use std::time;
 
-use node_replication::{Dispatch, Log, Replica, ReplicaToken};
-
+use chashmap::CHashMap;
+use clap::{crate_version, value_t, App, Arg};
+use node_replication::{replica::ReplicaId, Dispatch, NodeReplicated, ThreadToken};
+use rand::distributions::Distribution;
+use rand::RngCore;
 use urcu_sys;
 
 mod utils;
@@ -215,11 +214,9 @@ fn main() {
 
     // then, benchmark sync::Arc<ReplicaAndToken>
     if versions.contains(&"nr") {
-        const LOG_SIZE_BYTES: usize = 1024 * 1024 * 2;
-        let log = sync::Arc::new(Log::<<NrHashMap as Dispatch>::WriteOperation>::new(
-            LOG_SIZE_BYTES,
-        ));
-        let replica = Replica::<NrHashMap>::new(&log);
+        let replica = sync::Arc::new(
+            NodeReplicated::<NrHashMap>::new(NonZeroUsize::new(1).unwrap(), |_| 0).unwrap(),
+        );
 
         let start = time::Instant::now();
         let end = start + dur;
@@ -227,7 +224,7 @@ fn main() {
             let replica = replica.clone();
             let dist = dist.to_owned();
             thread::spawn(move || {
-                let replica = ReplicaAndToken::new(replica);
+                let replica = ReplicaAndToken::new(0, replica);
                 drive(replica, end, dist, false, span)
             })
         }));
@@ -236,7 +233,7 @@ fn main() {
             let dist = dist.to_owned();
 
             thread::spawn(move || {
-                let replica = ReplicaAndToken::new(replica);
+                let replica = ReplicaAndToken::new(0, replica);
                 drive(replica, end, dist, true, span)
             })
         }));
@@ -433,28 +430,28 @@ impl Dispatch for NrHashMap {
     }
 }
 
-struct ReplicaAndToken<'a> {
-    replica: sync::Arc<Replica<'a, NrHashMap>>,
-    token: ReplicaToken,
+struct ReplicaAndToken {
+    ds: sync::Arc<NodeReplicated<NrHashMap>>,
+    token: ThreadToken,
 }
 
-impl<'a> ReplicaAndToken<'a> {
-    fn new(replica: sync::Arc<Replica<'a, NrHashMap>>) -> ReplicaAndToken<'a> {
-        let token = replica.register().unwrap();
-        ReplicaAndToken { replica, token }
+impl ReplicaAndToken {
+    fn new(rid: ReplicaId, ds: sync::Arc<NodeReplicated<NrHashMap>>) -> ReplicaAndToken {
+        let token = ds.register(rid).unwrap();
+        ReplicaAndToken { ds, token }
     }
 }
 
-impl<'a> Backend for ReplicaAndToken<'a> {
+impl Backend for ReplicaAndToken {
     fn b_get(&mut self, key: u64) -> u64 {
-        match self.replica.execute(OpRd::Get(key), self.token) {
+        match self.ds.execute(OpRd::Get(key), self.token) {
             Ok(res) => return res,
             Err(_) => unreachable!(),
         }
     }
 
     fn b_put(&mut self, key: u64, value: u64) {
-        self.replica
+        self.ds
             .execute_mut(OpWr::Put(key, value), self.token)
             .unwrap();
     }

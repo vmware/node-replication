@@ -15,8 +15,8 @@ use log::{debug, trace};
 use rand::{thread_rng, Rng};
 use x86::bits64::paging::*;
 
-use node_replication::replica::Replica;
 use node_replication::Dispatch;
+use node_replication::NodeReplicated;
 
 mod mkbench;
 mod utils;
@@ -557,7 +557,7 @@ fn generate_operations(nop: usize) -> Vec<Operation<OpcodeRd, OpcodeWr>> {
 fn vspace_single_threaded(c: &mut TestHarness) {
     const NOP: usize = 3000;
     const LOG_SIZE_BYTES: usize = 16 * 1024 * 1024;
-    mkbench::baseline_comparison::<Replica<VSpaceDispatcher>>(
+    mkbench::baseline_comparison::<NodeReplicated<VSpaceDispatcher>>(
         c,
         "vspace",
         generate_operations(NOP),
@@ -569,18 +569,18 @@ fn vspace_scale_out(c: &mut TestHarness) {
     const NOP: usize = 3000;
     let ops = generate_operations(NOP);
 
-    mkbench::ScaleBenchBuilder::<Replica<VSpaceDispatcher>>::new(ops)
+    mkbench::ScaleBenchBuilder::<NodeReplicated<VSpaceDispatcher>>::new(ops)
         .machine_defaults()
         .log_strategy(mkbench::LogStrategy::One)
         .configure(
             c,
             "vspace-scaleout",
-            |_cid, rid, _log, replica, op, _batch_size| match op {
+            |_cid, tkn, replica, op, _batch_size| match op {
                 Operation::ReadOperation(o) => {
-                    let _r = replica.execute(*o, rid);
+                    let _r = replica.execute(*o, tkn);
                 }
                 Operation::WriteOperation(o) => {
-                    let _r = replica.execute_mut(*o, rid);
+                    let _r = replica.execute_mut(*o, tkn);
                 }
             },
         );

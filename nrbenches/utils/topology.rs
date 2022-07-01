@@ -6,6 +6,7 @@
 use std::fmt;
 
 use hwloc2::*;
+use lazy_static::lazy_static;
 use serde::Serialize;
 
 pub type Node = u64;
@@ -16,6 +17,9 @@ pub type L1 = u64;
 pub type L2 = u64;
 pub type L3 = u64;
 
+lazy_static! {
+    pub static ref MACHINE_TOPOLOGY: MachineTopology = MachineTopology::new();
+}
 /// The strategy how threads are allocated in the system.
 #[derive(Serialize, Copy, Clone, Eq, PartialEq)]
 pub enum ThreadMapping {
@@ -165,6 +169,24 @@ impl MachineTopology {
         sockets.sort();
         sockets.dedup();
         sockets
+    }
+
+    pub fn nodes(&self) -> Vec<Node> {
+        let mut nodes: Vec<Cpu> = self
+            .data
+            .iter()
+            .map(|t| t.node.map_or_else(|| 0, |n| n.node))
+            .collect();
+        nodes.sort();
+        nodes.dedup();
+        nodes
+    }
+
+    pub fn cpus_on_node(&self, node: Node) -> Vec<&CpuInfo> {
+        self.data
+            .iter()
+            .filter(|t| t.node.map_or_else(|| 0, |n| n.node) == node)
+            .collect()
     }
 
     pub fn cpus_on_socket(&self, socket: Socket) -> Vec<&CpuInfo> {

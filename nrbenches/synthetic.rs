@@ -14,8 +14,8 @@
 use crossbeam_utils::CachePadded;
 use rand::{thread_rng, Rng};
 
-use node_replication::replica::Replica;
 use node_replication::Dispatch;
+use node_replication::NodeReplicated;
 
 mod mkbench;
 mod utils;
@@ -301,7 +301,7 @@ fn synthetic_single_threaded(c: &mut TestHarness) {
     const LOG_SIZE_BYTES: usize = 2 * 1024 * 1024;
 
     let ops = generate_operations(NOP, 0, false, false, true);
-    mkbench::baseline_comparison::<Replica<AbstractDataStructure>>(
+    mkbench::baseline_comparison::<NodeReplicated<AbstractDataStructure>>(
         c,
         "synthetic",
         ops,
@@ -316,20 +316,20 @@ fn synthetic_scale_out(c: &mut TestHarness) {
     // Operations to perform
     let ops = generate_operations(NOP, 0, false, false, true);
 
-    mkbench::ScaleBenchBuilder::<Replica<AbstractDataStructure>>::new(ops)
+    mkbench::ScaleBenchBuilder::<NodeReplicated<AbstractDataStructure>>::new(ops)
         .machine_defaults()
         .log_strategy(mkbench::LogStrategy::One)
         .configure(
             c,
             "synthetic-scaleout",
-            |cid, rid, _log, replica, op, _batch_size| match op {
+            |cid, tkn, replica, op, _batch_size| match op {
                 Operation::ReadOperation(mut o) => {
                     o.set_tid(cid as usize);
-                    replica.execute(o, rid).unwrap();
+                    replica.execute(o, tkn).unwrap();
                 }
                 Operation::WriteOperation(mut o) => {
                     o.set_tid(cid as usize);
-                    replica.execute_mut(o, rid).unwrap();
+                    replica.execute_mut(o, tkn).unwrap();
                 }
             },
         );

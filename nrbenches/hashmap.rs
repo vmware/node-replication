@@ -14,15 +14,14 @@ use rand::seq::SliceRandom;
 use rand::{distributions::Distribution, Rng, RngCore};
 use zipf::ZipfDistribution;
 
-use node_replication::replica::Replica;
-use node_replication::Dispatch;
+use node_replication::{Dispatch, NodeReplicated};
 
 mod hashmap_comparisons;
 mod mkbench;
 mod utils;
 
 use hashmap_comparisons::*;
-use mkbench::ReplicaTrait;
+use mkbench::DsInterface;
 use utils::benchmark::*;
 use utils::topology::ThreadMapping;
 use utils::Operation;
@@ -220,13 +219,13 @@ fn hashmap_single_threaded(c: &mut TestHarness) {
     const WRITE_RATIO: usize = 10; //% out of 100
 
     let ops = generate_operations(NOP, WRITE_RATIO, KEY_SPACE, UNIFORM);
-    mkbench::baseline_comparison::<Replica<NrHashMap>>(c, "hashmap", ops, LOG_SIZE_BYTES);
+    mkbench::baseline_comparison::<NodeReplicated<NrHashMap>>(c, "hashmap", ops, LOG_SIZE_BYTES);
 }
 
 /// Compare scale-out behaviour of synthetic data-structure.
 fn hashmap_scale_out<R>(c: &mut TestHarness, name: &str, write_ratio: usize)
 where
-    R: ReplicaTrait + Send + Sync + 'static,
+    R: DsInterface + Send + Sync + 'static,
     R::D: Send,
     R::D: Dispatch<ReadOperation = OpRd>,
     R::D: Dispatch<WriteOperation = OpWr>,
@@ -240,7 +239,6 @@ where
     mkbench::ScaleBenchBuilder::<R>::new(ops)
         .thread_defaults()
         .update_batch(128)
-        .log_size(32 * 1024 * 1024)
         .replica_strategy(mkbench::ReplicaStrategy::One)
         .replica_strategy(mkbench::ReplicaStrategy::Socket)
         .thread_mapping(ThreadMapping::Interleave)
@@ -248,12 +246,12 @@ where
         .configure(
             c,
             &bench_name,
-            |_cid, rid, _log, replica, op, _batch_size| match op {
+            |_cid, tkn, replica, op, _batch_size| match op {
                 Operation::ReadOperation(op) => {
-                    replica.exec_ro(*op, rid);
+                    replica.execute(*op, tkn);
                 }
                 Operation::WriteOperation(op) => {
-                    replica.exec(*op, rid);
+                    replica.execute_mut(*op, tkn);
                 }
             },
         );
@@ -273,12 +271,12 @@ fn partitioned_hashmap_scale_out(c: &mut TestHarness, name: &str, write_ratio: u
         .configure(
             c,
             &bench_name,
-            |_cid, rid, _log, replica, op, _batch_size| match op {
+            |_cid, tkn, replica, op, _batch_size| match op {
                 Operation::ReadOperation(op) => {
-                    replica.exec_ro(*op, rid).unwrap();
+                    replica.execute(*op, tkn).unwrap();
                 }
                 Operation::WriteOperation(op) => {
-                    replica.exec(*op, rid).unwrap();
+                    replica.execute_mut(*op, tkn).unwrap();
                 }
             },
         );
@@ -304,12 +302,12 @@ where
         .configure(
             c,
             &bench_name,
-            |_cid, rid, _log, replica, op, _batch_size| match op {
+            |_cid, tkn, replica, op, _batch_size| match op {
                 Operation::ReadOperation(op) => {
-                    replica.exec_ro(*op, rid);
+                    replica.execute(*op, tkn);
                 }
                 Operation::WriteOperation(op) => {
-                    replica.exec(*op, rid);
+                    replica.execute_mut(*op, tkn);
                 }
             },
         );
@@ -337,7 +335,7 @@ fn main() {
 
     hashmap_single_threaded(&mut harness);
     for write_ratio in write_ratios.into_iter() {
-        hashmap_scale_out::<Replica<NrHashMap>>(&mut harness, "hashmap", write_ratio);
+        hashmap_scale_out::<NodeReplicated<NrHashMap>>(&mut harness, "hashmap", write_ratio);
 
         #[cfg(feature = "cmp")]
         {
