@@ -446,19 +446,13 @@ where
     /// An Arc reference to operations executed on the log.
     operations:
         Arc<Vec<Operation<<R::D as Dispatch>::ReadOperation, <R::D as Dispatch>::WriteOperation>>>,
-    /// Results of the benchmark we map the #iteration to a list of per-thread
-    /// results (each per-thread stores completed ops in per-sec intervals).
-    /// It's a hash-map so it acts like a cache i.e., we ensure to only save the
-    /// latest experiement for a specific duration (avoids storing the warm-up
-    /// results). It has to be a Mutex because we can only access a RO version
-    /// of ScaleBenchmark at execution time.
-    results: Mutex<HashMap<Duration, Vec<(Core, Vec<usize>)>>>,
+    duration: Duration,
     /// Batch-size (passed as a parameter to benchmark funtion `f`)
     batch_size: usize,
     /// Benchmark function to execute
     f: BenchFn<R>,
     /// Thread handles
-    handles: Vec<JoinHandle<()>>,
+    handles: Vec<JoinHandle<(Core, Vec<usize>)>>,
     /// Where to write the results
     file_name: &'static str,
 }
@@ -479,6 +473,7 @@ where
         ls: LogStrategy,
         tm: ThreadMapping,
         ts: usize,
+        duration: Duration,
         operations: Vec<
             Operation<<R::D as Dispatch>::ReadOperation, <R::D as Dispatch>::WriteOperation>,
         >,
@@ -500,7 +495,7 @@ where
             tm,
             ts,
             rm: ScaleBenchmark::<R>::replica_core_allocation(topology, rs, tm, ts),
-            results: Default::default(),
+            duration,
             operations: Arc::new(operations),
             batch_size,
             f,
@@ -521,69 +516,43 @@ where
     }
 
     /// Terminate the worker threads by sending 0 to the iter channel:
-    fn terminate(&self) -> std::io::Result<()> {
+    fn terminate(self) -> std::io::Result<()> {
+        let mut all_results = Vec::<(Core, usize, Vec<usize>)>::with_capacity(self.handles.len());
+        for (tid, handle) in self.handles.into_iter().enumerate() {
+            let (cid, thread_results) = handle.join().unwrap();
+            all_results.push((cid, tid, thread_results));
+        }
+
         let write_headers = !Path::new(self.file_name).exists(); // write headers only to new file
         let mut csv_file = OpenOptions::new()
             .append(true)
             .create(true)
             .open(self.file_name)?;
-        let results = self.results.lock().expect("Can't lock results");
 
         let mut wtr = WriterBuilder::new()
             .has_headers(write_headers)
             .from_writer(csv_file);
 
-        for (duration, thread_results) in results.iter() {
-            for (tid, (cid, ops_per_sec)) in thread_results.iter().enumerate() {
-                for (idx, ops) in ops_per_sec.iter().enumerate() {
-                    let record = Record {
-                        name: self.name.clone(),
-                        rs: self.rs,
-                        tm: self.tm,
-                        batch_size: self.batch_size,
-                        threads: self.ts,
-                        duration: duration.as_secs_f64(),
-                        thread_id: tid,
-                        core_id: *cid,
-                        exp_time_in_sec: idx + 1, // start at 1 (for first second)
-                        iterations: *ops,
-                    };
-                    wtr.serialize(record);
-                }
+        for (cid, tid, ops_per_sec) in all_results.iter() {
+            for (idx, ops) in ops_per_sec.iter().enumerate() {
+                let record = Record {
+                    name: self.name.clone(),
+                    rs: self.rs,
+                    tm: self.tm,
+                    batch_size: self.batch_size,
+                    threads: self.ts,
+                    duration: Duration::from_secs(10).as_secs_f64(),
+                    thread_id: *tid,
+                    core_id: *cid,
+                    exp_time_in_sec: idx + 1, // start at 1 (for first second)
+                    iterations: *ops,
+                };
+                wtr.serialize(record);
             }
         }
         wtr.flush()?;
 
         Ok(())
-    }
-
-    /// Execute sends the iteration count to all worker threads
-    /// then waits to receive the respective duration from the workers
-    /// finally it returns the minimal Duration over all threads
-    /// after ensuring the run was fair.
-    fn execute_mut(&self, duration: Duration) -> usize {
-        /*
-        for i in 0..self.threads() {}
-
-        let core_aggregate_tput: Vec<usize> = core_iteratios
-            .iter()
-            .map(|(cid, time_vec)| time_vec.iter().sum())
-            .collect();
-        let min_tput = *core_aggregate_tput.iter().min().unwrap_or(&1) / intervals;
-        let max_tput = *core_aggregate_tput.iter().max().unwrap_or(&1) / intervals;
-        let total_tput = core_aggregate_tput.iter().sum::<usize>() / intervals;
-        println!(
-            ">> {:.2} Mops (min {:.2} Mops, max {:.2}) Mops",
-            total_tput as f64 / 1_000_000 as f64,
-            min_tput as f64 / 1_000_000 as f64,
-            max_tput as f64 / 1_000_000 as f64,
-        );
-
-        let mut results = self.results.lock().unwrap();
-        results.insert(duration, core_iteratios.clone());
-        0usize
-        */
-        0usize
     }
 
     fn startup(&mut self) {
@@ -615,6 +584,7 @@ where
                 let log_period = Duration::from_secs(1);
                 let name = self.name.clone();
                 let operations = self.operations.clone();
+                let duration = self.duration.clone();
 
                 self.handles.push(thread::spawn(move || {
                     utils::pin_thread(core_id);
@@ -632,67 +602,65 @@ where
                         }
                     }
 
-                    loop {
-                        let duration = Duration::from_secs(10);
-                        debug!(
-                            "Running {:?} on core {} replica#{} rtoken#{:?} for {:?}",
-                            thread::current().id(),
-                            core_id,
-                            rid,
-                            thread_token,
-                            duration
-                        );
+                    debug!(
+                        "Running {:?} on core {} replica#{} rtoken#{:?} for {:?}",
+                        thread::current().id(),
+                        core_id,
+                        rid,
+                        thread_token,
+                        duration
+                    );
 
-                        let mut operations_per_second: Vec<usize> = Vec::with_capacity(32);
-                        let mut operations_completed: usize = 0;
-                        let mut iter: usize = 0;
-                        let nop: usize = operations.len();
+                    let mut operations_per_second: Vec<usize> = Vec::with_capacity(32);
+                    let mut operations_completed: usize = 0;
+                    let mut iter: usize = 0;
+                    let nop: usize = operations.len();
 
-                        start_sync.wait();
-                        let start = Instant::now();
-                        let end_experiment = start + duration;
-                        let mut next_log = start + log_period;
+                    start_sync.wait();
+                    let start = Instant::now();
+                    let end_experiment = start + duration;
+                    let mut next_log = start + log_period;
 
-                        while Instant::now() < end_experiment {
-                            for _i in 0..batch_size {
-                                black_box((f)(
-                                    core_id,
-                                    thread_token,
-                                    &ds,
-                                    &operations[iter],
-                                    batch_size,
-                                ));
-                                iter = (iter + 1) % nop;
-                            }
-                            operations_completed += 1 * batch_size;
-
-                            if Instant::now() >= next_log {
-                                trace!("Operations completed {} / s", operations_completed);
-                                operations_per_second.push(operations_completed);
-                                // reset operations completed
-                                operations_completed = 0;
-                                next_log += log_period;
-                            }
+                    while Instant::now() < end_experiment {
+                        for _i in 0..batch_size {
+                            black_box((f)(
+                                core_id,
+                                thread_token,
+                                &ds,
+                                &operations[iter],
+                                batch_size,
+                            ));
+                            iter = (iter + 1) % nop;
                         }
+                        operations_completed += 1 * batch_size;
 
-                        debug!(
-                            "Completed {:?} on core {} replica#{} rtoken#{:?} did {} ops in {:?}",
-                            thread::current().id(),
-                            core_id,
-                            rid,
-                            thread_token,
-                            operations_completed,
-                            duration
-                        );
-
-                        if name.starts_with("urcu") {
-                            unsafe {
-                                urcu_sys::rcu_unregister_thread();
-                            }
+                        if Instant::now() >= next_log {
+                            trace!("Operations completed {} / s", operations_completed);
+                            operations_per_second.push(operations_completed);
+                            // reset operations completed
+                            operations_completed = 0;
+                            next_log += log_period;
                         }
-
-                        start_sync.wait();
                     }
+
+                    debug!(
+                        "Completed {:?} on core {} replica#{} rtoken#{:?} did {} ops in {:?}",
+                        thread::current().id(),
+                        core_id,
+                        rid,
+                        thread_token,
+                        operations_completed,
+                        duration
+                    );
+
+                    if name.starts_with("urcu") {
+                        unsafe {
+                            urcu_sys::rcu_unregister_thread();
+                        }
+                    }
+
+                    start_sync.wait();
+                    (core_id, operations_per_second)
                 }));
 
                 tid += 1;
@@ -973,21 +941,12 @@ where
                                 *ls,
                                 *tm,
                                 *ts,
+                                Duration::from_secs(10),
                                 self.operations.to_vec(),
                                 *b,
                                 f,
                             );
                             runner.startup();
-
-                            let name = format!("{:?} {:?} {:?} BS={}", *rs, *ls, *tm, *b);
-                            group.bench_with_input(
-                                BenchmarkId::new(name, *ts),
-                                &runner,
-                                |cb, runner| {
-                                    cb.iter_custom(|duration| runner.execute_mut(duration))
-                                },
-                            );
-
                             runner
                                 .terminate()
                                 .expect("Couldn't terminate the experiment");
