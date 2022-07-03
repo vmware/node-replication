@@ -238,6 +238,10 @@ where
 
     mkbench::ScaleBenchBuilder::<R>::new(ops)
         .thread_defaults()
+        //.threads(1)
+        //.threads(73)
+        //.threads(96)
+        //.threads(192)
         .update_batch(128)
         .replica_strategy(mkbench::ReplicaStrategy::One)
         .replica_strategy(mkbench::ReplicaStrategy::Socket)

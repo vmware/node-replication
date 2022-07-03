@@ -414,6 +414,16 @@ pub enum LogStrategy {
     Custom(usize),
 }
 
+impl fmt::Display for LogStrategy {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            LogStrategy::One => write!(f, "System"),
+            LogStrategy::PerThread => write!(f, "PerThread"),
+            LogStrategy::Custom(v) => write!(f, "Custom({})", v),
+        }
+    }
+}
+
 impl fmt::Debug for LogStrategy {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
@@ -518,10 +528,19 @@ where
     /// Terminate the worker threads by sending 0 to the iter channel:
     fn terminate(self) -> std::io::Result<()> {
         let mut all_results = Vec::<(Core, usize, Vec<usize>)>::with_capacity(self.handles.len());
+        let mut everything = Vec::<usize>::with_capacity(self.handles.len() * self.duration.as_secs() as usize);
+
         for (tid, handle) in self.handles.into_iter().enumerate() {
             let (cid, thread_results) = handle.join().unwrap();
+            everything.extend(&thread_results);
             all_results.push((cid, tid, thread_results));
         }
+        let avg = utils::benchmark::mean(&everything).unwrap();
+        println!(
+            "Run({:?} {:?} {:?} {:?} BS={}) => {:.5}",
+            self.rs, self.tm, self.ts, self.ls, self.batch_size, avg*(self.ts as f64),
+        );
+
 
         let write_headers = !Path::new(self.file_name).exists(); // write headers only to new file
         let mut csv_file = OpenOptions::new()
