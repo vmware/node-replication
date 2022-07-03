@@ -508,10 +508,10 @@ where
                         q.push(ResolveOp::Exec(Some(cl_acq), op));
                         q.push(ResolveOp::Sync(stuck_ridx));
                     }
-                    Err((ReplicaError::GcFailed(stuck_ridx), _op)) => {
+                    Err((ReplicaError::GcFailed(stuck_ridx), op)) => {
                         assert_ne!(stuck_ridx, tkn.rid);
+                        q.push(ResolveOp::Exec(None, op));
                         q.push(ResolveOp::Sync(stuck_ridx));
-                        unreachable!("GC should not fail for reads");
                     }
                 },
                 ResolveOp::Sync(ridx) => {
