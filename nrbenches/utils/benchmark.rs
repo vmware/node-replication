@@ -168,14 +168,18 @@ pub fn mean(data: &[usize]) -> Option<f64> {
 pub fn std_deviation(data: &[usize]) -> Option<f64> {
     match (mean(data), data.len()) {
         (Some(data_mean), count) if count > 0 => {
-            let variance = data.iter().map(|value| {
-                let diff = data_mean - (*value as f64);
+            let variance = data
+                .iter()
+                .map(|value| {
+                    let diff = data_mean - (*value as f64);
 
-                diff * diff
-            }).sum::<f64>() / count as f64;
+                    diff * diff
+                })
+                .sum::<f64>()
+                / count as f64;
 
             Some(variance.sqrt())
-        },
-        _ => None
+        }
+        _ => None,
     }
 }

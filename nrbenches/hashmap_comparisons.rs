@@ -36,7 +36,7 @@ where
 {
     type D = T;
 
-    fn new(_replicas: NonZeroUsize, _logs: NonZeroUsize) -> std::sync::Arc<Self> {
+    fn new(_replicas: NonZeroUsize, _logs: NonZeroUsize, _log_size: usize) -> std::sync::Arc<Self> {
         Arc::new(Partitioner {
             registered: AtomicUsize::new(0),
             data_structure: UnsafeCell::new(T::default()),
@@ -99,7 +99,7 @@ where
 {
     type D = T;
 
-    fn new(_replicas: NonZeroUsize, _logs: NonZeroUsize) -> std::sync::Arc<Self> {
+    fn new(_replicas: NonZeroUsize, _logs: NonZeroUsize, _log_size: usize) -> std::sync::Arc<Self> {
         Arc::new(ConcurrentDs {
             registered: AtomicUsize::new(0),
             data_structure: T::default(),

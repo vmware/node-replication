@@ -51,6 +51,11 @@ fn chg_affinity(af: AffinityChange) -> usize {
             unsafe { nix::libc::syscall(nix::libc::SYS_getcpu, &mut cpu, &mut node, 0) };
 
             let mut cpu_set = nix::sched::CpuSet::new();
+            trace!(
+                "cpus for node={} are {:#?}",
+                rid,
+                MACHINE_TOPOLOGY.cpus_on_node(rid as u64)
+            );
             for ncpu in MACHINE_TOPOLOGY.cpus_on_node(rid as u64) {
                 debug!("ncpu is {:?}", ncpu);
                 cpu_set.set(ncpu.cpu as usize);
@@ -114,7 +119,7 @@ pub trait DsInterface {
     ///
     /// - `replicas`: How many replicas the data-structure should maintain.
     /// - `logs`: How many logs the data-structure should be partitioned over.
-    fn new(replicas: NonZeroUsize, logs: NonZeroUsize) -> Arc<Self>;
+    fn new(replicas: NonZeroUsize, logs: NonZeroUsize, log_size: usize) -> Arc<Self>;
 
     /// Register a thread with a data-structure.
     ///
@@ -146,9 +151,10 @@ pub trait DsInterface {
 impl<'a, T: Dispatch + Sync + Default> DsInterface for NodeReplicated<T> {
     type D = T;
 
-    fn new(replicas: NonZeroUsize, logs: NonZeroUsize) -> Arc<Self> {
+    fn new(replicas: NonZeroUsize, logs: NonZeroUsize, log_size: usize) -> Arc<Self> {
         Arc::new(
-            NodeReplicated::new(replicas, chg_affinity).expect("Can't allocate NodeReplicated"),
+            NodeReplicated::with_log_size(replicas, chg_affinity, log_size)
+                .expect("Can't allocate NodeReplicated"),
         )
     }
 
@@ -301,7 +307,8 @@ pub(crate) fn baseline_comparison<R: DsInterface>(
     #[cfg(feature = "nr")]
     let r = {
         let replicas = NonZeroUsize::new(1).expect("Can't create NonZeroUsize");
-        NodeReplicated::<R::D>::new(replicas, |rid| 0).expect("Can't create NodeReplicated")
+        NodeReplicated::<R::D>::with_log_size(replicas, |rid| 0, log_size)
+            .expect("Can't create NodeReplicated")
     };
     #[cfg(feature = "c_nr")]
     let log = Arc::new(Log::<<R::D as Dispatch>::WriteOperation>::new(log_size, 1));
@@ -453,6 +460,8 @@ where
     ls: LogStrategy,
     /// Replica <-> Thread/Cpu mapping as used by the benchmark.
     rm: HashMap<ReplicaId, Vec<Cpu>>,
+    /// Size of the operation log
+    log_size: usize,
     /// An Arc reference to operations executed on the log.
     operations:
         Arc<Vec<Operation<<R::D as Dispatch>::ReadOperation, <R::D as Dispatch>::WriteOperation>>>,
@@ -483,6 +492,7 @@ where
         ls: LogStrategy,
         tm: ThreadMapping,
         ts: usize,
+        log_size: usize,
         duration: Duration,
         operations: Vec<
             Operation<<R::D as Dispatch>::ReadOperation, <R::D as Dispatch>::WriteOperation>,
@@ -504,6 +514,7 @@ where
             ls,
             tm,
             ts,
+            log_size,
             rm: ScaleBenchmark::<R>::replica_core_allocation(topology, rs, tm, ts),
             duration,
             operations: Arc::new(operations),
@@ -528,7 +539,8 @@ where
     /// Terminate the worker threads by sending 0 to the iter channel:
     fn terminate(self) -> std::io::Result<()> {
         let mut all_results = Vec::<(Core, usize, Vec<usize>)>::with_capacity(self.handles.len());
-        let mut everything = Vec::<usize>::with_capacity(self.handles.len() * self.duration.as_secs() as usize);
+        let mut everything =
+            Vec::<usize>::with_capacity(self.handles.len() * self.duration.as_secs() as usize);
 
         for (tid, handle) in self.handles.into_iter().enumerate() {
             let (cid, thread_results) = handle.join().unwrap();
@@ -538,9 +550,13 @@ where
         let avg = utils::benchmark::mean(&everything).unwrap();
         println!(
             "Run({:?} {:?} {:?} {:?} BS={}) => {:.5}",
-            self.rs, self.tm, self.ts, self.ls, self.batch_size, avg*(self.ts as f64),
+            self.rs,
+            self.tm,
+            self.ts,
+            self.ls,
+            self.batch_size,
+            avg * (self.ts as f64),
         );
-
 
         let write_headers = !Path::new(self.file_name).exists(); // write headers only to new file
         let mut csv_file = OpenOptions::new()
@@ -581,7 +597,7 @@ where
         let complete_sync = Arc::new(Barrier::new(thread_num));
 
         let replicas = NonZeroUsize::new(self.replicas()).unwrap();
-        let ds = R::new(replicas, NonZeroUsize::new(1).unwrap());
+        let ds = R::new(replicas, NonZeroUsize::new(1).unwrap(), self.log_size);
 
         debug!(
             "Execute benchmark {} with the following replica: [core_id] mapping: {:#?}",
@@ -820,6 +836,8 @@ where
     threads: Vec<usize>,
     /// Batch sizes to use (default 1)
     batches: Vec<usize>,
+    /// Size of the operation log(s) that get created for the benchmark
+    log_size: usize,
     /// Operations executed on the log.
     operations:
         Vec<Operation<<R::D as Dispatch>::ReadOperation, <R::D as Dispatch>::WriteOperation>>,
@@ -847,6 +865,7 @@ where
             log_strategies: Vec::new(),
             thread_mappings: Vec::new(),
             threads: Vec::new(),
+            log_size: node_replication::log::DEFAULT_LOG_BYTES,
             batches: vec![1usize],
             operations: ops,
             _marker: PhantomData,
@@ -920,6 +939,12 @@ where
         self
     }
 
+    /// Set the size of the operation log
+    pub fn log_size(&mut self, ls: usize) -> &mut Self {
+        self.log_size = ls;
+        self
+    }
+
     /// Creates a benchmark to evalute the scalability properties of the
     /// log for a given data-structure.
     ///
@@ -960,6 +985,7 @@ where
                                 *ls,
                                 *tm,
                                 *ts,
+                                self.log_size,
                                 Duration::from_secs(10),
                                 self.operations.to_vec(),
                                 *b,

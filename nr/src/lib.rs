@@ -288,29 +288,15 @@ impl<D> NodeReplicated<D>
 where
     D: Default + Dispatch + Sized + Sync,
 {
-    /// Creates a new, replicated data-structure from a single-threaded
-    /// data-structure that implements [`Dispatch`]. It also uses the
-    /// [`Default`] constructor to create a initial data-structure on all
-    /// replicas (`num_replicas` times).
-    ///
-    /// # Arguments
-    /// - `num_replicas`: How many replicas you want to create. Typically the
-    ///   number of NUMA nodes in your system.
-    /// - `chg_mem_affinity`: A user-provided function that is called whenever
-    ///   the code operates on a certain [`Replica`] that is not local to the
-    ///   thread that we're running on (can happen if a replica falls behind and
-    ///   we're temporarily executing operation on behalf of this replica so we
-    ///   can make progress on our own replica). This function is used to ensure
-    ///   that memory will still be allocated from the right NUMA node. See
-    ///   [`AffinityChange`] for more information on how implement this function
-    ///   and handle its arguments.
-    pub fn new(
+
+    pub fn with_log_size(
         num_replicas: NonZeroUsize,
         chg_mem_affinity: impl Fn(AffinityChange) -> usize + Send + Sync + 'static,
+        log_size: usize,
     ) -> Result<Self, NodeReplicatedError> {
         assert!(num_replicas.get() < MAX_REPLICAS_PER_LOG);
         let affinity_mngr = AffinityManager::new(Box::try_new(chg_mem_affinity)?);
-        let log = Log::default();
+        let log = Log::new_with_bytes(log_size);
 
         let mut replicas = Vec::new();
         replicas.try_reserve(num_replicas.get())?;
@@ -337,6 +323,28 @@ where
             log,
             affinity_mngr,
         })
+    }
+    /// Creates a new, replicated data-structure from a single-threaded
+    /// data-structure that implements [`Dispatch`]. It also uses the
+    /// [`Default`] constructor to create a initial data-structure on all
+    /// replicas (`num_replicas` times).
+    ///
+    /// # Arguments
+    /// - `num_replicas`: How many replicas you want to create. Typically the
+    ///   number of NUMA nodes in your system.
+    /// - `chg_mem_affinity`: A user-provided function that is called whenever
+    ///   the code operates on a certain [`Replica`] that is not local to the
+    ///   thread that we're running on (can happen if a replica falls behind and
+    ///   we're temporarily executing operation on behalf of this replica so we
+    ///   can make progress on our own replica). This function is used to ensure
+    ///   that memory will still be allocated from the right NUMA node. See
+    ///   [`AffinityChange`] for more information on how implement this function
+    ///   and handle its arguments.
+    pub fn new(
+        num_replicas: NonZeroUsize,
+        chg_mem_affinity: impl Fn(AffinityChange) -> usize + Send + Sync + 'static,
+    ) -> Result<Self, NodeReplicatedError> {
+        Self::with_log_size(num_replicas, chg_mem_affinity, log::DEFAULT_LOG_BYTES)
     }
 }
 

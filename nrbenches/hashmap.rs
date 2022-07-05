@@ -237,13 +237,14 @@ where
     let bench_name = format!("{}-scaleout-wr{}", name, write_ratio);
 
     mkbench::ScaleBenchBuilder::<R>::new(ops)
-        .thread_defaults()
+        //.thread_defaults()
         //.threads(1)
-        //.threads(73)
-        //.threads(96)
+        .threads(73)
+        .threads(96)
         //.threads(192)
-        .update_batch(128)
-        .replica_strategy(mkbench::ReplicaStrategy::One)
+        .update_batch(32)
+        .log_size(32 * 1024 * 1024)
+        //.replica_strategy(mkbench::ReplicaStrategy::One)
         .replica_strategy(mkbench::ReplicaStrategy::Socket)
         .thread_mapping(ThreadMapping::Interleave)
         .log_strategy(mkbench::LogStrategy::One)
@@ -330,14 +331,14 @@ fn main() {
     let write_ratios = if cfg!(feature = "exhaustive") {
         vec![0, 10, 20, 40, 60, 80, 100]
     } else {
-        vec![0, 10, 100]
+        vec![100]
     };
 
     unsafe {
         urcu_sys::rcu_init();
     }
 
-    hashmap_single_threaded(&mut harness);
+    //hashmap_single_threaded(&mut harness);
     for write_ratio in write_ratios.into_iter() {
         hashmap_scale_out::<NodeReplicated<NrHashMap>>(&mut harness, "hashmap", write_ratio);
 
