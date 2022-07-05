@@ -237,14 +237,14 @@ where
     let bench_name = format!("{}-scaleout-wr{}", name, write_ratio);
 
     mkbench::ScaleBenchBuilder::<R>::new(ops)
-        //.thread_defaults()
+        .thread_defaults()
         //.threads(1)
-        .threads(73)
-        .threads(96)
+        //.threads(73)
+        //.threads(96)
         //.threads(192)
         .update_batch(32)
         .log_size(32 * 1024 * 1024)
-        //.replica_strategy(mkbench::ReplicaStrategy::One)
+        .replica_strategy(mkbench::ReplicaStrategy::One)
         .replica_strategy(mkbench::ReplicaStrategy::Socket)
         .thread_mapping(ThreadMapping::Interleave)
         .log_strategy(mkbench::LogStrategy::One)
