@@ -185,7 +185,7 @@ impl MachineTopology {
     pub fn cpus_on_node(&self, node: Node) -> Vec<&CpuInfo> {
         self.data
             .iter()
-            .filter(|t| t.node.map_or_else(|| 0, |n| n.node) == node)
+            .filter(|t| t.socket == node)
             .collect()
     }
 
