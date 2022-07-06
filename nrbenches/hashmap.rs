@@ -331,7 +331,7 @@ fn main() {
     let write_ratios = if cfg!(feature = "exhaustive") {
         vec![0, 10, 20, 40, 60, 80, 100]
     } else {
-        vec![100]
+        vec![0, 10, 100]
     };
 
     unsafe {
