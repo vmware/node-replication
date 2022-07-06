@@ -22,7 +22,7 @@ use super::context::Context;
 use super::log::{Log, LogToken};
 use super::rwlock::RwLock;
 use super::Dispatch;
-use super::ReusableBoxFuture;
+use crate::reusable_box::ReusableBoxFuture;
 
 /// Unique identifier for the given replica (it's probably the same as the NUMA
 /// node that this replica corresponds to).
@@ -913,6 +913,7 @@ where
 
     pub async fn async_execute_mut(
         &'a self,
+        slog: &'a Log<<D as Dispatch>::WriteOperation>,
         op: <D as Dispatch>::WriteOperation,
         rid: ReplicaToken,
         resp: &mut ReusableBoxFuture<'a, <D as Dispatch>::Response>,
@@ -927,8 +928,11 @@ where
             match self.contexts[rid.0 - 1].res() {
                 Some(res) => res,
                 None => {
-                    self.try_combine(rid.0);
-                    self.get_response(rid.0)
+                    self.try_combine(slog);
+                    match self.get_response(slog, rid.0) {
+                        Err(_) => unimplemented!("async_execute_mut"),
+                        Ok(v) => v,
+                    }
                 }
             }
         });
@@ -936,11 +940,17 @@ where
 
     pub fn async_execute(
         &'a self,
+        slog: &'a Log<<D as Dispatch>::WriteOperation>,
         op: <D as Dispatch>::ReadOperation,
-        idx: ReplicaToken,
+        rid: ReplicaToken,
         resp: &mut ReusableBoxFuture<'a, <D as Dispatch>::Response>,
     ) {
-        resp.set(async move { self.read_only(op, idx.0) });
+        resp.set(async move {
+            match self.execute(slog, op, rid) {
+                Err(_) => unimplemented!("async_execute"),
+                Ok(v) => v,
+            }
+        });
     }
 }
 

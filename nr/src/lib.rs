@@ -90,8 +90,8 @@ use core::num::NonZeroUsize;
 use arrayvec::ArrayVec;
 
 mod context;
-mod log;
-mod replica;
+pub mod log;
+pub mod replica;
 mod reusable_box;
 
 #[cfg(not(loom))]
@@ -117,7 +117,9 @@ pub trait Dispatch {
     /// A read-only operation. When executed against the data structure, an
     /// operation of this type must not mutate the data structure in anyway.
     /// Otherwise, the assumptions made by this library no longer hold.
-    type ReadOperation: Sized;
+    ///
+    /// [`Send`] is needed for async operations
+    type ReadOperation: Sized + Send;
 
     /// A write operation. When executed against the data structure, an
     /// operation of this type is allowed to mutate state. The library ensures
@@ -288,7 +290,6 @@ impl<D> NodeReplicated<D>
 where
     D: Default + Dispatch + Sized + Sync,
 {
-
     pub fn with_log_size(
         num_replicas: NonZeroUsize,
         chg_mem_affinity: impl Fn(AffinityChange) -> usize + Send + Sync + 'static,
