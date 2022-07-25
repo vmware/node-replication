@@ -1,7 +1,9 @@
-// Copyright © 2019-2020 VMware, Inc. All Rights Reserved.
+// Copyright © 2019-2022 VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! An example that implements a replicated hashmap
+//! An example that implements a replicated hashmap.
+#![feature(generic_associated_types)]
+
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -32,12 +34,12 @@ enum Access {
 /// The Dispatch trait executes `ReadOperation` (our Access enum) and `WriteOperation`
 /// (our `Modify` enum) against the replicated data-structure.
 impl Dispatch for NrHashMap {
-    type ReadOperation = Access;
+    type ReadOperation<'rop> = Access;
     type WriteOperation = Modify;
     type Response = Option<u64>;
 
     /// The `dispatch` function contains the logic for the immutable operations.
-    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
+    fn dispatch<'rop>(&self, op: Self::ReadOperation<'rop>) -> Self::Response {
         match op {
             Access::Get(key) => self.storage.get(&key).map(|v| *v),
         }

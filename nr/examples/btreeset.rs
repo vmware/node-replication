@@ -1,3 +1,9 @@
+// Copyright © 2019-2022 VMware, Inc. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+//! A minimal example that impements a replicated BTreeSet.
+#![feature(generic_associated_types)]
+
 use std::collections::BTreeSet;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -23,11 +29,11 @@ enum Access {
 }
 
 impl Dispatch for NrBtreeSet {
-    type ReadOperation = Access;
+    type ReadOperation<'rop> = Access;
     type WriteOperation = Modify;
     type Response = Option<u64>;
 
-    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
+    fn dispatch<'rop>(&self, op: Self::ReadOperation<'rop>) -> Self::Response {
         match op {
             Access::Get(key) => self.storage.get(&key).map(|v| *v),
             Access::Contains(key) => {

@@ -66,9 +66,12 @@
     feature = "unstable",
     feature(new_uninit, get_mut_unchecked, negative_impls)
 )]
-#![feature(box_syntax)]
-#![feature(allocator_api)]
-#![feature(nonnull_slice_from_raw_parts)]
+#![feature(
+    allocator_api,
+    box_syntax,
+    generic_associated_types,
+    nonnull_slice_from_raw_parts
+)]
 
 #[cfg(test)]
 extern crate std;
@@ -120,7 +123,7 @@ pub trait Dispatch {
     /// Otherwise, the assumptions made by this library no longer hold.
     ///
     /// [`Send`] is needed for async operations
-    type ReadOperation: Sized + Send;
+    type ReadOperation<'a>: Sized + Send;
 
     /// A write operation. When executed against the data structure, an
     /// operation of this type is allowed to mutate state. The library ensures
@@ -133,7 +136,7 @@ pub trait Dispatch {
 
     /// Method on the data structure that allows a read-only operation to be
     /// executed against it.
-    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response;
+    fn dispatch<'a>(&self, op: Self::ReadOperation<'a>) -> Self::Response;
 
     /// Method on the data structure that allows a write operation to be
     /// executed against it.
@@ -475,12 +478,13 @@ where
         }
     }
 
-    fn try_execute<'a>(
+    fn try_execute<'a, 'rop>(
         &'a self,
-        op: <D as Dispatch>::ReadOperation,
+        op: <D as Dispatch>::ReadOperation<'rop>,
         tkn: ThreadToken,
         cl: Option<CombinerLock<'a, D>>,
-    ) -> Result<<D as Dispatch>::Response, (ReplicaError<D>, <D as Dispatch>::ReadOperation)> {
+    ) -> Result<<D as Dispatch>::Response, (ReplicaError<D>, <D as Dispatch>::ReadOperation<'rop>)>
+    {
         if let Some(combiner_lock) = cl {
             self.replicas[tkn.rid].execute_locked(&self.log, op, tkn.rtkn, combiner_lock)
         } else {
@@ -488,18 +492,18 @@ where
         }
     }
 
-    pub fn execute(
+    pub fn execute<'rop>(
         &self,
-        op: <D as Dispatch>::ReadOperation,
+        op: <D as Dispatch>::ReadOperation<'rop>,
         tkn: ThreadToken,
     ) -> <D as Dispatch>::Response {
         /// An enum to keep track of a stack of operations we should do on Replicas.
         ///
         /// e.g., either `Sync` an out-of-date, behind replica, or call `execute_locked` or
         /// `execute_mut_locked` to resume the operation with a combiner lock.
-        enum ResolveOp<'a, D: core::marker::Sync + Dispatch + Sized> {
+        enum ResolveOp<'a, 'rop, D: core::marker::Sync + Dispatch + Sized> {
             /// Resumes a replica that earlier returned with an Error (and the CombinerLock).
-            Exec(Option<CombinerLock<'a, D>>, D::ReadOperation),
+            Exec(Option<CombinerLock<'a, D>>, D::ReadOperation<'rop>),
             /// Indicates need to [`Replica::sync()`] a replica with the given ID.
             Sync(ReplicaId),
         }
@@ -564,9 +568,9 @@ where
     /// Currently a trivial "async" implementation as we just call the blocking
     /// call [`NodeReplicated::execute`] and wrap it in `async`. Needs to exploit
     /// "asyncness" in NR.
-    pub fn async_execute<'a>(
+    pub fn async_execute<'a, 'rop: 'a>(
         &'a self,
-        op: <D as Dispatch>::ReadOperation,
+        op: <D as Dispatch>::ReadOperation<'rop>,
         tkn: ThreadToken,
         resp: &mut ReusableBoxFuture<'a, <D as Dispatch>::Response>,
     ) {

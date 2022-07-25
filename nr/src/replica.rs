@@ -602,12 +602,13 @@ where
     /// # Implementation
     /// Issues a read-only operation against the replica and returns a response.
     /// Makes sure the replica is synced up against the log before doing so.
-    pub fn execute(
+    pub fn execute<'rop>(
         &self,
         slog: &Log<<D as Dispatch>::WriteOperation>,
-        op: <D as Dispatch>::ReadOperation,
+        op: <D as Dispatch>::ReadOperation<'rop>,
         idx: ReplicaToken,
-    ) -> Result<<D as Dispatch>::Response, (ReplicaError<D>, <D as Dispatch>::ReadOperation)> {
+    ) -> Result<<D as Dispatch>::Response, (ReplicaError<D>, <D as Dispatch>::ReadOperation<'rop>)>
+    {
         // We can perform the read only if our replica is synced up against
         // the shared log. If it isn't, then try to combine until it is synced up.
         let ctail = slog.get_ctail();
@@ -631,13 +632,14 @@ where
     /// Before calling this, the client should ensure progress is made on the replica that
     /// was reported as stuck. Study [`crate::NodeReplicated`] for an example on how to use
     /// this method.
-    pub fn execute_locked<'lock>(
+    pub fn execute_locked<'rop, 'lock>(
         &'lock self,
         slog: &Log<<D as Dispatch>::WriteOperation>,
-        op: <D as Dispatch>::ReadOperation,
+        op: <D as Dispatch>::ReadOperation<'rop>,
         idx: ReplicaToken,
         combiner_lock: CombinerLock<'lock, D>,
-    ) -> Result<<D as Dispatch>::Response, (ReplicaError<D>, <D as Dispatch>::ReadOperation)> {
+    ) -> Result<<D as Dispatch>::Response, (ReplicaError<D>, <D as Dispatch>::ReadOperation<'rop>)>
+    {
         // We can perform the read only if our replica is synced up against
         // the shared log. If it isn't, then try to combine until it is synced up.
         let ctail = slog.get_ctail();
@@ -925,11 +927,11 @@ pub(crate) mod test {
     }
 
     impl Dispatch for Data {
-        type ReadOperation = u64;
+        type ReadOperation<'rop> = u64;
         type WriteOperation = u64;
         type Response = Result<u64, ()>;
 
-        fn dispatch(&self, _op: Self::ReadOperation) -> Self::Response {
+        fn dispatch<'rop>(&self, _op: Self::ReadOperation<'rop>) -> Self::Response {
             Ok(self.junk)
         }
 

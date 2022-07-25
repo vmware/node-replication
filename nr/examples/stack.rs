@@ -1,9 +1,8 @@
-// Copyright © 2019-2020 VMware, Inc. All Rights Reserved.
+// Copyright © 2019-2022 VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! A minimal example that implements a node-replicated, generic stack
-
-#![feature(const_option)]
+#![feature(generic_associated_types, const_option)]
 
 use std::cmp::PartialEq;
 use std::num::NonZeroUsize;
@@ -65,12 +64,12 @@ impl<T> Dispatch for Stack<T>
 where
     T: Default + Clone + PartialEq + Send,
 {
-    type ReadOperation = Access;
+    type ReadOperation<'rop> = Access;
     type WriteOperation = Modify<T>;
     type Response = Option<T>;
 
     /// The `dispatch` function applies the immutable operations.
-    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
+    fn dispatch<'rop>(&self, op: Self::ReadOperation<'rop>) -> Self::Response {
         match op {
             Access::Peek => self.storage.last().cloned(),
         }

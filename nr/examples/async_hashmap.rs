@@ -1,4 +1,10 @@
-//! A minimal example that implements a replicated hashmap
+// Copyright © 2019-2022 VMware, Inc. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+//! A minimal example that implements a replicated hashmap and inserts and reads
+//! from it using async functions.
+#![feature(generic_associated_types)]
+
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
 
@@ -41,12 +47,12 @@ enum Access {
 /// and `WriteOperation` (our `Modify` enum) against the replicated
 /// data-structure.
 impl Dispatch for NrHashMap {
-    type ReadOperation = Access;
+    type ReadOperation<'rop> = Access;
     type WriteOperation = Modify;
     type Response = usize;
 
     /// The `dispatch` function applies the immutable operations.
-    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
+    fn dispatch<'rop>(&self, op: Self::ReadOperation<'rop>) -> Self::Response {
         match op {
             Access::Get(key) => *self.storage.get(&key).unwrap(),
         }
