@@ -15,6 +15,7 @@ To replicate a single-threaded data structure, one needs to implement `Dispatch`
 single-threaded HashMap from `std`.
 
 ```rust
+#![feature(generic_associated_types)]
 use std::collections::HashMap;
 use node_replication::Dispatch;
 
@@ -40,12 +41,12 @@ enum Access {
 /// and `WriteOperation` (our `Modify` enum) against the replicated
 /// data-structure.
 impl Dispatch for NrHashMap {
-    type ReadOperation = Access;
+    type ReadOperation<'rop> = Access;
     type WriteOperation = Modify;
     type Response = Option<u64>;
 
     /// The `dispatch` function applies the immutable operations.
-    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
+    fn dispatch<'rop>(&self, op: Self::ReadOperation<'rop>) -> Self::Response {
         match op {
             Access::Get(key) => self.storage.get(&key).map(|v| *v),
         }

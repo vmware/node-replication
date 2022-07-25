@@ -15,6 +15,7 @@
 //! folder.
 //!
 //! ```
+//! #![feature(generic_associated_types)]
 //! use node_replication::Dispatch;
 //! use std::collections::HashMap;
 //!
@@ -39,12 +40,12 @@
 //! /// and `WriteOperation` (our Modify enum) against the replicated
 //! /// data-structure.
 //! impl Dispatch for NrHashMap {
-//!    type ReadOperation = Access;
+//!    type ReadOperation<'rop> = Access;
 //!    type WriteOperation = Modify;
 //!    type Response = Option<u64>;
 //!
 //!    /// The `dispatch` function applies the immutable operations.
-//!    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
+//!    fn dispatch<'rop>(&self, op: Self::ReadOperation<'rop>) -> Self::Response {
 //!        match op {
 //!            Access::Get(key) => self.storage.get(&key).map(|v| *v),
 //!        }
@@ -89,6 +90,7 @@ use alloc::vec::Vec;
 use core::fmt::Debug;
 use core::marker::Sync;
 use core::num::NonZeroUsize;
+#[cfg(feature = "async")]
 use reusable_box::ReusableBoxFuture;
 
 use arrayvec::ArrayVec;
@@ -96,6 +98,7 @@ use arrayvec::ArrayVec;
 mod context;
 pub mod log;
 pub mod replica;
+#[cfg(feature = "async")]
 pub mod reusable_box;
 
 #[cfg(not(loom))]
@@ -123,7 +126,10 @@ pub trait Dispatch {
     /// Otherwise, the assumptions made by this library no longer hold.
     ///
     /// [`Send`] is needed for async operations
+    #[cfg(feature = "async")]
     type ReadOperation<'a>: Sized + Send;
+    #[cfg(not(feature = "async"))]
+    type ReadOperation<'a>: Sized;
 
     /// A write operation. When executed against the data structure, an
     /// operation of this type is allowed to mutate state. The library ensures
@@ -552,6 +558,7 @@ where
     /// Currently a trivial "async" implementation as we just call the blocking
     /// call [`NodeReplicated::execute`] and wrap it in `async`. Needs to exploit
     /// "asyncness" in NR.
+    #[cfg(feature = "async")]
     pub async fn async_execute_mut<'a>(
         &'a self,
         op: <D as Dispatch>::WriteOperation,
@@ -568,6 +575,7 @@ where
     /// Currently a trivial "async" implementation as we just call the blocking
     /// call [`NodeReplicated::execute`] and wrap it in `async`. Needs to exploit
     /// "asyncness" in NR.
+    #[cfg(feature = "async")]
     pub fn async_execute<'a, 'rop: 'a>(
         &'a self,
         op: <D as Dispatch>::ReadOperation<'rop>,
@@ -597,6 +605,7 @@ mod test_readme {
     external_doc_test!(include_str!("../README.md"));
 }
 
+#[cfg(feature = "async")]
 #[cfg(test)]
 mod test {
     use super::*;

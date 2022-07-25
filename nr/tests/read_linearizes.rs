@@ -10,10 +10,9 @@
 //!
 //! This loom test is supposed to verify that this can't happen.
 //! See also: https://github.com/tokio-rs/loom
-
+#![feature(generic_associated_types)]
 // Run with:
 // RUSTFLAGS="--cfg loom" cargo test --test read_linearizes --release -- --nocapture
-
 #![cfg(loom)]
 
 use loom::sync::atomic::{AtomicBool, Ordering};
@@ -43,11 +42,11 @@ struct TheCounter {
 }
 
 impl Dispatch for TheCounter {
-    type ReadOperation = OpRd;
+    type ReadOperation<'rop> = OpRd;
     type WriteOperation = OpWr;
     type Response = usize;
 
-    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
+    fn dispatch<'rop>(&self, op: Self::ReadOperation<'rop>) -> Self::Response {
         match op {
             OpRd::Get => self.counter,
         }

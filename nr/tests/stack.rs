@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Various tests for node-replication with the help of a stack.
+#![feature(generic_associated_types)]
 
 extern crate rand;
 extern crate std;
@@ -74,11 +75,11 @@ impl Default for Stack {
 }
 
 impl Dispatch for Stack {
-    type ReadOperation = OpRd;
+    type ReadOperation<'rop> = OpRd;
     type WriteOperation = OpWr;
     type Response = Option<u32>;
 
-    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
+    fn dispatch<'rop>(&self, op: Self::ReadOperation<'rop>) -> Self::Response {
         match op {
             OpRd::Peek => self.peek(),
         }
@@ -199,11 +200,11 @@ impl Default for VerifyStack {
 }
 
 impl Dispatch for VerifyStack {
-    type ReadOperation = OpRd;
+    type ReadOperation<'rop> = OpRd;
     type WriteOperation = OpWr;
     type Response = Option<u32>;
 
-    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
+    fn dispatch<'rop>(&self, op: Self::ReadOperation<'rop>) -> Self::Response {
         match op {
             OpRd::Peek => {
                 let ele: u32 = self.peek();

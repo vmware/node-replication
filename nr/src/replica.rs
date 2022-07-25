@@ -224,6 +224,7 @@ where
     /// # Example
     ///
     /// ```
+    /// #![feature(generic_associated_types)]
     /// use node_replication::Dispatch;
     /// use node_replication::log::Log;
     /// use node_replication::replica::Replica;
@@ -236,14 +237,14 @@ where
     ///
     /// // This trait allows the `Data` to be used with node-replication.
     /// impl Dispatch for Data {
-    ///     type ReadOperation = ();
+    ///     type ReadOperation<'rop> = ();
     ///     type WriteOperation = u64;
     ///     type Response = Option<u64>;
     ///
     ///     // A read returns the underlying u64.
-    ///     fn dispatch(
+    ///     fn dispatch<'rop>(
     ///         &self,
-    ///         _op: Self::ReadOperation,
+    ///         _op: Self::ReadOperation<'rop>,
     ///     ) -> Self::Response {
     ///         Some(self.junk)
     ///     }
@@ -382,6 +383,7 @@ where
     /// # Example
     ///
     /// ```
+    /// #![feature(generic_associated_types)]
     /// use node_replication::Dispatch;
     /// use node_replication::log::Log;
     /// use node_replication::replica::Replica;
@@ -392,13 +394,13 @@ where
     /// }
     ///
     /// impl Dispatch for Data {
-    ///     type ReadOperation = ();
+    ///     type ReadOperation<'rop> = ();
     ///     type WriteOperation = u64;
     ///     type Response = Option<u64>;
     ///
-    ///     fn dispatch(
+    ///     fn dispatch<'rop>(
     ///         &self,
-    ///         _op: Self::ReadOperation,
+    ///         _op: Self::ReadOperation<'rop>,
     ///     ) -> Self::Response {
     ///         Some(self.junk)
     ///     }
@@ -461,6 +463,7 @@ where
     /// # Example
     ///
     /// ```
+    /// #![feature(generic_associated_types)]
     /// use node_replication::Dispatch;
     /// use node_replication::log::Log;
     /// use node_replication::replica::Replica;
@@ -471,13 +474,13 @@ where
     /// }
     ///
     /// impl Dispatch for Data {
-    ///     type ReadOperation = ();
+    ///     type ReadOperation<'rop> = ();
     ///     type WriteOperation = u64;
     ///     type Response = Option<u64>;
     ///
-    ///     fn dispatch(
+    ///     fn dispatch<'rop>(
     ///         &self,
-    ///         _op: Self::ReadOperation,
+    ///         _op: Self::ReadOperation<'rop>,
     ///     ) -> Self::Response {
     ///         Some(self.junk)
     ///     }
@@ -556,6 +559,7 @@ where
     /// # Example
     ///
     /// ```
+    /// #![feature(generic_associated_types)]
     /// use node_replication::Dispatch;
     /// use node_replication::log::Log;
     /// use node_replication::replica::Replica;
@@ -568,13 +572,13 @@ where
     /// }
     ///
     /// impl Dispatch for Data {
-    ///     type ReadOperation = ();
+    ///     type ReadOperation<'rop> = ();
     ///     type WriteOperation = u64;
     ///     type Response = Option<u64>;
     ///
-    ///     fn dispatch(
+    ///     fn dispatch<'rop>(
     ///         &self,
-    ///         _op: Self::ReadOperation,
+    ///         _op: Self::ReadOperation<'rop>,
     ///     ) -> Self::Response {
     ///         Some(self.junk)
     ///     }
