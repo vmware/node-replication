@@ -22,7 +22,6 @@ use super::context::Context;
 use super::log::{Log, LogToken};
 use super::rwlock::RwLock;
 use super::Dispatch;
-use crate::reusable_box::ReusableBoxFuture;
 
 /// Unique identifier for the given replica (it's probably the same as the NUMA
 /// node that this replica corresponds to).
@@ -910,52 +909,10 @@ where
 
         res
     }
-
-    pub async fn async_execute_mut(
-        &'a self,
-        slog: &'a Log<<D as Dispatch>::WriteOperation>,
-        op: <D as Dispatch>::WriteOperation,
-        rid: ReplicaToken,
-        resp: &mut ReusableBoxFuture<'a, <D as Dispatch>::Response>,
-    ) {
-        // Enqueue the operation onto the thread local batch.
-        // For a single thread the future will append the operation and yield.
-        async { while !self.make_pending(op.clone(), rid.0) {} }.await;
-
-        resp.set(async move {
-            // Check for the response even before becoming the combiner,
-            // as some other async combiner might have completed the work.
-            match self.contexts[rid.0 - 1].res() {
-                Some(res) => res,
-                None => {
-                    self.try_combine(slog);
-                    match self.get_response(slog, rid.0) {
-                        Err(_) => unimplemented!("async_execute_mut"),
-                        Ok(v) => v,
-                    }
-                }
-            }
-        });
-    }
-
-    pub fn async_execute(
-        &'a self,
-        slog: &'a Log<<D as Dispatch>::WriteOperation>,
-        op: <D as Dispatch>::ReadOperation,
-        rid: ReplicaToken,
-        resp: &mut ReusableBoxFuture<'a, <D as Dispatch>::Response>,
-    ) {
-        resp.set(async move {
-            match self.execute(slog, op, rid) {
-                Err(_) => unimplemented!("async_execute"),
-                Ok(v) => v,
-            }
-        });
-    }
 }
 
 #[cfg(test)]
-mod test {
+pub(crate) mod test {
     extern crate std;
 
     use super::*;
@@ -963,8 +920,8 @@ mod test {
 
     // Really dumb data structure to test against the Replica and shared log.
     #[derive(Default)]
-    struct Data {
-        junk: u64,
+    pub(crate) struct Data {
+        pub(crate) junk: u64,
     }
 
     impl Dispatch for Data {
@@ -1155,24 +1112,5 @@ mod test {
 
         let t1 = repl.register().expect("Failed to register with replica.");
         assert_eq!(Ok(2), repl.execute(&slog, 11, t1).unwrap());
-    }
-
-    #[tokio::test]
-    async fn test_box_reuse() {
-        use futures::executor::block_on;
-        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
-        let repl = Replica::<Data>::new(&slog);
-        let idx = repl.register().expect("Unable to register to the replica");
-
-        let op = 0;
-        let mut resp: ReusableBoxFuture<<Data as Dispatch>::Response> =
-            ReusableBoxFuture::new(async move { Ok(0) });
-        repl.async_execute_mut(op, idx, &mut resp).await;
-        let res = block_on(&mut resp).unwrap();
-        assert_eq!(res, 107);
-
-        repl.async_execute(op, idx, &mut resp);
-        let res = block_on(resp).unwrap();
-        assert_eq!(res, 1);
     }
 }

@@ -1,13 +1,12 @@
 //! A minimal example that implements a replicated hashmap
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::num::NonZeroUsize;
 
 use futures::future::join_all;
 
+use node_replication::reusable_box::ReusableBoxFuture;
 use node_replication::Dispatch;
-use node_replication::Log;
-use node_replication::Replica;
-use node_replication::ReusableBoxFuture;
+use node_replication::NodeReplicated;
 
 const CAPACITY: usize = 32;
 
@@ -63,14 +62,10 @@ impl Dispatch for NrHashMap {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    // The operation log for storing `WriteOperation`, it has a size of 2 MiB:
-    let log = Arc::new(Log::<<NrHashMap as Dispatch>::WriteOperation>::new(
-        2 * 1024 * 1024,
-    ));
-
-    // Next, we create a replica of the hashmap
-    let replica = Replica::<NrHashMap>::new(&log);
-    let ridx = replica.register().expect("Unable to register with log");
+    let replicas = NonZeroUsize::new(1).unwrap();
+    let async_nrht =
+        NodeReplicated::<NrHashMap>::new(replicas, |_ac| 0).expect("Can't create NrHashMap");
+    let ttkn = async_nrht.register(0).expect("Unable to register with log");
 
     // Issue multiple Put operations
     let mut i = 0;
@@ -81,11 +76,11 @@ async fn main() {
     for fut in &mut futures {
         match i % 2 {
             0 => {
-                replica
-                    .async_execute_mut(Modify::Put(i, i + 1), ridx, fut)
+                async_nrht
+                    .async_execute_mut(Modify::Put(i, i + 1), ttkn, fut)
                     .await
             }
-            1 => replica.async_execute(Access::Get(i), ridx, fut),
+            1 => async_nrht.async_execute(Access::Get(i), ttkn, fut),
             _ => unreachable!(),
         }
         i += 1;
@@ -96,6 +91,7 @@ async fn main() {
 
     // Verify responses
     for (i, item) in resp.iter().enumerate().take(CAPACITY) {
+        println!("resp is {:?}", item);
         assert_eq!(*item, i + 1);
     }
 }

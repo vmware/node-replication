@@ -86,13 +86,14 @@ use alloc::vec::Vec;
 use core::fmt::Debug;
 use core::marker::Sync;
 use core::num::NonZeroUsize;
+use reusable_box::ReusableBoxFuture;
 
 use arrayvec::ArrayVec;
 
 mod context;
 pub mod log;
 pub mod replica;
-mod reusable_box;
+pub mod reusable_box;
 
 #[cfg(not(loom))]
 #[path = "rwlock.rs"]
@@ -540,6 +541,38 @@ where
         }
     }
 
+    /// Executes a mutable operation asynchronously on a replica, and returns
+    /// the response in `resp`
+    ///
+    /// # Note
+    /// Currently a trivial "async" implementation as we just call the blocking
+    /// call [`NodeReplicated::execute`] and wrap it in `async`. Needs to exploit
+    /// "asyncness" in NR.
+    pub async fn async_execute_mut<'a>(
+        &'a self,
+        op: <D as Dispatch>::WriteOperation,
+        tkn: ThreadToken,
+        resp: &mut ReusableBoxFuture<'a, <D as Dispatch>::Response>,
+    ) {
+        resp.set(async move { self.execute_mut(op, tkn) });
+    }
+
+    /// Executes an immutable operation asynchronously on a replica, and returns
+    /// the response in `resp`.
+    ///
+    /// # Note
+    /// Currently a trivial "async" implementation as we just call the blocking
+    /// call [`NodeReplicated::execute`] and wrap it in `async`. Needs to exploit
+    /// "asyncness" in NR.
+    pub fn async_execute<'a>(
+        &'a self,
+        op: <D as Dispatch>::ReadOperation,
+        tkn: ThreadToken,
+        resp: &mut ReusableBoxFuture<'a, <D as Dispatch>::Response>,
+    ) {
+        resp.set(async move { self.execute(op, tkn) });
+    }
+
     pub fn sync(&self, tkn: ThreadToken) {
         match self.replicas[tkn.rid].sync(&self.log) {
             Ok(r) => r,
@@ -558,4 +591,32 @@ mod test_readme {
     }
 
     external_doc_test!(include_str!("../README.md"));
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::replica::test::Data;
+    use crate::reusable_box::ReusableBoxFuture;
+    use core::num::NonZeroUsize;
+
+    #[tokio::test]
+    async fn test_box_reuse() {
+        use futures::executor::block_on;
+
+        let replicas = NonZeroUsize::new(1).unwrap();
+        let async_ds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
+        let ttkn = async_ds.register(0).expect("Unable to register with log");
+
+        let op = 0;
+        let mut resp: ReusableBoxFuture<<Data as Dispatch>::Response> =
+            ReusableBoxFuture::new(async move { Ok(0) });
+        async_ds.async_execute_mut(op, ttkn, &mut resp).await;
+        let res = block_on(&mut resp).unwrap();
+        assert_eq!(res, 107);
+
+        async_ds.async_execute(op, ttkn, &mut resp);
+        let res = block_on(resp).unwrap();
+        assert_eq!(res, 1);
+    }
 }
