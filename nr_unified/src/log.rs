@@ -533,16 +533,17 @@ where
     }
 }
 
-impl<T, M> Default for Log<T, (), M>
+impl<T, LM, M> Default for Log<T, LM, M>
 where
     T: Sized + Clone,
+    LM: Default,
     M: Default,
 {
     /// Default constructor for the shared log.
     ///
     /// Constructs a log of approximately [`DEFAULT_LOG_BYTES`] bytes.
     fn default() -> Self {
-        Log::new_with_bytes(DEFAULT_LOG_BYTES, ())
+        Log::new_with_bytes(DEFAULT_LOG_BYTES, LM::default())
     }
 }
 
