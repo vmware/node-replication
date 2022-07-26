@@ -11,15 +11,16 @@
 //! This loom test is supposed to verify that this can't happen.
 //! See also: https://github.com/tokio-rs/loom
 #![feature(generic_associated_types)]
+#![cfg(loom)]
+
 // Run with:
 // RUSTFLAGS="--cfg loom" cargo test --test read_linearizes --release -- --nocapture
-#![cfg(loom)]
 
 use loom::sync::atomic::{AtomicBool, Ordering};
 use loom::sync::Arc;
 use loom::thread;
 
-use node_replication::log::Log;
+use node_replication::log::{Log, LogToken};
 use node_replication::replica::Replica;
 use node_replication::Dispatch;
 
@@ -161,7 +162,8 @@ fn test_read_linearizes_with_gc() {
     b.check(move || {
         // Make a log with just 4 entries, on adding a second entry, we start GC
         let log = Log::<<TheCounter as Dispatch>::WriteOperation>::new_with_entries(4);
-        log.append(&[OpWr::Noop, OpWr::Noop], 2, |_op, _idx| {
+        let ltkn = LogToken(3);
+        log.append(&[OpWr::Noop, OpWr::Noop], &ltkn, |_op, _idx| {
             panic!("We're doing GC but we don't want to do it just yet...");
         })
         .expect("Append works");

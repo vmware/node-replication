@@ -27,7 +27,10 @@ use crate::replica::MAX_THREADS_PER_REPLICA;
 ///
 /// The replica is supposed to call [`Log::register()`] to get the token.
 #[derive(Eq, PartialEq, Debug)]
+#[cfg(not(loom))]
 pub struct LogToken(usize);
+#[cfg(loom)]
+pub struct LogToken(pub usize);
 
 /// The default size of the shared log in bytes. If constructed using the default
 /// constructor, the log will be these many bytes in size.
@@ -38,11 +41,12 @@ pub struct LogToken(usize);
 pub const DEFAULT_LOG_BYTES: usize = 2 * 1024 * 1024;
 const_assert!(DEFAULT_LOG_BYTES.is_power_of_two());
 
-/// The maximum number of replicas that can be registered with the log.
+/// The maximum number of replicas that can be registered with the log (plus one
+/// since replica registration starts at 0).
 ///
-/// Should be equal or greater than the max. amount of NUMA nodes we expect on our system
-/// Can't make it arbitrarily high as it will lead to more memory overheads / bigger
-/// structs.
+/// Should be equal or greater than the max. amount of NUMA nodes we expect on
+/// our system Can't make it arbitrarily high as it will lead to more memory
+/// overheads / bigger structs.
 #[cfg(not(loom))]
 pub const MAX_REPLICAS_PER_LOG: usize = 16;
 #[cfg(loom)] // Otherwise uses too much stack space wich crashes in loom...
@@ -104,26 +108,20 @@ where
 }
 
 /// A log of operations that is typically accessed by multiple
-/// [`crate::replica::Replica`].
-///
-/// Operations can be added to the log by calling the [`Log::append()`] method and
-/// providing a list of operations to be performed.
-///
-/// Operations already on the log can be executed by calling the `Log::exec()` method and
-/// providing a replica identifier, along with a closure that describes what to do for a
-/// given entry. Newly added operations since the last time a replica called `Log::exec()`
-/// will be executed by invoking the supplied closure for each one of them.
-///
-/// Takes one generic type parameter, `T`, which defines the type of operations and their
-/// arguments that will go on the log. Typically this is some enum with variants.
-///
-/// This struct is aligned to 64 bytes to optimize cache access.
+/// [`crate::replica::Replica`]s.
 ///
 /// # Note
-/// In the common case a client of node-replication does not need to create or interact
-/// with the log directly. Instead use [`crate::NodeReplicated`]. Only in the rare
-/// circumstance where someone would implement their own Replica would it be necessary to
-/// call any of the Log's methods.
+/// In the common case a client of node-replication does not need to create or
+/// interact with the log directly. Instead, the client should use
+/// [`crate::NodeReplicated`] instead. Only in the rare circumstance where one
+/// would need to implement a custom "replica dispatch logic" would it be
+/// necessary to create logs and register replicas with it.
+///
+/// Takes one generic type parameter, `T`, which defines the type of the
+/// operation that will go on the log. Typically this is somes enum with variants
+/// identifying the different mutable operations.
+///
+/// This struct is aligned to 64 bytes to optimize cache access.
 #[repr(align(64))]
 pub struct Log<T>
 where
@@ -186,8 +184,9 @@ where
 {
     /// Constructs and returns a log of (approximately) `num` entries.
     ///
-    /// `num` is rounded to the next power of two or set to `2 * GC_FROM_HEAD` if smaller
-    /// than that.
+    /// Note that the code ensures that final num. of entries is rounded-up to
+    /// the next power of two and at least `2 * GC_FROM_HEAD`, if `num` turns
+    /// out to be smaller than that.
     ///
     /// # Example
     ///
@@ -202,12 +201,12 @@ where
     ///     Invalid,
     /// }
     ///
-    /// // Creates a log with 262144 entries.
+    /// // Creates a log with `262_144` entries.
     /// let l = Log::<Operation>::new_with_entries(1 << 18);
     /// ```
     ///
-    /// This method allocates memory for the log upfront. No further allocations will be
-    /// performed once this method returns.
+    /// This method allocates memory for the log upfront. No further allocations
+    /// will be performed once this method returns.
     pub fn new_with_entries(num: usize) -> Log<T> {
         // Allocate the log
         let mut v = Vec::with_capacity(Log::<T>::entries_to_log_entries(num));
@@ -256,13 +255,14 @@ where
 
     /// Constructs and returns a log of (approximately) `bytes` bytes.
     ///
-    /// Will be rounded up if the provided `bytes` mean the log can hold less than
-    /// `2*GC_FROM_HEAD` entries.
+    /// Will be rounded up if the provided `bytes` mean the log can hold less
+    /// than `2*GC_FROM_HEAD` entries or the amount of entries it can hold with
+    /// `bytes` is not a power-of-two.
     ///
-    /// This method allocates memory for the log upfront. No further allocations will be
-    /// performed once this method returns.
+    /// This method allocates memory for the log upfront. No further allocations
+    /// will be performed once this method returns.
     ///
-    /// A log size of 1-2 MiB tends to works well in general.
+    /// A log size of 1-2 MiB tends to works well in almost all situation.
     ///
     /// # Example
     ///
@@ -314,27 +314,20 @@ where
         num
     }
 
-    /// Returns the size of an entry in bytes.
-    ///
-    /// # TODO
-    /// This method should be marked `const` once `#![feature(const_fn_trait_bound)]` is
-    /// stabilized.
-    ///
-    /// See issue #93706 <https://github.com/rust-lang/rust/issues/93706> .
-    fn entry_size() -> usize {
+    /// Returns the size of a log entry in bytes.
+    pub const fn entry_size() -> usize {
         size_of::<Cell<Entry<T>>>()
     }
 
-    /// Registers a replica with the log. Returns an identifier that the replica can use
-    /// to execute operations on the log.
+    /// Registers a replica with the log. Returns an identifier that the replica
+    /// can use to execute operations on the log.
     ///
-    /// # Visibility
-    /// There is no need to call this function from a client if you're not using the log /
-    /// replica API directly.
+    /// As with all the other [`Log`] functions, there is no need to call this
+    /// function from a client if you're using [`crate::NodeReplicated`].
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```
     /// use node_replication::log::Log;
     ///
     /// // Operation type that will go onto the log.
@@ -346,7 +339,7 @@ where
     /// }
     ///
     /// // Creates a 1 Mega Byte sized log.
-    /// let l = Log::<Operation>::new(1 * 1024 * 1024);
+    /// let l = Log::<Operation>::new_with_entries(4 * 1024);
     ///
     /// // Registers against the log. `idx` can now be used to append operations
     /// // to the log, and execute these operations.
@@ -358,7 +351,7 @@ where
             let n = self.next.load(Ordering::Relaxed);
 
             // Check if we've exceeded the maximum number of replicas the log can support.
-            if n >= MAX_REPLICAS_PER_LOG {
+            if n > MAX_REPLICAS_PER_LOG {
                 return None;
             };
 
@@ -374,7 +367,7 @@ where
         }
     }
 
-    /// Adds a batch of operations to the shared log.
+    /// Inserts a slice of operations into the log.
     ///
     /// # Example
     ///
@@ -561,13 +554,13 @@ where
         }
     }
 
-    /// Executes a passed in closure (`d`) on all operations starting from a replica's
-    /// local tail on the shared log. The replica is identified through an `idx` passed in
-    /// as an argument.
+    /// Executes a passed in closure (`d`) on all operations starting from a
+    /// replica's local tail on the shared log. The replica is identified
+    /// through an `idx` passed in as an argument.
     ///
-    /// The passed in closure is expected to accept two arguments: The operation from the
-    /// shared log to be executed and a bool that's true only if the operation was issued
-    /// originally on this replica.
+    /// The passed in closure is expected to accept two arguments: The operation
+    /// from the shared log to be executed and a bool that's true only if the
+    /// operation was issued originally on this replica.
     ///
     /// # Example
     ///
@@ -696,9 +689,9 @@ where
         (min_replica_idx, min_local_tail)
     }
 
-    /// Advances the head of the log forward. If a replica has stopped making progress,
-    /// then this method will never return. Accepts a closure that is passed into exec()
-    /// to ensure that this replica does not deadlock GC.
+    /// Advances the head of the log forward. If a replica has stopped making
+    /// progress, then this method will never return. Accepts a closure that is
+    /// passed into exec() to ensure that this replica does not deadlock GC.
     #[inline(always)]
     fn advance_head<F: FnMut(T, bool)>(&self, rid: &LogToken, mut s: &mut F) -> Result<(), usize> {
         // Keep looping until we can advance the head and create some free space
@@ -740,19 +733,19 @@ where
         }
     }
 
-    /// Resets the log. This is required for microbenchmarking the log; with this method,
-    /// we can re-use the log across experimental runs without having to re-allocate the
-    /// log over and over again (which blows up the tests runtime due to allocations /
-    /// initializing the log memory).
+    /// Resets the log. This is required for microbenchmarking the log; with
+    /// this method, we can re-use the log across experimental runs without
+    /// having to re-allocate the log over and over again (which blows up the
+    /// tests runtime due to allocations / initializing the log memory).
     ///
     /// # Safety
     ///
-    /// *To be used for testing/benchmarking only, hence marked unsafe*. Before calling
-    /// this method, please make sure that there aren't any replicas/threads actively
-    /// issuing/executing operations to/from this log or having potentially outstanding
-    /// operations not applied on all replicas.
+    /// *To be used for testing/benchmarking only, hence marked unsafe*. Before
+    /// calling this method, please make sure that there aren't any
+    /// replicas/threads actively issuing/executing operations to/from this log
+    /// or having potentially outstanding operations not applied on all
+    /// replicas.
     #[doc(hidden)]
-    #[inline(always)]
     pub unsafe fn reset(&self) {
         // First, reset global metadata.
         self.head.store(0, Ordering::SeqCst);
@@ -773,9 +766,9 @@ where
         }
     }
 
-    /// This method checks if the replica is in sync to execute a read-only operation
-    /// right away. It does so by comparing the replica's local tail with the log's
-    /// completed tail.
+    /// This method checks if a replica is in sync to execute a read-only
+    /// operation. It does so by comparing the replica's local tail with the
+    /// log's completed tail.
     ///
     /// # Example
     ///
@@ -982,13 +975,14 @@ mod tests {
         assert_eq!(l.next.load(Ordering::Relaxed), 2);
     }
 
-    // Tests that we cannot register more than the max replicas with the log.
+    // Tests that we can register exactly `MAX_REPLICAS_PER_LOG` replicas.
     #[test]
-    fn test_log_register_none() {
-        let l = Log::<Operation>::new_with_bytes(1024);
-        l.next.store(MAX_REPLICAS_PER_LOG, Ordering::Relaxed);
+    fn test_log_register_all() {
+        let l = Log::<Operation>::default();
+        for _i in 0..MAX_REPLICAS_PER_LOG {
+            assert!(l.register().is_some());
+        }
         assert!(l.register().is_none());
-        assert_eq!(l.next.load(Ordering::Relaxed), MAX_REPLICAS_PER_LOG);
     }
 
     // Test that we can correctly append an entry into the log.

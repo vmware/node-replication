@@ -1,4 +1,11 @@
-// https://github.com/tokio-rs/tokio/blob/master/tokio-util/src/sync/reusable_box.rs
+// Copyright © 2019-2022 VMware, Inc. All Rights Reserved.
+// Copyright © 2022 Tokio Contributors. All Rights Reserved.
+// SPDX-License-Identifier: MIT
+
+//! Like a Box<T>, but reusable.
+//!
+//! Code is borrowed from Tokio's reusable box. See also:
+//! <https://github.com/tokio-rs/tokio/blob/master/tokio-util/src/sync/reusable_box.rs>
 
 use alloc::alloc::Layout;
 use alloc::boxed::Box;

@@ -1,16 +1,22 @@
 // Copyright © 2019-2020 VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! Node Replication (NR) is a library which can be used to implement a concurrent version
-//! of any single-threaded data structure. It takes in a single threaded implementation of
-//! said data structure, and scales it out to multiple cores and NUMA nodes by combining
-//! three techniques: reader-writer locks, operation logging and flat combining.
+//! Node-Replication creates linearizable NUMA-aware concurrent data structures
+//! from black-box sequential data structures. NR replicates the sequential data
+//! structure on each NUMA node and uses an operation log to maintain
+//! consistency between the replicas. Each replica benefits from read
+//! concurrency using a readers-writer lock and from write concurrency using a
+//! technique called flat combining. In a nutshell, flat combining batches
+//! operations from multiple threads to be executed by a single thread (the
+//! combiner). This thread also appends the batched operations to the log; other
+//! replicas read the log to update their internal states with the new
+//! operations.
 //!
 //! # How does it work
-//! To replicate a single-threaded data structure, one needs to implement the [`Dispatch`]
-//! trait for it. The following snippet implements [`Dispatch`] for
-//! `std::collections::HashMap` as an example. The full example (using [`NodeReplicated`]
-//! and [`Dispatch`] can be found in the
+//! To replicate a single-threaded data structure, one needs to implement the
+//! [`Dispatch`] trait for it. The following snippet implements [`Dispatch`] for
+//! `HashMap` as an example. The full example (using [`NodeReplicated`] and
+//! [`Dispatch`] can be found in the
 //! [examples](https://github.com/vmware/node-replication/tree/master/nr/examples/hashmap.rs)
 //! folder.
 //!
@@ -71,9 +77,9 @@
     allocator_api,
     box_syntax,
     generic_associated_types,
-    nonnull_slice_from_raw_parts
+    nonnull_slice_from_raw_parts,
+    doc_auto_cfg
 )]
-
 #[cfg(test)]
 extern crate std;
 
@@ -111,7 +117,8 @@ pub mod rwlock;
 use crate::log::{Log, MAX_REPLICAS_PER_LOG};
 use replica::{CombinerLock, Replica, ReplicaError, ReplicaId, ReplicaToken};
 
-/// Trait that a data structure must implement to be usable with this library.
+/// Trait that a (single-threaded) data structure must implement to be usable
+/// with this library.
 ///
 /// When this library executes a read-only operation against the data structure,
 /// it invokes the [`Dispatch::dispatch`] method with the `ReadOperation` as an
@@ -125,11 +132,12 @@ pub trait Dispatch {
     /// operation of this type must not mutate the data structure in anyway.
     /// Otherwise, the assumptions made by this library no longer hold.
     ///
-    /// [`Send`] is needed for async operations
-    #[cfg(feature = "async")]
-    type ReadOperation<'a>: Sized + Send;
+    /// # For feature `async`
+    /// - [`Send`] is currently needed for async operations
     #[cfg(not(feature = "async"))]
     type ReadOperation<'a>: Sized;
+    #[cfg(feature = "async")]
+    type ReadOperation<'a>: Sized + Send;
 
     /// A write operation. When executed against the data structure, an
     /// operation of this type is allowed to mutate state. The library ensures
@@ -151,30 +159,47 @@ pub trait Dispatch {
 
 /// A token handed out to threads registered with replicas.
 ///
-/// # Note
+/// # Implementation detail for potential future API
 /// For maximum type-safety this would be an affine type, then we'd have to
 /// return it again in `execute` and `execute_mut`. However it feels like this
 /// would hurt API ergonomics a lot.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct ThreadToken {
-    /// Which replica we're registered with.
+    /// The replica this thread is registered with (reading from).
+    ///
+    /// # Note
+    /// Usually this would represent e.g., the NUMA node of the thread.
     rid: ReplicaId,
     /// The registration token for this thread that we got from the replica
     /// (through [`Replica::register`]) identified by `rid`.
     rtkn: ReplicaToken,
 }
 
-/// Passed to the user specified function to indicate that we change the replica
-/// we're operating on to one that is *not* the replica which we're registered
-/// (e.g., not the one identified by `rid` in [`ThreadToken`]).
+/// Argument that is passed to a user specified function (in
+/// [`NodeReplicated::new`]) to indicate that our thread will change the replica
+/// it's operating on.
 ///
-/// # Note
+/// This means we change and operate on a replica that is *not* the replica
+/// which our thread originally registered with (e.g., not the one identified by
+/// `rid` in [`ThreadToken`]).
+///
+/// This can happen if a replica is behind and the current thread decides to
+/// make progress on that (remote) replica.
+///
+/// Getting these notifications is useful for example to maintain correct NUMA
+/// affinity: If each replica is on a different NUMA node, then we need to tell
+/// the OS that the current thread should allocate memory from a different NUMA
+/// node temporarily.
+///
+/// # Workflow
+///
 /// The pattern for the enum arguments that are passed to the affinity function
 /// always comes in pairs of `Replica` followed by `Revert`:
 ///
-/// 1. `old = affinty_function(AffinityChange::Replica(some_non_local_rid))`
-/// 2. library does some stuff with different affinity...
-/// 3. `affinity_change_function(AffinityChange::Revert(old))`
+/// 1. `old = affinty_function(AffinityChange::Replica(some_non_local_rid))`.
+/// 2. library remembers `old` and does some stuff with different affinity...
+/// 3. `affinity_change_function(AffinityChange::Revert(old))`.
+/// 4. library continues to do work with original affinity of thread.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum AffinityChange {
     /// Indicates that the system will execute operation on behalf of a
@@ -272,9 +297,10 @@ impl ThreadToken {
     }
 }
 
-/// Erros that can be encountered when interacting with [`NodeReplicated`].
+/// Errors that can be encountered by interacting with [`NodeReplicated`].
 #[derive(Debug)]
 pub enum NodeReplicatedError {
+    /// Not enough memory to create a [`NodeReplicated`] instance.
     OutOfMemory,
 }
 
@@ -290,6 +316,15 @@ impl From<alloc::collections::TryReserveError> for NodeReplicatedError {
     }
 }
 
+/// The "main" type of this library.
+///
+/// It is used to wrap a single threaded data-structure that implements
+/// [`Dispatch`]. It will create a configurable number of [`Replica`] and
+/// allocate a [`Log`] to synchronize replicas. It also hands out
+/// [`ThreadToken`] for each thread that wants to interact with the
+/// [`NodeReplicated`] instance. Finally, it routes threads to the correct
+/// replica and handles liveness of replicas by making sure to advance replicas
+/// which are behind automatically.
 pub struct NodeReplicated<D: Dispatch + Sync> {
     log: Log<D::WriteOperation>,
     replicas: Vec<Box<Replica<D>>>,
@@ -300,6 +335,71 @@ impl<D> NodeReplicated<D>
 where
     D: Default + Dispatch + Sized + Sync,
 {
+    /// Creates a new, replicated data-structure from a single-threaded
+    /// data-structure that implements [`Dispatch`]. It uses the [`Default`]
+    /// constructor to create a initial data-structure for `D` on all replicas.
+    ///
+    /// # Arguments
+    /// - `num_replicas`: How many replicas you want to create. Typically the
+    ///   number of NUMA nodes in your system.
+    /// - `chg_mem_affinity`: A user-provided function that is called whenever
+    ///   the code operates on a certain [`Replica`] that is not local to the
+    ///   thread that we're running on (can happen if a replica falls behind and
+    ///   we're temporarily executing operation on behalf of this replica so we
+    ///   can make progress on our own replica). This function can be used to
+    ///   ensure that memory will still be allocated from the right NUMA node.
+    ///   See [`AffinityChange`] for more information on how implement this
+    ///   function and handle its arguments.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// /// A function to change affinity to a given NUMA node on Linux
+    /// /// (it works by migrating the current thread to the cores of the given NUMA node)
+    /// fn linux_chg_affinity(af: AffinityChange) -> usize {
+    ///     match af {
+    ///         // System requests to change affinity to replica with `rid`
+    ///         AffinityChange::Replica(rid) => {
+    ///             // figure out where we're currently running:
+    ///             let mut cpu: usize = 0;
+    ///             let mut node: usize = 0;
+    ///             unsafe { nix::libc::syscall(nix::libc::SYS_getcpu, &mut cpu, &mut node, 0) };
+    ///
+    ///             // figure out all cores we can potentially on run for
+    ///             // correct affinity with new rid:
+    ///             let mut cpu_set = nix::sched::CpuSet::new();
+    ///             for ncpu in MACHINE_TOPOLOGY.cpus_on_node(rid as u64) {
+    ///                 cpu_set.set(ncpu.cpu as usize);
+    ///             }
+    ///             // pin current thread to these cores
+    ///             nix::sched::sched_setaffinity(nix::unistd::Pid::from_raw(0), &cpu_set);
+    ///             // return the cpu id where we were originally running on
+    ///             cpu as usize
+    ///         }
+    ///         // System requests to revert affinity to original replica (`old`)
+    ///         AffinityChange::Revert(core_id) => {
+    ///             // `core_id` is the cpu number we returned above
+    ///             let mut cpu_set = nix::sched::CpuSet::new();
+    ///             cpu_set.set(core_id);
+    ///             // Migrate thread back to old core_id
+    ///             nix::sched::sched_setaffinity(nix::unistd::Pid::from_raw(0), &cpu_set);
+    ///             0x0 // return value is ignored for `Revert`
+    ///         }
+    ///     }
+    /// }
+    ///
+    /// let replicas = NonZeroUsize::new(2).unwrap();
+    /// let nrht = NodeReplicated::<NrHashMap>::new(replicas, linux_chg_affinity).unwrap();
+    /// ```
+    pub fn new(
+        num_replicas: NonZeroUsize,
+        chg_mem_affinity: impl Fn(AffinityChange) -> usize + Send + Sync + 'static,
+    ) -> Result<Self, NodeReplicatedError> {
+        Self::with_log_size(num_replicas, chg_mem_affinity, log::DEFAULT_LOG_BYTES)
+    }
+
+    /// Same as [`NodeReplicated::new`], but in addition use a non-default size
+    /// (provided in bytes) for the [`Log`].
     pub fn with_log_size(
         num_replicas: NonZeroUsize,
         chg_mem_affinity: impl Fn(AffinityChange) -> usize + Send + Sync + 'static,
@@ -335,42 +435,16 @@ where
             affinity_mngr,
         })
     }
-    /// Creates a new, replicated data-structure from a single-threaded
-    /// data-structure that implements [`Dispatch`]. It also uses the
-    /// [`Default`] constructor to create a initial data-structure on all
-    /// replicas (`num_replicas` times).
-    ///
-    /// # Arguments
-    /// - `num_replicas`: How many replicas you want to create. Typically the
-    ///   number of NUMA nodes in your system.
-    /// - `chg_mem_affinity`: A user-provided function that is called whenever
-    ///   the code operates on a certain [`Replica`] that is not local to the
-    ///   thread that we're running on (can happen if a replica falls behind and
-    ///   we're temporarily executing operation on behalf of this replica so we
-    ///   can make progress on our own replica). This function is used to ensure
-    ///   that memory will still be allocated from the right NUMA node. See
-    ///   [`AffinityChange`] for more information on how implement this function
-    ///   and handle its arguments.
-    pub fn new(
-        num_replicas: NonZeroUsize,
-        chg_mem_affinity: impl Fn(AffinityChange) -> usize + Send + Sync + 'static,
-    ) -> Result<Self, NodeReplicatedError> {
-        Self::with_log_size(num_replicas, chg_mem_affinity, log::DEFAULT_LOG_BYTES)
-    }
 }
 
 impl<D> NodeReplicated<D>
 where
     D: Clone + Dispatch + Sized + Sync,
 {
-    /// Creates a new, replicated data-structure from a single-threaded data-structure
-    /// (`ds`) that implements [`Dispatch`].
+    /// Same as [`NodeReplicated::new`], but provide the initial data-structure
+    /// `ds` (which may not have a [`Default`] constructor).
     ///
-    /// # Arguments
-    /// See [`NodeReplicated::new`].
-    ///
-    /// # Example
-    /// TBD.
+    /// `ds` will be cloned for each replica.
     pub fn with_data(
         _num_replicas: NonZeroUsize,
         _chg_mem_affinity: impl Fn(AffinityChange) -> usize + Send + Sync + 'static,
@@ -389,17 +463,40 @@ where
     /// registration was successful. None if the registration failed.
     ///
     /// The [`ThreadToken`] is used to identify the thread to issue the
-    /// operation for subsequent [`NodeReplicated::execute()`] and
+    /// operation for subsequent [`NodeReplicated::execute`] and
     /// [`NodeReplicated::execute_mut`] calls.
     ///
     /// # Arguments
+    ///
     /// - `replica_id`: Which replica the thread should be registered with. This
     /// should be less than the `num_replicas` argument provided in the
-    /// constructor (see [`NodeReplicated::new()`]). In most cases, `replica_id`
+    /// constructor (see [`NodeReplicated::new`]). In most cases, `replica_id`
     /// will correspond to the NUMA node that the thread is running on.
     ///
     /// # Example
-    /// TBD.
+    ///
+    /// ```
+    /// #![feature(generic_associated_types)]
+    /// use core::num::NonZeroUsize;
+    /// use node_replication::NodeReplicated;
+    /// use node_replication::Dispatch;
+    ///
+    /// #[derive(Default)]
+    /// struct Void;
+    /// impl Dispatch for Void {
+    ///     type ReadOperation<'rop> = ();
+    ///     type WriteOperation = ();
+    ///     type Response = ();
+    ///
+    ///     fn dispatch<'rop>(&self, op: <Self as Dispatch>::ReadOperation<'rop>) -> <Self as Dispatch>::Response {}
+    ///     fn dispatch_mut(&mut self, op: <Self as Dispatch>::WriteOperation) -> <Self as Dispatch>::Response {}
+    /// }
+    ///
+    /// let replicas = NonZeroUsize::new(2).unwrap();
+    /// let nrht = NodeReplicated::<Void>::new(replicas, |_| { 0 }).unwrap();
+    /// let ttkn = nrht.register(0).unwrap();
+    /// assert!(nrht.register(replicas.get()).is_none());
+    /// ```
     pub fn register(&self, replica_id: ReplicaId) -> Option<ThreadToken> {
         if replica_id < self.replicas.len() {
             let rtkn = self.replicas[replica_id].register()?;
@@ -424,6 +521,56 @@ where
         }
     }
 
+    /// Executes a mutable operation against the data-structure.
+    ///
+    /// Thanks to the [`Log`] that [`NodeReplicated`] uses, all replicas will
+    /// execute all mutable operations in the same order.
+    ///
+    ///  This method is similar to the one found in [`Replica::execute_mut`],
+    /// but in addition, it handles liveness issues due to lagging replicas
+    /// (which a single replica can not).
+    ///
+    /// # Arguments
+    /// - `op`: Which operation to execute.
+    /// - `tkn`: Which thread executes the operation (see also
+    ///   [`NodeReplicated::register`]).
+    ///
+    /// # Flow
+    /// Eventually, this method calls [`Replica::execute_mut`] which will call
+    /// into [`Dispatch::dispatch_mut`].
+    ///
+    /// # Example
+    /// ```
+    /// #![feature(generic_associated_types)]
+    /// use core::num::NonZeroUsize;
+    /// use node_replication::NodeReplicated;
+    /// use node_replication::Dispatch;
+    ///
+    /// #[derive(Default)]
+    /// struct Void;
+    /// impl Dispatch for Void {
+    ///     type ReadOperation<'rop> = ();
+    ///     type WriteOperation = usize;
+    ///     type Response = usize;
+    ///
+    ///     fn dispatch<'rop>(&self, op: <Self as Dispatch>::ReadOperation<'rop>) -> <Self as Dispatch>::Response {
+    ///         unreachable!("no read-op is issued")
+    ///     }
+    ///     fn dispatch_mut(&mut self, op: <Self as Dispatch>::WriteOperation) -> <Self as Dispatch>::Response {
+    ///         assert!(op == 99);
+    ///         // "eventually", because if we just do one `execute_mut` call
+    ///         // we won't immediately advance the 2nd replica
+    ///         println!("Having two replicas means I'm (eventually) called twice");
+    ///         0xbeef
+    ///     }
+    /// }
+    ///
+    /// let replicas = NonZeroUsize::new(2).unwrap();
+    /// let nrht = NodeReplicated::<Void>::new(replicas, |_| { 0 }).unwrap();
+    /// let ttkn = nrht.register(0).unwrap();
+    ///
+    /// assert_eq!(nrht.execute_mut(99, ttkn), 0xbeef);
+    /// ```
     pub fn execute_mut(
         &self,
         op: <D as Dispatch>::WriteOperation,
@@ -498,6 +645,52 @@ where
         }
     }
 
+    /// Executes a immutable operation against the data-structure.
+    ///
+    /// Multiple threads can read from the data-structure in parallel.
+    ///
+    ///  This method is similar to the one found in [`Replica::execute`], but in
+    /// addition, it handles liveness issues due to lagging replicas (which a
+    /// single replica can not).
+    ///
+    /// # Arguments
+    /// - `op`: Which operation to execute.
+    /// - `tkn`: Which thread executes the operation (see also
+    ///   [`NodeReplicated::register`]).
+    ///
+    /// # Flow
+    /// Eventually, this method calls [`Replica::execute`] which will call into
+    /// [`Dispatch::dispatch`].
+    ///
+    /// # Example
+    /// ```
+    /// #![feature(generic_associated_types)]
+    /// use core::num::NonZeroUsize;
+    /// use node_replication::NodeReplicated;
+    /// use node_replication::Dispatch;
+    ///
+    /// #[derive(Default)]
+    /// struct Void;
+    /// impl Dispatch for Void {
+    ///     type ReadOperation<'rop> = usize;
+    ///     type WriteOperation = ();
+    ///     type Response = usize;
+    ///
+    ///     fn dispatch<'rop>(&self, op: <Self as Dispatch>::ReadOperation<'rop>) -> <Self as Dispatch>::Response {
+    ///         assert!(op == 99);
+    ///         0xbeef
+    ///     }
+    ///     fn dispatch_mut(&mut self, op: <Self as Dispatch>::WriteOperation) -> <Self as Dispatch>::Response {
+    ///         unreachable!("no immutable op is issued")
+    ///     }
+    /// }
+    ///
+    /// let replicas = NonZeroUsize::new(2).unwrap();
+    /// let nrht = NodeReplicated::<Void>::new(replicas, |_| { 0 }).unwrap();
+    /// let ttkn = nrht.register(0).unwrap();
+    ///
+    /// assert_eq!(nrht.execute(99, ttkn), 0xbeef);
+    /// ```
     pub fn execute<'rop>(
         &self,
         op: <D as Dispatch>::ReadOperation<'rop>,
@@ -556,8 +749,7 @@ where
     ///
     /// # Note
     /// Currently a trivial "async" implementation as we just call the blocking
-    /// call [`NodeReplicated::execute`] and wrap it in `async`. Needs to exploit
-    /// "asyncness" in NR.
+    /// call [`NodeReplicated::execute`] and wrap it in `async`.
     #[cfg(feature = "async")]
     pub async fn async_execute_mut<'a>(
         &'a self,
@@ -573,8 +765,7 @@ where
     ///
     /// # Note
     /// Currently a trivial "async" implementation as we just call the blocking
-    /// call [`NodeReplicated::execute`] and wrap it in `async`. Needs to exploit
-    /// "asyncness" in NR.
+    /// call [`NodeReplicated::execute`] and wrap it in `async`.
     #[cfg(feature = "async")]
     pub fn async_execute<'a, 'rop: 'a>(
         &'a self,
@@ -585,6 +776,7 @@ where
         resp.set(async move { self.execute(op, tkn) });
     }
 
+    #[doc(hidden)]
     pub fn sync(&self, tkn: ThreadToken) {
         match self.replicas[tkn.rid].sync(&self.log) {
             Ok(r) => r,
