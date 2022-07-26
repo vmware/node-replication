@@ -1276,11 +1276,11 @@ mod test {
     }
 
     impl Dispatch for Data {
-        type ReadOperation = OpRd;
+        type ReadOperation<'rop> = OpRd;
         type WriteOperation = OpWr;
         type Response = Result<usize, ()>;
 
-        fn dispatch(&self, _op: Self::ReadOperation) -> Self::Response {
+        fn dispatch<'rop>(&self, _op: Self::ReadOperation<'rop>) -> Self::Response {
             Ok(self.junk.load(Ordering::Relaxed))
         }
 
@@ -1499,11 +1499,11 @@ mod test {
         }
 
         impl Dispatch for Block {
-            type ReadOperation = OpRd;
+            type ReadOperation<'rop> = OpRd;
             type WriteOperation = OpWr;
             type Response = Result<usize, ()>;
 
-            fn dispatch(&self, _op: Self::ReadOperation) -> Self::Response {
+            fn dispatch<'rop>(&self, _op: Self::ReadOperation<'rop>) -> Self::Response {
                 Ok(self.junk.load(Ordering::Relaxed))
             }
 
@@ -1590,11 +1590,11 @@ mod test {
     }
 
     impl Dispatch for ScanDS {
-        type ReadOperation = ReadOp;
+        type ReadOperation<'rop> = ReadOp;
         type WriteOperation = WriteOp;
         type Response = Result<usize, ()>;
 
-        fn dispatch(&self, _op: Self::ReadOperation) -> Self::Response {
+        fn dispatch<'rop>(&self, _op: Self::ReadOperation<'rop>) -> Self::Response {
             Ok(self.junk.load(Ordering::Relaxed))
         }
 
