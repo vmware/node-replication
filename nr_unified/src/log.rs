@@ -92,6 +92,9 @@ where
 
     /// Indicates whether this entry represents a valid operation when on the log.
     pub(crate) alivef: AtomicBool,
+    /// Meta-data associated with this entry.
+    ///
+    /// The meta-data is generic and depends on which variant (NR/CNR) is used.
     pub(crate) metadata: M,
 }
 
