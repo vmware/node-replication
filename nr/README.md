@@ -105,21 +105,13 @@ After `x=96`, the remaining hyper-threads are used.
 
 ## Compile the library
 
-The works with `no_std` and a stable rust compiler.
+The works with `no_std` and currently requires a nightly rust compiler.
 
 ```bash
 cargo build
 ```
 
-If you are using a nightly rust compiler, you can compile the library to make
-use of some more recent features (`new_uninit`, and `get_mut_unchecked`,
-`negative_impls`):
-
-```bash
-cargo build --features unstable
-```
-
-As a dependency in your `Cargo.toml`:
+As it as a dependency in your `Cargo.toml`:
 
 ```toml
 node-replication = "*"
