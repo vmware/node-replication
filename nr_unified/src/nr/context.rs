@@ -10,6 +10,9 @@ use crossbeam_utils::CachePadded;
 
 pub use crate::context::MAX_PENDING_OPS;
 
+/// The NR per-thread context.
+///
+/// It stores every outstanding request (`T`) and response (`R`) pair.
 pub(crate) type Context<T, R> = crate::context::Context<T, R, ()>;
 
 impl<T, R> Context<T, R>
@@ -45,6 +48,7 @@ where
             n += 1;
         }
 
+        assert_eq!(n, t - h, "just return t-h?");
         n
     }
 }

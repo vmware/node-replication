@@ -15,10 +15,10 @@ pub use crate::context::MAX_PENDING_OPS;
 /// Cell contains: `hash`, `is_scan`, `is_read_only`
 pub(crate) type PendingMetaData = (usize, bool, bool);
 
-/// The CNR context.
+/// The CNR per-thread context.
 ///
-/// It stores additional [`PendingMetaData`] for every request (`T`) / response
-/// (`R`) pair.
+/// It stores every outstanding request (`T`) and response (`R`) pair with some
+/// additional [`PendingMetaData`].
 pub(crate) type Context<T, R> = crate::context::Context<T, R, PendingMetaData>;
 
 impl<T, R> Context<T, R>
