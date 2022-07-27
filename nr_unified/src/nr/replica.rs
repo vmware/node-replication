@@ -782,7 +782,7 @@ where
     /// indicating whether the operation was enqueued (true) or not (false).
     #[inline(always)]
     fn make_pending(&self, op: <D as Dispatch>::WriteOperation, idx: usize) -> bool {
-        self.contexts[idx - 1].enqueue(op)
+        self.contexts[idx - 1].enqueue(op, ())
     }
 
     // Try to become acquire the combiner lock here. If this fails, then return None.

@@ -22,7 +22,8 @@ const_assert!(MAX_PENDING_OPS.is_power_of_two());
 /// It is a combination of the its op-code (`T`), the corresponding result (`R`)
 /// along with potential meta-data (`M`) to keep track of other things.
 pub struct PendingOperation<T, R, M: Default> {
-    pub(crate) op: Cell<(Option<T>, Option<R>)>,
+    pub(crate) op: Cell<Option<T>>,
+    pub(crate) resp: Cell<Option<R>>,
     pub(crate) meta: Cell<M>,
 }
 
@@ -32,7 +33,8 @@ where
 {
     fn default() -> Self {
         PendingOperation {
-            op: Cell::new((None, None)),
+            op: Cell::new(None),
+            resp: Cell::new(None),
             meta: Default::default(),
         }
     }
@@ -123,6 +125,32 @@ where
         }
     }
 
+    /// Enqueues an operation onto this context's batch of pending operations.
+    ///
+    /// Returns true if the operation was successfully enqueued. False
+    /// otherwise.
+    #[inline(always)]
+    pub(crate) fn enqueue(&self, op: T, meta: M) -> bool {
+        let t = self.tail.load(Ordering::Relaxed);
+        let h = self.head.load(Ordering::Relaxed);
+
+        // Check if we have space in the batch to hold this operation. If we
+        // don't, then return false to the caller thread.
+        if t - h == MAX_PENDING_OPS {
+            return false;
+        }
+
+        // Add in the operation to the batch. Once added, update the tail so
+        // that the combiner sees this operation. Relying on TSO here to make
+        // sure that the tail is updated only after the operation has been
+        // written in.
+        let e = self.batch[self.index(t)].op.replace(Some(op));
+        let m = self.batch[self.index(t)].meta.replace(meta);
+
+        self.tail.store(t + 1, Ordering::Relaxed);
+        true
+    }
+
     /// Enqueues a batch of responses onto this context. This is invoked by the combiner
     /// after it has executed operations (obtained through a call to ops()) against the
     /// replica this thread is registered against.
@@ -149,12 +177,7 @@ where
     #[inline(always)]
     pub(crate) fn enqueue_resp(&self, response: R) {
         let h = self.comb.load(Ordering::Relaxed);
-
-        let e = self.batch[self.index(h)].op.as_ptr();
-        unsafe {
-            (*e).1 = Some(response);
-        }
-
+        let e = self.batch[self.index(h)].resp.replace(Some(response));
         self.comb.store(h + 1, Ordering::Relaxed);
     }
 
@@ -174,7 +197,7 @@ where
         }
 
         self.head.store(s + 1, Ordering::Relaxed);
-        unsafe { (*self.batch[self.index(s)].op.as_ptr()).1.clone() }
+        self.batch[self.index(s)].resp.take()
     }
 
     /// Returns the maximum number of operations that will go pending on this context.
@@ -209,8 +232,8 @@ mod test {
     #[test]
     fn test_context_enqueue() {
         let c = Context::<u64, Result<u64, ()>, ()>::default();
-        assert!(c.enqueue(121));
-        unsafe { assert_eq!((*c.batch[0].op.as_ptr()).0, Some(121)) };
+        assert!(c.enqueue(121, ()));
+        unsafe { assert_eq!((*c.batch[0].op.as_ptr()), Some(121)) };
         assert_eq!(c.tail.load(Ordering::Relaxed), 1);
         assert_eq!(c.head.load(Ordering::Relaxed), 0);
         assert_eq!(c.comb.load(Ordering::Relaxed), 0);
@@ -222,7 +245,7 @@ mod test {
         let c = Context::<u64, Result<u64, ()>, ()>::default();
         c.tail.store(MAX_PENDING_OPS, Ordering::Relaxed);
 
-        assert!(!c.enqueue(100));
+        assert!(!c.enqueue(100, ()));
         assert_eq!(c.tail.load(Ordering::Relaxed), MAX_PENDING_OPS);
         assert_eq!(c.head.load(Ordering::Relaxed), 0);
         assert_eq!(c.comb.load(Ordering::Relaxed), 0);
@@ -242,10 +265,10 @@ mod test {
         assert_eq!(c.head.load(Ordering::Relaxed), 0);
         assert_eq!(c.comb.load(Ordering::Relaxed), 16);
 
-        assert_eq!(c.batch[12].op.get().1, Some(r[0]));
-        assert_eq!(c.batch[13].op.get().1, Some(r[1]));
-        assert_eq!(c.batch[14].op.get().1, Some(r[2]));
-        assert_eq!(c.batch[15].op.get().1, Some(r[3]));
+        assert_eq!(c.batch[12].resp.get(), Some(r[0]));
+        assert_eq!(c.batch[13].resp.get(), Some(r[1]));
+        assert_eq!(c.batch[14].resp.get(), Some(r[2]));
+        assert_eq!(c.batch[15].resp.get(), Some(r[3]));
     }
 
     // Tests that attempting to enqueue an empty batch of responses on the context
@@ -263,7 +286,7 @@ mod test {
         assert_eq!(c.head.load(Ordering::Relaxed), 0);
         assert_eq!(c.comb.load(Ordering::Relaxed), 12);
 
-        assert_eq!(c.batch[12].op.get().1, None);
+        assert_eq!(c.batch[12].resp.get(), None);
     }
 
     // Tests whether we can retrieve responses enqueued on this context.

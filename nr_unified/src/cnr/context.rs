@@ -13,7 +13,7 @@ pub use crate::context::MAX_PENDING_OPS;
 /// Pending operation meta-data for CNR.
 ///
 /// Cell contains: `hash`, `is_scan`, `is_read_only`
-pub(crate) type PendingMetaData = (Option<usize>, Option<bool>, Option<bool>);
+pub(crate) type PendingMetaData = (usize, bool, bool);
 
 /// The CNR context.
 ///
@@ -26,36 +26,6 @@ where
     T: Sized + Clone,
     R: Sized + Clone,
 {
-    /// Enqueues an operation onto this context's batch of pending operations.
-    ///
-    /// Returns true if the operation was successfully enqueued. False
-    /// otherwise.
-    #[inline(always)]
-    pub(crate) fn enqueue(&self, op: T, hash: usize, is_scan: bool, is_read_only: bool) -> bool {
-        let t = self.tail.load(Ordering::Relaxed);
-        let h = self.head.load(Ordering::Relaxed);
-
-        // Check if we have space in the batch to hold this operation. If we
-        // don't, then return false to the caller thread.
-        if t - h == MAX_PENDING_OPS {
-            return false;
-        }
-
-        // Add in the operation to the batch. Once added, update the tail so
-        // that the combiner sees this operation. Relying on TSO here to make
-        // sure that the tail is updated only after the operation has been
-        // written in.
-        let e = self.batch[self.index(t)].op.as_ptr();
-        let m = self.batch[self.index(t)].meta.as_ptr();
-        unsafe { (*e).0 = Some(op) };
-        unsafe { (*m).0 = Some(hash) };
-        unsafe { (*m).1 = Some(is_scan) };
-        unsafe { (*m).2 = Some(is_read_only) };
-
-        self.tail.store(t + 1, Ordering::Relaxed);
-        true
-    }
-
     /// Adds any pending operations on this context to a passed in buffer.
     /// Returns the the number of such operations that were added in.
     #[inline(always)]
@@ -84,14 +54,11 @@ where
             // By construction, we know that everything between `comb` and
             // `tail` is a valid operation ready for flat combining. Hence,
             // calling unwrap() here on the operation is safe.
-            let e = self.batch[self.index(i)].op.as_ptr();
-            let m = self.batch[self.index(i)].meta.as_ptr();
-            let hash_match = unsafe { (*m).0 } == Some(hash);
-            let is_scan = unsafe { (*m).1.unwrap() };
-            let is_read_only = unsafe { (*m).2.unwrap() };
+            let op = self.batch[self.index(i)].op.take().unwrap();
+            let (entry_hash, is_scan, is_read_only) = self.batch[self.index(i)].meta.get();
+            let hash_match = entry_hash == hash;
 
             if hash_match {
-                let op = unsafe { (*e).0.as_ref().unwrap().clone() };
                 if is_scan {
                     scan_buffer.push((op, self.idx, is_read_only))
                 } else {
@@ -119,7 +86,7 @@ mod test {
         let mut scan = vec![];
 
         for idx in 0..MAX_PENDING_OPS / 2 {
-            assert!(c.enqueue(idx * idx, 1, false, false))
+            assert!(c.enqueue(idx * idx, (1, false, false)))
         }
 
         assert_eq!(c.ops(&mut o, &mut scan, 1), MAX_PENDING_OPS / 2);
@@ -142,7 +109,7 @@ mod test {
         let mut scan = vec![];
 
         for idx in 0..MAX_PENDING_OPS / 2 {
-            assert!(c.enqueue(idx * idx, 1, true, false))
+            assert!(c.enqueue(idx * idx, (1, true, false)))
         }
 
         assert_eq!(c.ops(&mut o, &mut scan, 1), MAX_PENDING_OPS / 2);

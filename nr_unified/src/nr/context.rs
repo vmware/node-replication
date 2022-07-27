@@ -17,32 +17,6 @@ where
     T: Sized + Clone,
     R: Sized + Clone,
 {
-    /// Enqueues an operation onto this context's batch of pending operations.
-    ///
-    /// Returns true if the operation was successfully enqueued. False
-    /// otherwise.
-    #[inline(always)]
-    pub(crate) fn enqueue(&self, op: T) -> bool {
-        let t = self.tail.load(Ordering::Relaxed);
-        let h = self.head.load(Ordering::Relaxed);
-
-        // Check if we have space in the batch to hold this operation. If we
-        // don't, then return false to the caller thread.
-        if t - h == MAX_PENDING_OPS {
-            return false;
-        }
-
-        // Add in the operation to the batch. Once added, update the tail so
-        // that the combiner sees this operation. Relying on TSO here to make
-        // sure that the tail is updated only after the operation has been
-        // written in.
-        let e = self.batch[self.index(t)].op.as_ptr();
-        unsafe { (*e).0 = Some(op) };
-
-        self.tail.store(t + 1, Ordering::Relaxed);
-        true
-    }
-
     /// Adds any pending operations on this context to a passed in buffer.
     /// Returns the the number of such operations that were added in.
     #[inline(always)]
@@ -66,8 +40,7 @@ where
             // By construction, we know that everything between `comb` and
             // `tail` is a valid operation ready for flat combining. Hence,
             // calling unwrap() here on the operation is safe.
-            let e = self.batch[self.index(i)].op.as_ptr();
-            let op = unsafe { (*e).0.as_ref().unwrap().clone() };
+            let op = self.batch[self.index(i)].op.take().unwrap();
             buffer.push(op);
             n += 1;
         }
