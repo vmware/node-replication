@@ -16,9 +16,9 @@ use crossbeam_utils::CachePadded;
 pub use crate::log::DEFAULT_LOG_BYTES;
 pub use crate::log::MAX_REPLICAS_PER_LOG;
 
+pub use crate::log::LogToken;
 pub use crate::log::GC_FROM_HEAD;
 pub use crate::log::WARN_THRESHOLD;
-pub use crate::nr::log::LogToken;
 
 /// Callback function which indicates which replicas need to be advanced for GC
 /// to make progress.
