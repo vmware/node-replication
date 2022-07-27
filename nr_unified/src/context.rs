@@ -17,12 +17,13 @@ pub(crate) const MAX_PENDING_OPS: usize = 1;
 // This constant must be a power of two for `index()` to work.
 const_assert!(MAX_PENDING_OPS.is_power_of_two());
 
-/// A pending operation is a combination of the its op-code (`T`), and the
-/// corresponding result (`R`) along with potential meta-data (`M`) to keep track
-/// of other things.
+/// A pending operation.
+///
+/// It is a combination of the its op-code (`T`), the corresponding result (`R`)
+/// along with potential meta-data (`M`) to keep track of other things.
 pub struct PendingOperation<T, R, M: Default> {
     pub(crate) op: Cell<(Option<T>, Option<R>)>,
-    pub(crate) meta: M,
+    pub(crate) meta: Cell<M>,
 }
 
 impl<T, R, M> Default for PendingOperation<T, R, M>
@@ -37,19 +38,23 @@ where
     }
 }
 
-/// Contains all state local to a particular thread.
+/// Contains state of a particular thread w.r.g. to outstanding operations.
 ///
-/// The primary purpose of this type is to batch operations issued on a thread before
-/// appending them to the shared log. This is achieved using a fixed sized array. Once
-/// executed against the replica, the results of these operations are stored back into
-/// the same array.
+/// The primary purpose of this type is to batch operations issued on a thread
+/// before appending them to the shared log. This is achieved using a fix sized
+/// buffer. Once operations are executed against the replica, the results of the
+/// operations are stored back into the same buffer.
 ///
-/// `T` is a type parameter required by the struct. `T` should identify operations
-/// issued by the thread (an opcode of sorts) and should also contain arguments/parameters
-/// required to execute these operations on the replicas.
+/// # Generic arguments
 ///
-/// `R` is a type parameter required by the struct. It is the type on the result obtained
-/// when an operation is executed against the replica.
+/// - `T` should identify operations issued by the thread (an opcode of sorts)
+/// and should also contain arguments/parameters required to execute these
+/// operations on the replicas.
+///
+/// - `R` is the type of the result obtained when an operation is executed
+/// against the replica.
+///
+/// - `M` is the type of meta-data that is associated with each operation.
 #[repr(align(64))]
 pub(crate) struct Context<T, R, M>
 where
@@ -57,26 +62,27 @@ where
     R: Sized + Clone,
     M: Default,
 {
-    /// Array that will hold all pending operations to be appended to the shared log as
-    /// well as the results obtained on executing them against a replica.
+    /// Array that will hold all pending operations to be appended to the shared
+    /// log as well as the results obtained on executing them against a replica.
     pub(crate) batch: [CachePadded<PendingOperation<T, R, M>>; MAX_PENDING_OPS],
 
-    /// Logical array index at which new operations will be enqueued into the batch.
-    /// This variable is updated by the thread that owns this context, and is read by the
-    /// combiner. We can avoid making it an atomic by assuming we're on x86.
+    /// Logical array index at which new operations will be enqueued into the
+    /// batch. This variable is updated by the thread that owns this context,
+    /// and is read by the combiner.
     pub tail: CachePadded<AtomicUsize>,
 
-    /// Logical array index from which any attempt to dequeue responses will be made.
-    /// This variable is only accessed by the thread that owns this context.
+    /// Logical array index from which any attempt to dequeue responses will be
+    /// made. This variable is only accessed by the thread that owns this
+    /// context.
     pub head: CachePadded<AtomicUsize>,
 
-    /// Logical array index from which the operations will be dequeued for flat combining.
-    /// This variable is updated by the combiner, and is read by the thread that owns this context.
-    /// We can avoid making it an atomic by assuming we're on x86.
+    /// Logical array index from which the operations will be dequeued for flat
+    /// combining. This variable is updated by the combiner, and is read by the
+    /// thread that owns this context.
     pub comb: CachePadded<AtomicUsize>,
 
-    /// Identifies the context number with-in a replica. Id also maps to the thread-id because
-    /// the partitioned nature of the contexts in the replica.
+    /// Identifies the context number within a replica. It also maps to the
+    /// thread-id because the partitioned nature of the contexts in the replica.
     pub idx: usize,
 }
 

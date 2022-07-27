@@ -13,7 +13,7 @@ pub use crate::context::MAX_PENDING_OPS;
 /// Pending operation meta-data for CNR.
 ///
 /// Cell contains: `hash`, `is_scan`, `is_read_only`
-pub(crate) type PendingMetaData = Cell<(Option<usize>, Option<bool>, Option<bool>)>;
+pub(crate) type PendingMetaData = (Option<usize>, Option<bool>, Option<bool>);
 
 /// The CNR context.
 ///
