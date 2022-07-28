@@ -5,6 +5,7 @@
 #![allow(dead_code)]
 #![feature(test)]
 #![feature(bench_black_box)]
+#![feature(generic_associated_types)]
 
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -14,7 +15,7 @@ use rand::seq::SliceRandom;
 use rand::{distributions::Distribution, Rng, RngCore};
 use zipf::ZipfDistribution;
 
-use node_replication::{Dispatch, NodeReplicated};
+use node_replication::nr::{Dispatch, NodeReplicated};
 
 mod hashmap_comparisons;
 mod mkbench;
@@ -100,11 +101,11 @@ impl Default for NrHashMap {
 }
 
 impl Dispatch for NrHashMap {
-    type ReadOperation = OpRd;
+    type ReadOperation<'rop> = OpRd;
     type WriteOperation = OpWr;
     type Response = Result<Option<u64>, ()>;
 
-    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
+    fn dispatch<'rop>(&self, op: Self::ReadOperation<'rop>) -> Self::Response {
         match op {
             OpRd::Get(key) => return Ok(self.get(key)),
         }
@@ -227,10 +228,10 @@ fn hashmap_scale_out<R>(c: &mut TestHarness, name: &str, write_ratio: usize)
 where
     R: DsInterface + Send + Sync + 'static,
     R::D: Send,
-    R::D: Dispatch<ReadOperation = OpRd>,
+    R::D: Dispatch<ReadOperation<'static> = OpRd>,
     R::D: Dispatch<WriteOperation = OpWr>,
     <R::D as Dispatch>::WriteOperation: Send + Sync,
-    <R::D as Dispatch>::ReadOperation: Send + Sync,
+    <R::D as Dispatch>::ReadOperation<'static>: Send + Sync,
     <R::D as Dispatch>::Response: Sync + Send + Debug,
 {
     let ops = generate_operations(NOP, write_ratio, KEY_SPACE, UNIFORM);
@@ -289,7 +290,7 @@ fn partitioned_hashmap_scale_out(c: &mut TestHarness, name: &str, write_ratio: u
 
 fn concurrent_ds_scale_out<T>(c: &mut TestHarness, name: &str, write_ratio: usize)
 where
-    T: Dispatch<ReadOperation = OpConcurrent>,
+    T: Dispatch<ReadOperation<'static> = OpConcurrent>,
     T: Dispatch<WriteOperation = ()>,
     T: 'static,
     T: Dispatch + Sync + Default + Send,

@@ -71,7 +71,7 @@ pub struct LogMetaData {
 }
 
 impl LogMetaData {
-    pub(crate) fn new(idx: usize) -> Self {
+    pub fn new(idx: usize) -> Self {
         #[allow(clippy::declare_interior_mutable_const)]
         const DORMANT_DEFAULT: AtomicBool = AtomicBool::new(false);
 
@@ -89,7 +89,7 @@ impl LogMetaData {
 
 impl Default for LogMetaData {
     fn default() -> Self {
-        Self::new(0)
+        Self::new(1)
     }
 }
 
@@ -496,6 +496,40 @@ where
                 self.exec(rid, &mut s);
             }
         }
+    }
+
+    /// The application calls this function to update the callback function.
+    /// The application does not need to call this function if it knows that all
+    /// the replicas are active for this log and no replica will lag behind.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use cnr::Log;
+    /// use core::sync::atomic::AtomicBool;
+    ///
+    /// // Operation type that will go onto the log.
+    /// #[derive(Clone)]
+    /// enum Operation {
+    ///     Read,
+    ///     Write(u64),
+    ///     Invalid,
+    /// }
+    ///
+    /// // Creates a 1 Mega Byte sized log.
+    /// let mut l = Log::<Operation>::new(1 * 1024 * 1024, 1);
+    ///
+    /// // Update the callback function for the log.
+    /// let callback_func = |rid: &[AtomicBool; 192], idx: usize| {
+    ///     // Take action on log `idx` and replicas in `rid`.
+    /// };
+    /// l.update_closure(callback_func)
+    /// ```
+    pub fn update_closure(
+        &mut self,
+        gc: impl FnMut(&[AtomicBool; MAX_REPLICAS_PER_LOG], usize) + 'static,
+    ) {
+        unsafe { *self.metadata.gc.get() = Box::new(gc) };
     }
 }
 

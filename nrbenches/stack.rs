@@ -3,14 +3,13 @@
 
 //! Defines a stack data-structure that can be replicated.
 #![allow(unused)]
-#![feature(test)]
-#![feature(bench_black_box)]
+#![feature(generic_associated_types, test, bench_black_box)]
 
 use std::cell::RefCell;
 
-use node_replication::replica::Replica;
-use node_replication::Dispatch;
-use node_replication::NodeReplicated;
+use node_replication::nr::replica::Replica;
+use node_replication::nr::Dispatch;
+use node_replication::nr::NodeReplicated;
 use rand::{thread_rng, Rng};
 
 mod mkbench;
@@ -65,11 +64,11 @@ impl Default for Stack {
 }
 
 impl Dispatch for Stack {
-    type ReadOperation = OpRd;
+    type ReadOperation<'rop> = OpRd;
     type WriteOperation = OpWr;
     type Response = Option<u32>;
 
-    fn dispatch(&self, _op: Self::ReadOperation) -> Self::Response {
+    fn dispatch<'rop>(&self, _op: Self::ReadOperation<'rop>) -> Self::Response {
         unreachable!()
     }
 

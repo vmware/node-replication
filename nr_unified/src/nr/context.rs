@@ -41,8 +41,8 @@ where
             // By construction, we know that everything between `comb` and
             // `tail` is a valid operation ready for flat combining. Hence,
             // calling unwrap() here on the operation is safe.
-            let op = self.batch[self.index(i)].op.take().unwrap();
-            buffer.push(op);
+            let op = self.batch[self.index(i)].op.get();
+            unsafe { buffer.push((&mut *op).clone().unwrap()) };
             n += 1;
         }
 

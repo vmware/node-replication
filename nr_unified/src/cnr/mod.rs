@@ -101,7 +101,7 @@ mod replica;
 
 pub use crate::log::MAX_REPLICAS_PER_LOG;
 pub use crate::replica::ReplicaToken;
-pub use log::Log;
+pub use log::{EntryMetaData, Log, LogMetaData};
 pub use replica::{Replica, MAX_THREADS_PER_REPLICA};
 
 use alloc::vec::Vec;

@@ -65,7 +65,7 @@ where
 
     fn exec_ro(
         &self,
-        op: <Self::D as Dispatch>::ReadOperation,
+        op: <Self::D as Dispatch>::ReadOperation<'rop>,
         _idx: ReplicaToken,
     ) -> <Self::D as Dispatch>::Response {
         self.data_structure.dispatch(op)
@@ -85,11 +85,11 @@ impl Default for SegQueueWrapper {
 }
 
 impl Dispatch for SegQueueWrapper {
-    type ReadOperation = QueueConcurrent;
+    type ReadOperation<'rop> = QueueConcurrent;
     type WriteOperation = ();
     type Response = Result<Option<u64>, ()>;
 
-    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
+    fn dispatch<'rop>(&self, op: Self::ReadOperation<'rop>) -> Self::Response {
         match op {
             QueueConcurrent::Push(val) => {
                 self.0.push(val);
@@ -122,11 +122,11 @@ impl Default for SkipListWrapper {
 }
 
 impl Dispatch for SkipListWrapper {
-    type ReadOperation = SkipListConcurrent;
+    type ReadOperation<'rop> = SkipListConcurrent;
     type WriteOperation = ();
     type Response = Result<Option<u64>, ()>;
 
-    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
+    fn dispatch<'rop>(&self, op: Self::ReadOperation<'rop>) -> Self::Response {
         match op {
             SkipListConcurrent::Get(key) => Ok(self.0.get(&key, &epoch::pin()).map(|e| *e.value())),
             /*SkipListConcurrent::Push(key, val) => {

@@ -10,7 +10,7 @@ use std::time;
 use clap::{crate_version, value_t, App, Arg};
 use rand::RngCore;
 
-use node_replication::rwlock::RwLock;
+use node_replication::nr::rwlock::RwLock;
 
 fn main() {
     let args = std::env::args().filter(|e| e != "--bench");

@@ -1,17 +1,19 @@
 #![feature(test)]
 #![feature(get_mut_unchecked)]
 #![feature(bench_black_box)]
+#![feature(generic_associated_types)]
 
-mod mkbench;
+mod cnr_mkbench;
 mod utils;
 
-use crate::mkbench::ReplicaTrait;
-use cnr::{Dispatch, LogMapper, Replica};
+use cnr_mkbench::ReplicaTrait;
 use nrfs::*;
 use std::cell::UnsafeCell;
 use utils::benchmark::*;
 use utils::topology::*;
 use utils::Operation;
+
+use node_replication::cnr::{Dispatch, LogMapper, Replica};
 
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
 pub enum OpRd {
@@ -82,11 +84,11 @@ impl Default for NrFilesystem {
 unsafe impl Sync for NrFilesystem {}
 
 impl Dispatch for NrFilesystem {
-    type ReadOperation = OpRd;
+    type ReadOperation<'rop> = OpRd;
     type WriteOperation = OpWr;
     type Response = Result<usize, ()>;
 
-    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
+    fn dispatch<'rop>(&self, op: Self::ReadOperation<'rop>) -> Self::Response {
         match op {
             OpRd::FileRead(memnode) => {
                 match self.memfs.read(
@@ -122,9 +124,9 @@ fn generate_nrfs_ops(write_ratio: usize) -> Vec<Operation<OpRd, OpWr>> {
 
     for idx in 0..nop {
         if idx % 100 < write_ratio {
-            ops.push(Operation::WriteOperation(OpWr::FileWrite(0)));
+            ops.push(Operation::WriteOperation(OpWr::FileWrite(1)));
         } else {
-            ops.push(Operation::ReadOperation(OpRd::FileRead(0)));
+            ops.push(Operation::ReadOperation(OpRd::FileRead(1)));
         }
     }
     ops
@@ -135,27 +137,32 @@ fn nrfs_scale_out(c: &mut TestHarness, num_cpus: usize, write_ratio: usize) {
     let logs = num_cpus;
     let bench_name = format!("nrfs-mlnr{}-scaleout-wr{}", logs, write_ratio);
 
-    mkbench::ScaleBenchBuilder::<Replica<NrFilesystem>>::new(ops)
+    cnr_mkbench::ScaleBenchBuilder::<Replica<NrFilesystem>>::new(ops)
         .thread_defaults()
-        .replica_strategy(mkbench::ReplicaStrategy::Socket)
+        .replica_strategy(cnr_mkbench::ReplicaStrategy::Socket)
         .update_batch(128)
         .thread_mapping(ThreadMapping::Sequential)
-        .log_strategy(mkbench::LogStrategy::Custom(logs))
+        .log_strategy(cnr_mkbench::LogStrategy::Custom(logs))
         .configure(
             c,
             &bench_name,
-            |_cid, rid, _log, replica, op, _batch_size| match op {
-                Operation::ReadOperation(op) => {
-                    let op = match op {
-                        OpRd::FileRead(_mnode) => OpRd::FileRead(rid.id() as u64 + 1),
-                    };
-                    let _ignore = replica.exec_ro(op, rid);
-                }
-                Operation::WriteOperation(op) => {
-                    let op = match op {
-                        OpWr::FileWrite(_mnode) => OpWr::FileWrite(rid.id() as u64 + 1),
-                    };
-                    let _ignore = replica.exec(op, rid);
+            |_cid, rid, _log, replica, ops, nop, index, batch_size, _rt| {
+                for i in 0..batch_size {
+                    let op = &ops[(index + i) % nop];
+                    match op {
+                        Operation::ReadOperation(op) => {
+                            let op = match op {
+                                OpRd::FileRead(_mnode) => OpRd::FileRead(rid.tid() as u64 + 1),
+                            };
+                            let _ignore = replica.exec_ro(op, rid);
+                        }
+                        Operation::WriteOperation(op) => {
+                            let op = match op {
+                                OpWr::FileWrite(_mnode) => OpWr::FileWrite(rid.tid() as u64 + 1),
+                            };
+                            let _ignore = replica.exec(op, rid);
+                        }
+                    }
                 }
             },
         );

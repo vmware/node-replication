@@ -52,8 +52,11 @@ where
             // By construction, we know that everything between `comb` and
             // `tail` is a valid operation ready for flat combining. Hence,
             // calling unwrap() here on the operation is safe.
-            let op = self.batch[self.index(i)].op.take().unwrap();
-            let (entry_hash, is_scan, is_read_only) = self.batch[self.index(i)].meta.get();
+            let e = self.batch[self.index(i)].op.get();
+            let op = unsafe { (&mut *e).clone().unwrap() };
+
+            let me = self.batch[self.index(i)].meta.get();
+            let (entry_hash, is_scan, is_read_only) = unsafe { *me };
             let hash_match = entry_hash == hash;
 
             if hash_match {

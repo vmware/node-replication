@@ -8,9 +8,8 @@ use std::sync::Arc;
 
 use crossbeam_skiplist::SkipMap;
 
-use cnr::{Dispatch, Log, ReplicaToken};
-
-use crate::mkbench::ReplicaTrait;
+use crate::cnr_mkbench::ReplicaTrait;
+use node_replication::cnr::{Dispatch, Log, ReplicaToken};
 
 use super::{OpWr, SkipListConcurrent, INITIAL_CAPACITY};
 
@@ -29,15 +28,13 @@ unsafe impl<T> Sync for ConcurrentDs<T> {}
 
 impl<T> ReplicaTrait for ConcurrentDs<T>
 where
-    T: Dispatch<ReadOperation = SkipListConcurrent>,
+    T: Dispatch<ReadOperation<'static> = SkipListConcurrent>,
     T: Dispatch<WriteOperation = OpWr>,
     T: Default + Sync,
 {
     type D = T;
 
-    fn new_arc(
-        _log: Vec<Arc<Log<'static, <Self::D as Dispatch>::WriteOperation>>>,
-    ) -> std::sync::Arc<Self> {
+    fn new_arc(_log: Vec<Arc<Log<<Self::D as Dispatch>::WriteOperation>>>) -> std::sync::Arc<Self> {
         Arc::new(ConcurrentDs {
             registered: AtomicUsize::new(0),
             data_structure: Self::D::default(),
@@ -81,7 +78,7 @@ where
 
     fn exec_ro(
         &self,
-        op: <Self::D as Dispatch>::ReadOperation,
+        op: <Self::D as Dispatch>::ReadOperation<'static>,
         _idx: ReplicaToken,
     ) -> <Self::D as Dispatch>::Response {
         let op = match op {
@@ -104,11 +101,11 @@ impl Default for SkipListWrapper {
 }
 
 impl Dispatch for SkipListWrapper {
-    type ReadOperation = SkipListConcurrent;
+    type ReadOperation<'rop> = SkipListConcurrent;
     type WriteOperation = OpWr;
     type Response = Result<Option<u64>, ()>;
 
-    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
+    fn dispatch<'rop>(&self, op: Self::ReadOperation<'rop>) -> Self::Response {
         match op {
             SkipListConcurrent::Get(key) => Ok(self.0.get(&key).map(|e| *e.value())),
         }

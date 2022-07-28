@@ -4,6 +4,7 @@
 //! Evaluates a virtual address space implementation using node-replication.
 #![feature(test)]
 #![feature(bench_black_box)]
+#![feature(generic_associated_types)]
 
 extern crate alloc;
 
@@ -15,8 +16,8 @@ use log::{debug, trace};
 use rand::{thread_rng, Rng};
 use x86::bits64::paging::*;
 
-use node_replication::Dispatch;
-use node_replication::NodeReplicated;
+use node_replication::nr::Dispatch;
+use node_replication::nr::NodeReplicated;
 
 mod mkbench;
 mod utils;
@@ -498,11 +499,11 @@ struct VSpaceDispatcher {
 }
 
 impl Dispatch for VSpaceDispatcher {
-    type ReadOperation = OpcodeRd;
+    type ReadOperation<'rop> = OpcodeRd;
     type WriteOperation = OpcodeWr;
     type Response = Result<(u64, u64), VSpaceError>;
 
-    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
+    fn dispatch<'rop>(&self, op: Self::ReadOperation<'rop>) -> Self::Response {
         match op {
             OpcodeRd::Identify(base) => {
                 let paddr = self.vspace.resolve_addr(VAddr::from(base));

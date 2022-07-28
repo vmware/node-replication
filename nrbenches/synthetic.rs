@@ -10,12 +10,13 @@
 //! to measure the cache-impact.
 #![feature(test)]
 #![feature(bench_black_box)]
+#![feature(generic_associated_types)]
 
 use crossbeam_utils::CachePadded;
 use rand::{thread_rng, Rng};
 
-use node_replication::Dispatch;
-use node_replication::NodeReplicated;
+use node_replication::nr::Dispatch;
+use node_replication::nr::NodeReplicated;
 
 mod mkbench;
 mod utils;
@@ -176,11 +177,11 @@ impl AbstractDataStructure {
 }
 
 impl Dispatch for AbstractDataStructure {
-    type ReadOperation = OpRd;
+    type ReadOperation<'rop> = OpRd;
     type WriteOperation = OpWr;
     type Response = Result<usize, ()>;
 
-    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
+    fn dispatch<'rop>(&self, op: Self::ReadOperation<'rop>) -> Self::Response {
         match op {
             OpRd::ReadOnly(a, b, c) => Ok(self.read(a, b, c)),
         }

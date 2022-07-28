@@ -4,6 +4,8 @@
 
 //! Integration of the rust-evmap benchmarks (https://github.com/jonhoo/rust-evmap/)
 //! for various hash-maps; added a node-replicated and urcu hash-table for comparison.
+#![feature(generic_associated_types)]
+
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::mem;
@@ -15,7 +17,7 @@ use std::time;
 
 use chashmap::CHashMap;
 use clap::{crate_version, value_t, App, Arg};
-use node_replication::{replica::ReplicaId, Dispatch, NodeReplicated, ThreadToken};
+use node_replication::nr::{replica::ReplicaId, Dispatch, NodeReplicated, ThreadToken};
 use rand::distributions::Distribution;
 use rand::RngCore;
 use urcu_sys;
@@ -409,11 +411,11 @@ impl Default for NrHashMap {
 }
 
 impl Dispatch for NrHashMap {
-    type ReadOperation = OpRd;
+    type ReadOperation<'rop> = OpRd;
     type WriteOperation = OpWr;
     type Response = Result<u64, ()>;
 
-    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
+    fn dispatch<'rop>(&self, op: Self::ReadOperation<'rop>) -> Self::Response {
         match op {
             OpRd::Get(key) => return Ok(self.get(key)),
         }

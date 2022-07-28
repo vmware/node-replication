@@ -47,7 +47,9 @@ make
 make install
 ```
 
-## Log append [[benchmark](log.rs)]
+## NR benchmarks
+
+### Log append [[benchmark](log.rs)]
 
 A benchmark that evaluates the append performance (in terms of throughput ops/s)
 of the log by varying the batch size and the amount of threads contending on the
@@ -57,7 +59,7 @@ log. This gives you the maximum of operations that are theoretically possible
 To run these benchmarks execute:
 `RUST_TEST_THREADS=1 cargo bench --bench log --features nr`
 
-## Stack [[benchmark](stack.rs)]
+### Stack [[benchmark](stack.rs)]
 
 One benchmark that evaluates the COST (overhead of added synchronization) by
 comparing a node-replicated stack against a single-threaded stack (without a
@@ -67,7 +69,7 @@ running with increasing amounts of threads.
 To run these benchmarks execute:
 `RUST_TEST_THREADS=1 cargo bench --bench stack --features nr`
 
-## Hash-map [[benchmark](hashmap.rs)]
+### Hash-map [[benchmark](hashmap.rs)]
 
 A benchmark that evaluates the COST (overhead of added synchronization) by
 comparing a node-replicated hash-map against a single-threaded hash-map (without
@@ -77,7 +79,7 @@ by running with increasing amounts of threads.
 To run these benchmarks execute:
 `RUST_TEST_THREADS=1 cargo bench --bench hashmap --features nr`
 
-## Synthetic data-structure [[benchmark](synthetic.rs)]
+### Synthetic data-structure [[benchmark](synthetic.rs)]
 
 A benchmark to evaluates the performance of the NR library by using a
 configurable cache-model and access-pattern for an abstract data-structure that
@@ -90,7 +92,7 @@ data-structure. All benchmarks report throughput in ops/s.
 To run these benchmarks execute:
 `RUST_TEST_THREADS=1 cargo bench --bench synthetic --features nr`
 
-## VSpace [[benchmark](vspace.rs)]
+### VSpace [[benchmark](vspace.rs)]
 
 A benchmark to evaluate the performance of the NR library for address-space
 replication (using an x86-64 4-level address space layout).
@@ -98,7 +100,7 @@ replication (using an x86-64 4-level address space layout).
 To run these benchmarks execute:
 `RUST_TEST_THREADS=1 cargo bench --bench vspace --features nr`
 
-## Hashbench [[benchmark](hashbench.rs)]
+### Hashbench [[benchmark](hashbench.rs)]
 
 A benchmark to compare various concurrent Hashtables (originally
 from [evmap](https://github.com/jonhoo/rust-evmap)).
@@ -106,10 +108,16 @@ from [evmap](https://github.com/jonhoo/rust-evmap)).
 Use `RUST_TEST_THREADS=1 cargo bench --bench hashbench --features nr -- --help` to see an
 overview of supported configuration or check the `hashbench_run.sh` script.
 
-## RWLock bench [[benchmark](rwlockbench.rs)]
+### RWLock bench [[benchmark](rwlockbench.rs)]
 
 A benchmark to measure the performance of the readers-writer lock
 implementation.
 
 Use `RUST_TEST_THREADS=1 cargo bench --bench rwlockbench --features nr -- --help` to see an
 overview of supported configuration or check the `rwlockbench_run.sh` script.
+
+## CNR benchmarks
+
+- `RUST_TEST_THREADS=1 cargo bench --bench lockfree --features c_nr`
+- `RUST_TEST_THREADS=1 cargo bench --bench nrfs --features c_nr`
+- `RUST_TEST_THREADS=1 cargo bench --bench chashbench --features c_nr`

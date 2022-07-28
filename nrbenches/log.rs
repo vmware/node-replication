@@ -3,8 +3,7 @@
 
 //! Defines all default criterion benchmarks we run.
 #![allow(unused)]
-#![feature(test)]
-#![feature(bench_black_box)]
+#![feature(test, bench_black_box, generic_associated_types)]
 
 #[macro_use]
 extern crate log;
@@ -12,9 +11,9 @@ extern crate zipf;
 
 use std::sync::Arc;
 
-use node_replication::log::Log;
-use node_replication::replica::Replica;
-use node_replication::{Dispatch, NodeReplicated};
+use node_replication::nr::log::Log;
+use node_replication::nr::replica::Replica;
+use node_replication::nr::{Dispatch, NodeReplicated};
 use rand::distributions::Distribution;
 use rand::{Rng, RngCore};
 
@@ -32,11 +31,11 @@ use utils::Operation;
 pub struct Nop(usize);
 
 impl Dispatch for Nop {
-    type ReadOperation = ();
+    type ReadOperation<'rop> = ();
     type WriteOperation = usize;
     type Response = ();
 
-    fn dispatch(&self, _op: Self::ReadOperation) -> Self::Response {
+    fn dispatch<'rop>(&self, _op: Self::ReadOperation<'rop>) -> Self::Response {
         ()
     }
 

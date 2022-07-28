@@ -5,6 +5,7 @@
 #![feature(test)]
 #![feature(get_mut_unchecked)]
 #![feature(bench_black_box)]
+#![feature(generic_associated_types)]
 
 use std::fmt::Debug;
 use std::marker::Sync;
@@ -12,17 +13,15 @@ use std::marker::Sync;
 use rand::seq::SliceRandom;
 use rand::{Rng, RngCore};
 
-use cnr::{Dispatch, LogMapper, Replica};
-
-mod lockfree_partitioned;
-mod mkbench;
-mod utils;
-
-//use lockfree_comparisons::*;
-use mkbench::ReplicaTrait;
+use cnr_mkbench::ReplicaTrait;
+use node_replication::cnr::{Dispatch, LogMapper, Replica};
 use utils::benchmark::*;
 use utils::topology::{MachineTopology, ThreadMapping};
 use utils::Operation;
+
+mod cnr_mkbench;
+mod lockfree_partitioned;
+mod utils;
 
 /// The initial amount of entries all Hashmaps are initialized with
 #[cfg(feature = "smokebench")]
@@ -191,34 +190,41 @@ fn concurrent_ds_scale_out<T: Sized>(
     name: &str,
     write_ratio: usize,
     mkops: Box<
-        dyn Fn() -> Vec<Operation<<T as Dispatch>::ReadOperation, <T as Dispatch>::WriteOperation>>,
+        dyn Fn() -> Vec<
+            Operation<<T as Dispatch>::ReadOperation<'static>, <T as Dispatch>::WriteOperation>,
+        >,
     >,
 ) where
-    T: Dispatch<ReadOperation = SkipListConcurrent> + Sized,
+    T: Dispatch<ReadOperation<'static> = SkipListConcurrent> + Sized,
     T: Dispatch<WriteOperation = OpWr> + Sized,
     T: 'static,
     T: Dispatch + Sync + Default + Send,
-    <T as Dispatch>::ReadOperation: Send + Sync + Debug + Copy,
+    <T as Dispatch>::ReadOperation<'static>: Send + Sync + Debug + Copy,
     <T as Dispatch>::WriteOperation: Send + Sync + Debug + Copy,
     <T as Dispatch>::Response: Send + Sync + Debug,
 {
     let bench_name = format!("{}-scaleout-wr{}", name, write_ratio);
 
-    mkbench::ScaleBenchBuilder::<lockfree_partitioned::ConcurrentDs<T>>::new(mkops())
+    cnr_mkbench::ScaleBenchBuilder::<lockfree_partitioned::ConcurrentDs<T>>::new(mkops())
         .thread_defaults()
-        .replica_strategy(mkbench::ReplicaStrategy::One) // Can only be One
+        .replica_strategy(cnr_mkbench::ReplicaStrategy::One) // Can only be One
         .update_batch(128)
         .thread_mapping(ThreadMapping::Interleave)
-        .log_strategy(mkbench::LogStrategy::One)
+        .log_strategy(cnr_mkbench::LogStrategy::One)
         .configure(
             c,
             &bench_name,
-            |_cid, rid, _log, replica, op, _batch_size| match op {
-                Operation::ReadOperation(op) => {
-                    replica.exec_ro(*op, rid);
-                }
-                Operation::WriteOperation(op) => {
-                    replica.exec(*op, rid);
+            |_cid, rid, _log, replica, ops, nop, index, batch_size, _rt| {
+                for i in 0..batch_size {
+                    let op = &ops[(index + i) % nop];
+                    match op {
+                        Operation::ReadOperation(op) => {
+                            replica.exec_ro(*op, rid);
+                        }
+                        Operation::WriteOperation(op) => {
+                            replica.exec(*op, rid);
+                        }
+                    }
                 }
             },
         );
@@ -228,10 +234,10 @@ fn concurrent_ds_nr_scale_out<R>(c: &mut TestHarness, name: &str, write_ratio: u
 where
     R: ReplicaTrait + Send + Sync + 'static,
     R::D: Send,
-    R::D: Dispatch<ReadOperation = SkipListConcurrent>,
+    R::D: Dispatch<ReadOperation<'static> = SkipListConcurrent>,
     R::D: Dispatch<WriteOperation = OpWr>,
     <R::D as Dispatch>::WriteOperation: Send + Sync,
-    <R::D as Dispatch>::ReadOperation: Send + Sync,
+    <R::D as Dispatch>::ReadOperation<'static>: Send + Sync,
     <R::D as Dispatch>::Response: Sync + Send + Debug,
 {
     let ops = generate_sops_concurrent(NOP, write_ratio, KEY_SPACE);
@@ -245,21 +251,26 @@ where
         let logs = std::cmp::max(1, nlog);
         let bench_name = format!("{}{}-scaleout-wr{}", name, logs, write_ratio);
 
-        mkbench::ScaleBenchBuilder::<R>::new(ops.clone())
+        cnr_mkbench::ScaleBenchBuilder::<R>::new(ops.clone())
             .thread_defaults()
-            .replica_strategy(mkbench::ReplicaStrategy::Socket)
+            .replica_strategy(cnr_mkbench::ReplicaStrategy::Socket)
             .update_batch(128)
             .thread_mapping(ThreadMapping::Interleave)
-            .log_strategy(mkbench::LogStrategy::Custom(logs))
+            .log_strategy(cnr_mkbench::LogStrategy::Custom(logs))
             .configure(
                 c,
                 &bench_name,
-                |_cid, rid, _log, replica, op, _batch_size| match op {
-                    Operation::ReadOperation(op) => {
-                        replica.exec_ro(*op, rid);
-                    }
-                    Operation::WriteOperation(op) => {
-                        replica.exec(*op, rid);
+                |_cid, rid, _log, replica, ops, nop, index, batch_size, _rt| {
+                    for i in 0..batch_size {
+                        let op = &ops[(index + i) % nop];
+                        match op {
+                            Operation::ReadOperation(op) => {
+                                replica.exec_ro(*op, rid);
+                            }
+                            Operation::WriteOperation(op) => {
+                                replica.exec(*op, rid);
+                            }
+                        }
                     }
                 },
             );
@@ -279,7 +290,7 @@ fn main() {
     let write_ratios = if cfg!(feature = "exhaustive") {
         vec![0, 10, 80, 100]
     } else {
-        vec![0, 10, 100]
+        vec![10, 100]
     };
 
     for write_ratio in write_ratios.into_iter() {

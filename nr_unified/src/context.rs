@@ -5,7 +5,7 @@
 //!
 //! This allows the combiner to find and flat-combine operations.
 
-use core::cell::Cell;
+use core::cell::{Cell, UnsafeCell};
 use core::default::Default;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
@@ -26,9 +26,9 @@ const_assert!(MAX_PENDING_OPS.is_power_of_two());
 /// expected result (`R`), along with potential meta-data (`M`) to keep track of
 /// other things.
 pub struct PendingOperation<T, R, M: Default> {
-    pub(crate) op: Cell<Option<T>>,
+    pub(crate) op: UnsafeCell<Option<T>>,
     pub(crate) resp: Cell<Option<R>>,
-    pub(crate) meta: Cell<M>,
+    pub(crate) meta: UnsafeCell<M>,
 }
 
 impl<T, R, M> Default for PendingOperation<T, R, M>
@@ -37,7 +37,7 @@ where
 {
     fn default() -> Self {
         PendingOperation {
-            op: Cell::new(None),
+            op: UnsafeCell::new(None),
             resp: Cell::new(None),
             meta: Default::default(),
         }
@@ -135,7 +135,7 @@ where
     /// otherwise.
     #[inline(always)]
     pub(crate) fn enqueue(&self, op: T, meta: M) -> bool {
-        let t = self.tail.load(Ordering::Relaxed);
+        let t = self.tail.load(Ordering::Acquire);
         let h = self.head.load(Ordering::Relaxed);
 
         // Check if we have space in the batch to hold this operation. If we
@@ -148,10 +148,12 @@ where
         // that the combiner sees this operation. Relying on TSO here to make
         // sure that the tail is updated only after the operation has been
         // written in.
-        self.batch[self.index(t)].op.replace(Some(op));
-        self.batch[self.index(t)].meta.replace(meta);
+        let e = self.batch[self.index(t)].op.get();
+        unsafe { *e = Some(op) };
+        let me = self.batch[self.index(t)].meta.get();
+        unsafe { *me = meta };
 
-        self.tail.store(t + 1, Ordering::Relaxed);
+        self.tail.store(t + 1, Ordering::Release);
         true
     }
 
@@ -237,7 +239,7 @@ mod test {
     fn test_context_enqueue() {
         let c = Context::<u64, Result<u64, ()>, ()>::default();
         assert!(c.enqueue(121, ()));
-        unsafe { assert_eq!((*c.batch[0].op.as_ptr()), Some(121)) };
+        unsafe { assert_eq!((*c.batch[0].op.get()), Some(121)) };
         assert_eq!(c.tail.load(Ordering::Relaxed), 1);
         assert_eq!(c.head.load(Ordering::Relaxed), 0);
         assert_eq!(c.comb.load(Ordering::Relaxed), 0);

@@ -1,9 +1,11 @@
+// Copyright © 2019-2022 VMware, Inc. All Rights Reserved.
 // Copyright © 2017-2019 Jon Gjengset <jon@thesquareplanet.com>.
-// Copyright © VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Integration of the rust-evmap benchmarks (https://github.com/jonhoo/rust-evmap/)
 //! for various hash-maps; added a node-replicated and urcu hash-table for comparison.
+
+#![feature(generic_associated_types)]
 use chashmap::CHashMap as HashMap;
 use clap::{crate_version, value_t, App, Arg};
 use rand::distributions::Distribution;
@@ -14,10 +16,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time;
 
-use cnr::{Dispatch, Log, LogMapper, Replica, ReplicaToken};
-
 mod utils;
 use utils::{pin_thread, topology::*};
+
+use node_replication::cnr::{Dispatch, Log, LogMapper, LogMetaData, Replica, ReplicaToken};
 
 pub const CAPACITY: usize = 5_000_000;
 static SPAN: AtomicUsize = AtomicUsize::new(0);
@@ -90,10 +92,12 @@ fn main() {
         const LOG_SIZE_BYTES: usize = 1024 * 1024 * 2;
         let mut logs = Vec::with_capacity(writers);
         for i in 0..writers {
-            let log = sync::Arc::new(Log::<<NrHashMap as Dispatch>::WriteOperation>::new(
-                LOG_SIZE_BYTES,
-                i + 1,
-            ));
+            let log = sync::Arc::new(
+                Log::<<NrHashMap as Dispatch>::WriteOperation>::new_with_bytes(
+                    LOG_SIZE_BYTES,
+                    LogMetaData::new(i + 1),
+                ),
+            );
             logs.push(log);
         }
         let replica = Replica::<NrHashMap>::new(logs);
@@ -107,7 +111,7 @@ fn main() {
 
             thread::spawn(move || {
                 let replica = ReplicaAndToken::new(replica);
-                let tid = replica.token.0;
+                let tid = replica.token.tid();
                 pin_thread(cpu[tid - 1].cpu);
                 drive(replica, end, dist, false, span, tid)
             })
@@ -145,7 +149,7 @@ fn drive<B: Backend>(
     span: usize,
     tid: usize,
 ) -> (bool, usize) {
-    let base = (tid * span) as u64;
+    let base = ((tid - 1) * span) as u64;
     use rand::Rng;
 
     let mut ops = 0;
@@ -211,7 +215,10 @@ impl NrHashMap {
     }
 
     pub fn get(&self, key: u64) -> u64 {
-        *self.storage.get(&key).unwrap()
+        *self
+            .storage
+            .get(&key)
+            .expect(format!("key {} not found", key).as_str())
     }
 }
 
@@ -227,11 +234,11 @@ impl Default for NrHashMap {
 }
 
 impl Dispatch for NrHashMap {
-    type ReadOperation = OpRd;
+    type ReadOperation<'rop> = OpRd;
     type WriteOperation = OpWr;
     type Response = Result<u64, ()>;
 
-    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
+    fn dispatch<'rop>(&self, op: Self::ReadOperation<'rop>) -> Self::Response {
         match op {
             OpRd::Get(key) => return Ok(self.get(key)),
         }
@@ -248,19 +255,19 @@ impl Dispatch for NrHashMap {
     }
 }
 
-struct ReplicaAndToken<'a> {
-    replica: sync::Arc<Replica<'a, NrHashMap>>,
+struct ReplicaAndToken {
+    replica: sync::Arc<Replica<NrHashMap>>,
     token: ReplicaToken,
 }
 
-impl<'a> ReplicaAndToken<'a> {
-    fn new(replica: sync::Arc<Replica<'a, NrHashMap>>) -> ReplicaAndToken<'a> {
+impl ReplicaAndToken {
+    fn new(replica: sync::Arc<Replica<NrHashMap>>) -> Self {
         let token = replica.register().unwrap();
         ReplicaAndToken { replica, token }
     }
 }
 
-impl<'a> Backend for ReplicaAndToken<'a> {
+impl Backend for ReplicaAndToken {
     fn b_get(&self, key: u64) -> u64 {
         match self.replica.execute(OpRd::Get(key), self.token) {
             Ok(res) => return res,
