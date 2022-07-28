@@ -1,8 +1,8 @@
-// Copyright © 2019-2020 VMware, Inc. All Rights Reserved.
+// Copyright © 2019-2022 VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! Node-Replication creates linearizable NUMA-aware concurrent data structures
-//! from black-box sequential data structures.
+//! Node-Replication (NR) creates linearizable NUMA-aware concurrent data
+//! structures from black-box sequential data structures.
 //!
 //! NR replicates the sequential data structure on each NUMA node and uses an
 //! operation log to maintain consistency between the replicas. Each replica
@@ -97,19 +97,19 @@ pub use log::{Log, MAX_REPLICAS_PER_LOG};
 pub use replica::{CombinerLock, Replica, ReplicaError, ReplicaId, ReplicaToken};
 
 /// Trait that a (single-threaded) data structure must implement to be usable
-/// with this library.
+/// with NR.
 ///
-/// When this library executes a read-only operation against the data structure,
-/// it invokes the [`Dispatch::dispatch`] method with the `ReadOperation` as an
+/// When NR executes a read-only operation against the data structure, it
+/// invokes the [`Dispatch::dispatch`] method with the `ReadOperation` as an
 /// argument.
 ///
-/// When this library executes a write operation against the data structure, it
-/// invokes the [`Dispatch::dispatch_mut`] method with the `WriteOperation` as
-/// an argument.
+/// When NR executes a write operation against the data structure, it invokes
+/// the [`Dispatch::dispatch_mut`] method with the `WriteOperation` as an
+/// argument.
 pub trait Dispatch {
     /// A read-only operation. When executed against the data structure, an
-    /// operation of this type must not mutate the data structure in anyway.
-    /// Otherwise, the assumptions made by this library no longer hold.
+    /// operation of this type must not mutate the data structure in any way.
+    /// Otherwise, the assumptions made by NR no longer hold.
     ///
     /// # For feature `async`
     /// - [`Send`] is currently needed for async operations
@@ -295,7 +295,7 @@ impl From<alloc::collections::TryReserveError> for NodeReplicatedError {
     }
 }
 
-/// The "main" type of this library.
+/// The "main" type of NR which users interact with.
 ///
 /// It is used to wrap a single threaded data-structure that implements
 /// [`Dispatch`]. It will create a configurable number of [`Replica`] and
