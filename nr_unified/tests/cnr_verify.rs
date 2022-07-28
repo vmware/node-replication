@@ -376,7 +376,7 @@ fn parallel_test_mut2scan_order() {
     for i in 0..nlogs {
         let log = Arc::new(
             Log::<<CNRHashmap as Dispatch>::WriteOperation>::new_with_bytes(
-                4 * 1024 * 1024,
+                5 * 1024 * 1024,
                 LogMetaData::new(i + 1),
             ),
         );
