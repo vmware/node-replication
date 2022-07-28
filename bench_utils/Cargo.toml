@@ -14,7 +14,7 @@ authors = [
 debug = true
 
 [dependencies]
-node-replication = { path = "../nr_unified" }
+node-replication = { path = "../node-replication" }
 arr_macro = "0.1.2"
 chashmap = "2.2"
 clap = { version = "2", features = ["yaml"] }

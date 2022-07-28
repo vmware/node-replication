@@ -4,20 +4,22 @@
 #
 set -ex
 
+cd node-replication
+
 # Disable all the Linux policies that are up to no good
-sudo sh -c "echo 0 > /proc/sys/kernel/numa_balancing"
-sudo sh -c "echo 0 > /sys/kernel/mm/ksm/run"
-sudo sh -c "echo 0 > /sys/kernel/mm/ksm/merge_across_nodes"
-sudo sh -c "echo never > /sys/kernel/mm/transparent_hugepage/enabled"
+##sudo sh -c "echo 0 > /proc/sys/kernel/numa_balancing"
+##sudo sh -c "echo 0 > /sys/kernel/mm/ksm/run"
+##sudo sh -c "echo 0 > /sys/kernel/mm/ksm/merge_across_nodes"
+##sudo sh -c "echo never > /sys/kernel/mm/transparent_hugepage/enabled"
 
 cd benches
-#RUST_TEST_THREADS=1 timeout 1h cargo bench --bench log --features="nr"
-RUST_TEST_THREADS=1 timeout 1h cargo bench --bench synthetic --features="nr"
-RUST_TEST_THREADS=1 timeout 1h cargo bench --bench stack --features="nr"
-RUST_TEST_THREADS=1 timeout 20h cargo bench --bench hashmap --features="nr"
-RUST_TEST_THREADS=1 timeout 1h cargo bench --bench vspace --features="nr"
-#RUST_TEST_THREADS=1 timeout 1h cargo bench --bench nrfs --features="c_nr"
-#RUST_TEST_THREADS=1 timeout 20h cargo bench --bench lockfree --features="c_nr"
+#timeout 1h cargo bench --bench log
+timeout 1h cargo bench --bench synthetic
+timeout 1h cargo bench --bench stack
+timeout 20h cargo bench --bench hashmap
+timeout 1h cargo bench --bench vspace
+#timeout 1h cargo bench --bench nrfs
+#timeout 20h cargo bench --bench lockfree
 
 #timeout 1.5h bash hashbench_run.sh
 #timeout 1.5h bash rwlockbench_run.sh

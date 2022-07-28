@@ -12,9 +12,9 @@ The crate contains two variants of node-replication: NR for transforming
 sequential data-structures and CNR for already concurrent or partitioned data
 structures.
 
-* [`nr`](node_replication/src/nr) converts a sequental data structure to its
+* [`nr`](node-replication/src/nr) converts a sequental data structure to its
   NUMA-aware concurrent version.
-* [`cnr`](node_replication/src/cnr) converts a concurrent (or partitioned) data
+* [`cnr`](node-replication/src/cnr) converts a concurrent (or partitioned) data
   structure to its NUMA-aware concurrent version.
 
 ## Background
@@ -149,7 +149,7 @@ progress.
 ## Testing
 
 There are a range of unit tests as part of the implementation and a few
-[integration tests](node_replication/tests) that check various aspects of the
+[integration tests](node-replication/tests) that check various aspects of the
 implementations.
 
 You can run the tests by executing: `cargo test`
@@ -157,7 +157,7 @@ You can run the tests by executing: `cargo test`
 ## Benchmarks
 
 The benchmarks (and how to execute them) are explained in more detail in the
-[benches](node_replication/benches/README.md) folder.
+[benches](node-replication/benches/README.md) folder.
 
 ## Supported Platforms
 
