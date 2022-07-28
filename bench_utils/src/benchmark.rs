@@ -133,7 +133,7 @@ impl BenchmarkGroup {
 }
 
 pub struct TestHarness {
-    duration: Duration,
+    pub(crate) duration: Duration,
 }
 
 impl TestHarness {

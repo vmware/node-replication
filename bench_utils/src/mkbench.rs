@@ -46,20 +46,24 @@ fn chg_affinity(af: AffinityChange) -> usize {
             );
             for ncpu in MACHINE_TOPOLOGY.cpus_on_node(rid as u64) {
                 debug!("ncpu is {:?}", ncpu);
-                cpu_set.set(ncpu.cpu as usize);
+                cpu_set
+                    .set(ncpu.cpu as usize)
+                    .expect("Can't toggle CPU in cpu_set");
             }
             debug!(
                 "we are on cpu {} node {} and should handle things for replica {} now, changing affinity to {:?}",
                 cpu, node, rid, cpu_set
             );
-            nix::sched::sched_setaffinity(nix::unistd::Pid::from_raw(0), &cpu_set);
+            nix::sched::sched_setaffinity(nix::unistd::Pid::from_raw(0), &cpu_set)
+                .expect("Can't change thread affinity");
 
             cpu as usize
         }
         AffinityChange::Revert(core_id) => {
             let mut cpu_set = nix::sched::CpuSet::new();
-            cpu_set.set(core_id);
-            nix::sched::sched_setaffinity(nix::unistd::Pid::from_raw(0), &cpu_set);
+            cpu_set.set(core_id).expect("Can't toggle CPU in cpu_set");
+            nix::sched::sched_setaffinity(nix::unistd::Pid::from_raw(0), &cpu_set)
+                .expect("Can't reset thread affinity");
             0xdead
         }
     }
@@ -139,7 +143,7 @@ pub trait DsInterface {
 impl<'a, T: Dispatch + Sync + Default> DsInterface for NodeReplicated<T> {
     type D = T;
 
-    fn new(replicas: NonZeroUsize, logs: NonZeroUsize, log_size: usize) -> Arc<Self> {
+    fn new(replicas: NonZeroUsize, _logs: NonZeroUsize, log_size: usize) -> Arc<Self> {
         Arc::new(
             NodeReplicated::with_log_size(replicas, chg_affinity, log_size)
                 .expect("Can't allocate NodeReplicated"),
@@ -160,8 +164,8 @@ impl<'a, T: Dispatch + Sync + Default> DsInterface for NodeReplicated<T> {
 
     fn execute_scan(
         &self,
-        op: <Self::D as Dispatch>::WriteOperation,
-        idx: ThreadToken,
+        _op: <Self::D as Dispatch>::WriteOperation,
+        _idx: ThreadToken,
     ) -> <Self::D as Dispatch>::Response {
         unreachable!("scan-ops are non-sensical for node_replication::NodeReplicated<T>")
     }
@@ -183,7 +187,7 @@ impl<'a, T: Dispatch + Sync + Default> DsInterface for NodeReplicated<T> {
 fn write_results(name: String, duration: Duration, results: Vec<usize>) -> std::io::Result<()> {
     let file_name = "baseline_comparison.csv";
     let write_headers = !Path::new(file_name).exists(); // write headers only to new file
-    let mut csv_file = OpenOptions::new()
+    let csv_file = OpenOptions::new()
         .append(true)
         .create(true)
         .open(file_name)?;
@@ -557,7 +561,7 @@ where
         );
 
         let write_headers = !Path::new(self.file_name).exists(); // write headers only to new file
-        let mut csv_file = OpenOptions::new()
+        let csv_file = OpenOptions::new()
             .append(true)
             .create(true)
             .open(self.file_name)?;
@@ -580,7 +584,8 @@ where
                     exp_time_in_sec: idx + 1, // start at 1 (for first second)
                     iterations: *ops,
                 };
-                wtr.serialize(record);
+                wtr.serialize(record)
+                    .expect("Failed to serialize benchmark record");
             }
         }
         wtr.flush()?;
@@ -592,8 +597,6 @@ where
         let thread_num = self.threads();
 
         let start_sync = Arc::new(Barrier::new(thread_num));
-        let complete_sync = Arc::new(Barrier::new(thread_num));
-
         let replicas = NonZeroUsize::new(self.replicas()).unwrap();
         let ds = R::new(replicas, NonZeroUsize::new(1).unwrap(), self.log_size);
 
@@ -601,9 +604,7 @@ where
             "Execute benchmark {} with the following replica: [core_id] mapping: {:#?}",
             self.name, self.rm
         );
-        let mut tid = 0;
         for (rid, cores) in self.rm.clone().into_iter() {
-            let num = cores.len();
             for core_id in cores {
                 // Pin thread to force the allocations below (`operations` etc.)
                 // with the correct NUMA affinity
@@ -695,8 +696,6 @@ where
                     start_sync.wait();
                     (core_id, operations_per_second)
                 }));
-
-                tid += 1;
             }
         }
     }
@@ -970,18 +969,11 @@ where
         crate::disable_dvfs();
         println!("{}", name);
 
-        let mut group = c.benchmark_group(name);
         for rs in self.replica_strategies.iter() {
             for ls in self.log_strategies.iter() {
                 for tm in self.thread_mappings.iter() {
                     for ts in self.threads.iter() {
                         for b in self.batches.iter() {
-                            let num_logs = match *ls {
-                                LogStrategy::One => 1,
-                                LogStrategy::PerThread => *ts,
-                                LogStrategy::Custom(v) => v,
-                            };
-
                             let mut runner = ScaleBenchmark::<R>::new(
                                 String::from(name),
                                 &topology,
@@ -990,7 +982,7 @@ where
                                 *tm,
                                 *ts,
                                 self.log_size,
-                                Duration::from_secs(10),
+                                c.duration,
                                 self.operations.to_vec(),
                                 *b,
                                 f,
