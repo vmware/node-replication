@@ -240,41 +240,6 @@ where
     /// If `with_data` is used, care must be taken that the same state is passed
     /// to every Replica object. If not the resulting operations executed
     /// against replicas may not give deterministic results.
-    #[cfg(not(feature = "unstable"))]
-    pub fn with_data(
-        logs: Vec<Arc<Log<'_, <D as Dispatch>::WriteOperation>>>,
-        d: D,
-    ) -> Arc<Replica<'_, D>> {
-        let mut contexts = Vec::with_capacity(MAX_THREADS_PER_REPLICA);
-        let mut offsets = Vec::with_capacity(MAX_THREADS_PER_REPLICA);
-        let mut hash = Vec::with_capacity(MAX_THREADS_PER_REPLICA);
-
-        for idx in 0..MAX_THREADS_PER_REPLICA {
-            contexts.push(CachePadded::new(Context::new(idx + 1)));
-            offsets.push(RefCell::new(Vec::with_capacity(logs.len())));
-            hash.push(CachePadded::new(RefCell::new(Vec::with_capacity(
-                logs.len(),
-            ))));
-        }
-
-        // Add per-log state
-        let mut logstate = Vec::with_capacity(logs.len());
-        for log in logs.iter() {
-            logstate.push(CachePadded::new(LogState::new(log.clone())));
-        }
-
-        Arc::new(Replica {
-            next: CachePadded::new(AtomicUsize::new(1)),
-            data: CachePadded::new(d),
-            logstate,
-            contexts,
-            offsets,
-            hash,
-        })
-    }
-
-    /// See `with_data` documentation without unstable feature.
-    #[cfg(feature = "unstable")]
     pub fn with_data(
         logs: Vec<Arc<Log<<D as Dispatch>::WriteOperation>>>,
         d: D,

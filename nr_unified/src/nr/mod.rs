@@ -154,6 +154,23 @@ pub struct ThreadToken {
     rtkn: ReplicaToken,
 }
 
+impl ThreadToken {
+    /// Creates a new ThreadToken
+    ///
+    /// # Safety
+    /// This method should only ever be used for the benchmark harness to create
+    /// additional, fake replica implementations. If we had something like `pub(test)` we
+    /// should declare it like that instead of just `pub`.
+    #[doc(hidden)]
+    pub fn new(rid: ReplicaId, rtkn: ReplicaToken) -> Self {
+        Self { rid, rtkn }
+    }
+}
+
+/// To make it harder to use the same ThreadToken on multiple threads.
+#[cfg(not(feature = "async"))]
+impl !Send for ThreadToken {}
+
 /// Argument that is passed to a user specified function (in
 /// [`NodeReplicated::new`]) to indicate that our thread will change the replica
 /// it's operating on.
@@ -256,23 +273,6 @@ impl<'f> Drop for AffinityToken<'f> {
     /// made during creation.
     fn drop(&mut self) {
         (self.af_chg_fn)(AffinityChange::Revert(self.old));
-    }
-}
-
-/// To make it harder to use the same ThreadToken on multiple threads.
-#[cfg(features = "unstable")]
-impl !Send for ThreadToken {}
-
-impl ThreadToken {
-    /// Creates a new ThreadToken
-    ///
-    /// # Safety
-    /// This method should only ever be used for the benchmark harness to create
-    /// additional, fake replica implementations. If we had something like `pub(test)` we
-    /// should declare it like that instead of just `pub`.
-    #[doc(hidden)]
-    pub fn new(rid: ReplicaId, rtkn: ReplicaToken) -> Self {
-        Self { rid, rtkn }
     }
 }
 

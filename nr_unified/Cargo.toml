@@ -18,6 +18,7 @@ version = "0.1.1"
 [dependencies]
 arrayvec = "0.7.2"
 crossbeam-utils = {version = "0.8.5", default-features = false}
+# renamed to avoid confusion with our own `log` modules:
 logging = { version = "0.4", package = "log" }
 static_assertions = "1.1.0"
 
@@ -37,10 +38,69 @@ debug = true
 [dev-dependencies]
 env_logger = "0.9.0"
 rand = { version = "0.8", features = ["small_rng"] }
-chashmap = "2.2"
 crossbeam-queue = "0.3.1"
+# Benchmark crates:
+zipf = "7.0"
+bench_utils = { path = "../bench_utils" }
+chashmap = "2.2"
+dashmap = "4.0.2"
+evmap = "8"
+flurry = "0.3.0"
+parking_lot = "0.12"
+urcu-sys = "=0.0.5"
+x86 = "0.51.0"
+clap = { version = "2", features = ["yaml"] }
+crossbeam-skiplist = { git = "https://github.com/crossbeam-rs/crossbeam" }
+nrfs = { git = "https://github.com/ankit-iitb/nrfs.git", branch = "master" }
 
 [features]
-default = ["unstable", "async"]
+default = ["async"]
 async = [ "tokio", "futures" ]
-unstable = []
+
+# Benchmark features (not intended for public use, no impact on library code)
+# Compare with alternate data-structures:
+cmp = []
+# Make benchmark finish quickly to check if things work:
+smokebench = []
+# Very exhaustive parameter sweep (takes a day to run on 4 sockets/192 threads):
+exhaustive = []
+
+[[bench]]
+name = "hashmap"
+harness = false
+
+[[bench]]
+name = "log"
+harness = false
+
+[[bench]]
+name = "stack"
+harness = false
+
+[[bench]]
+name = "synthetic"
+harness = false
+
+[[bench]]
+name = "vspace"
+harness = false
+
+[[bench]]
+name = "hashbench"
+harness = false
+
+[[bench]]
+name = "rwlockbench"
+harness = false
+
+[[bench]]
+name = "lockfree"
+harness = false
+
+[[bench]]
+name = "nrfs"
+harness = false
+
+[[bench]]
+name = "chashbench"
+harness = false

@@ -2,11 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 #![no_std]
-#![cfg_attr(
-    feature = "unstable",
-    feature(new_uninit, get_mut_unchecked, negative_impls)
-)]
 #![feature(
+    new_uninit,
+    get_mut_unchecked,
+    negative_impls,
     allocator_api,
     box_syntax,
     generic_associated_types,

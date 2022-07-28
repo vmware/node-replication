@@ -53,7 +53,7 @@ pub struct ReplicaToken(pub(crate) ThreadIdx);
 /// threads.
 ///
 /// That would be a disaster.
-#[cfg(features = "unstable")]
+#[cfg(not(feature = "async"))]
 impl !Send for ReplicaToken {}
 
 impl ReplicaToken {
