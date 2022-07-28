@@ -14,7 +14,7 @@ structures.
 
 * [`nr`](node_replication/src/nr) converts a sequental data structure to its
   NUMA-aware concurrent version.
-* [`cnr`](node_replication/src/nr) converts a concurrent (or partitioned) data
+* [`cnr`](node_replication/src/cnr) converts a concurrent (or partitioned) data
   structure to its NUMA-aware concurrent version.
 
 ## Background
@@ -23,12 +23,12 @@ structures.
   [Black-box Concurrent Data Structures for NUMA
   Architectures](https://dl.acm.org/citation.cfm?id=3037721) which explains the
   NR library in more details.
-- The NR code of in this repo was also re-implemented in Dafny and proven to
-  provide linearizability. You can find the verified code
-  [here](https://github.com/vmware-labs/verified-betrfs/tree/concurrency-experiments/concurrency/node-replication).
 - The implementation of CNR and a detailed evaluation can be found in this
   paper: [NrOS: Effective Replication and Sharing in an Operating
   System](https://www.usenix.org/conference/osdi21/presentation/bhardwaj)
+- The NR code in this repo was [formally verified by porting it to
+  Dafny](https://github.com/vmware-labs/verified-betrfs/tree/concurrency-experiments/concurrency/node-replication),
+  including a proof that it ensures linearizability.
 - NR and CNR the main mechanisms for concurrency in the
   [nrkernel](https://github.com/vmware-labs/node-replicated-kernel)
 
@@ -112,11 +112,11 @@ dashmap, flurry), a HashMap protected by an `RwLock` (`std`), and
 
 <table>
   <tr>
-    <td valign="top"><a href="../benches/graphs/skylake4x-throughput-vs-cores.png?raw=true">
-    <img src="../benches/graphs/skylake4x-throughput-vs-cores.png?raw=true" alt="Throughput of node-replicated HT" />
+    <td valign="top"><a href="./graphs/skylake4x-throughput-vs-cores.png?raw=true">
+    <img src="./graphs/skylake4x-throughput-vs-cores.png?raw=true" alt="Throughput of node-replicated HT" />
 </a></td>
-    <td valign="top"><a href="../benches/graphs/skylake4x-throughput-vs-cores.png?raw=true">
-    <img src="../benches/graphs/skylake4x-throughput-vs-wr.png?raw=true" alt="Different write ratios with 196 threads" /></td>
+    <td valign="top"><a href="./graphs/skylake4x-throughput-vs-cores.png?raw=true">
+    <img src="./graphs/skylake4x-throughput-vs-wr.png?raw=true" alt="Different write ratios with 196 threads" /></td>
   </tr>
 </table>
 
@@ -142,14 +142,13 @@ node-replication = "*"
 ```
 
 The code should currently be treated as an early release and is still work in
-progress. In its current form, the library is only known to work on x86
-platforms (other platforms will require some changes and are untested).
+progress.
 
 ## Testing
 
-There are a series of unit tests as part of the implementation and a few
+There are a range of unit tests as part of the implementation and a few
 [integration tests](node_replication/tests) that check various aspects of the
-implementation using a stack.
+implementations.
 
 You can run the tests by executing: `cargo test`
 
