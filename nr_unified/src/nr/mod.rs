@@ -2,15 +2,16 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Node-Replication creates linearizable NUMA-aware concurrent data structures
-//! from black-box sequential data structures. NR replicates the sequential data
-//! structure on each NUMA node and uses an operation log to maintain
-//! consistency between the replicas. Each replica benefits from read
-//! concurrency using a readers-writer lock and from write concurrency using a
-//! technique called flat combining. In a nutshell, flat combining batches
-//! operations from multiple threads to be executed by a single thread (the
-//! combiner). This thread also appends the batched operations to the log; other
-//! replicas read the log to update their internal states with the new
-//! operations.
+//! from black-box sequential data structures.
+//!
+//! NR replicates the sequential data structure on each NUMA node and uses an
+//! operation log to maintain consistency between the replicas. Each replica
+//! benefits from read concurrency using a readers-writer lock and from write
+//! concurrency using a technique called flat combining. In a nutshell, flat
+//! combining batches operations from multiple threads to be executed by a
+//! single thread (the combiner). This thread also appends the batched
+//! operations to the log; other replicas read the log to update their internal
+//! states with the new operations.
 //!
 //! # How does it work
 //! To replicate a single-threaded data structure, one needs to implement the
@@ -22,7 +23,7 @@
 //!
 //! ```
 //! #![feature(generic_associated_types)]
-//! use node_replication::Dispatch;
+//! use node_replication::nr::Dispatch;
 //! use std::collections::HashMap;
 //!
 //! /// The node-replicated hashmap uses a std hashmap internally.
@@ -92,8 +93,8 @@ pub mod rwlock;
 #[path = "loom_rwlock.rs"]
 pub mod rwlock;
 
-use log::{Log, MAX_REPLICAS_PER_LOG};
-use replica::{CombinerLock, Replica, ReplicaError, ReplicaId, ReplicaToken};
+pub use log::{Log, MAX_REPLICAS_PER_LOG};
+pub use replica::{CombinerLock, Replica, ReplicaError, ReplicaId, ReplicaToken};
 
 /// Trait that a (single-threaded) data structure must implement to be usable
 /// with this library.
@@ -331,6 +332,9 @@ where
     ///
     /// # Example
     ///
+    /// Test ignored for lack of access to `MACHINE_TOPOLOGY` (see benchmark code
+    /// for an example).
+    ///
     /// ```ignore
     /// /// A function to change affinity to a given NUMA node on Linux
     /// /// (it works by migrating the current thread to the cores of the given NUMA node)
@@ -456,8 +460,8 @@ where
     /// ```
     /// #![feature(generic_associated_types)]
     /// use core::num::NonZeroUsize;
-    /// use node_replication::NodeReplicated;
-    /// use node_replication::Dispatch;
+    /// use node_replication::nr::NodeReplicated;
+    /// use node_replication::nr::Dispatch;
     ///
     /// #[derive(Default)]
     /// struct Void;
@@ -521,8 +525,8 @@ where
     /// ```
     /// #![feature(generic_associated_types)]
     /// use core::num::NonZeroUsize;
-    /// use node_replication::NodeReplicated;
-    /// use node_replication::Dispatch;
+    /// use node_replication::nr::NodeReplicated;
+    /// use node_replication::nr::Dispatch;
     ///
     /// #[derive(Default)]
     /// struct Void;
@@ -644,8 +648,8 @@ where
     /// ```
     /// #![feature(generic_associated_types)]
     /// use core::num::NonZeroUsize;
-    /// use node_replication::NodeReplicated;
-    /// use node_replication::Dispatch;
+    /// use node_replication::nr::NodeReplicated;
+    /// use node_replication::nr::Dispatch;
     ///
     /// #[derive(Default)]
     /// struct Void;

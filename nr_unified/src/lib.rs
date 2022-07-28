@@ -26,8 +26,8 @@ extern crate crossbeam_utils;
 extern crate logging;
 
 pub(crate) mod context;
-pub(crate) mod log;
-pub(crate) mod replica;
+pub mod log;
+pub mod replica;
 
 pub mod cnr;
 pub mod nr;

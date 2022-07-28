@@ -114,18 +114,18 @@ where
 }
 
 /// A log of operations that is typically accessed by multiple
-/// [`crate::replica::Replica`]s.
+/// [`crate::nr::replica::Replica`]s.
 ///
 /// # Note
 /// In the common case a client of node-replication does not need to create or
 /// interact with the log directly. Instead, the client should use
-/// [`crate::NodeReplicated`] instead. Only in the rare circumstance where one
-/// would need to implement a custom "replica dispatch logic" would it be
+/// [`crate::nr::NodeReplicated`] instead. Only in the rare circumstance where
+/// one would need to implement a custom "replica dispatch logic" would it be
 /// necessary to create logs and register replicas with it.
 ///
 /// Takes one generic type parameter, `T`, which defines the type of the
-/// operation that will go on the log. Typically this is somes enum with variants
-/// identifying the different mutable operations.
+/// operation that will go on the log. Typically this is somes enum with
+/// variants identifying the different mutable operations.
 ///
 /// This struct is aligned to 64 bytes to optimize cache access.
 #[repr(align(64))]
@@ -224,7 +224,7 @@ where
     /// }
     ///
     /// // Creates a log with `262_144` entries.
-    /// let l = Log::<Operation>::new_with_entries(1 << 18);
+    /// let l = Log::<Operation, (), ()>::new_with_entries(1 << 18, ());
     /// ```
     ///
     /// This method allocates memory for the log upfront. No further allocations
@@ -302,7 +302,7 @@ where
     /// }
     ///
     /// // Creates a ~1 MiB sized log.
-    /// let l = Log::<Operation>::new_with_bytes(1 * 1024 * 1024);
+    /// let l = Log::<Operation, (), ()>::new_with_bytes(1 * 1024 * 1024, ());
     /// ```
     pub fn new_with_bytes(bytes: usize, metadata: LM) -> Self {
         Log::new_with_entries(Self::bytes_to_log_entries(bytes), metadata)
@@ -356,7 +356,7 @@ where
     /// can use to execute operations on the log.
     ///
     /// As with all the other [`Log`] functions, there is no need to call this
-    /// function from a client if you're using [`crate::NodeReplicated`].
+    /// function from a client if you're using [`crate::nr::NodeReplicated`].
     ///
     /// # Example
     ///
@@ -372,7 +372,7 @@ where
     /// }
     ///
     /// // Creates a 1 Mega Byte sized log.
-    /// let l = Log::<Operation>::new_with_entries(4 * 1024);
+    /// let l = Log::<Operation, (), ()>::new_with_entries(4 * 1024, ());
     ///
     /// // Registers against the log. `idx` can now be used to append operations
     /// // to the log, and execute these operations.
@@ -471,7 +471,7 @@ where
     /// Can't execute this until we have access to `pub(crate)` in tests.
     ///
     /// ```ignore
-    /// use node_replication::log::Log;
+    /// use node_replication::nr::Log;
     ///
     /// // Operation type that will go onto the log.
     /// #[derive(Clone)]
@@ -481,7 +481,7 @@ where
     /// }
     ///
     /// // We register two replicas here, `idx1` and `idx2`.
-    /// let l = Log::<Operation>::new_with_bytes(1 * 1024 * 1024);
+    /// let l = Log::<Operation>::new_with_bytes(1 * 1024 * 1024, ());
     /// let idx1 = l.register().expect("Failed to register with the Log.");
     /// let idx2 = l.register().expect("Failed to register with the Log.");
     /// let ops = [Operation::Write(100), Operation::Read];

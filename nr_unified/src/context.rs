@@ -1,7 +1,10 @@
 // Copyright © 2019-2020 VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use alloc::vec::Vec;
+//! Context where threads "buffer" operations until they are completed.
+//!
+//! This allows the combiner to find and flat-combine operations.
+
 use core::cell::Cell;
 use core::default::Default;
 use core::sync::atomic::{AtomicUsize, Ordering};
@@ -17,10 +20,11 @@ pub(crate) const MAX_PENDING_OPS: usize = 1;
 // This constant must be a power of two for `index()` to work.
 const_assert!(MAX_PENDING_OPS.is_power_of_two());
 
-/// A pending operation.
+/// Data for a pending operation.
 ///
-/// It is a combination of the its op-code (`T`), the corresponding result (`R`)
-/// along with potential meta-data (`M`) to keep track of other things.
+/// It is a combination of the actual operation (`T`), the corresponding
+/// expected result (`R`), along with potential meta-data (`M`) to keep track of
+/// other things.
 pub struct PendingOperation<T, R, M: Default> {
     pub(crate) op: Cell<Option<T>>,
     pub(crate) resp: Cell<Option<R>>,
@@ -144,8 +148,8 @@ where
         // that the combiner sees this operation. Relying on TSO here to make
         // sure that the tail is updated only after the operation has been
         // written in.
-        let e = self.batch[self.index(t)].op.replace(Some(op));
-        let m = self.batch[self.index(t)].meta.replace(meta);
+        self.batch[self.index(t)].op.replace(Some(op));
+        self.batch[self.index(t)].meta.replace(meta);
 
         self.tail.store(t + 1, Ordering::Relaxed);
         true
@@ -177,7 +181,7 @@ where
     #[inline(always)]
     pub(crate) fn enqueue_resp(&self, response: R) {
         let h = self.comb.load(Ordering::Relaxed);
-        let e = self.batch[self.index(h)].resp.replace(Some(response));
+        self.batch[self.index(h)].resp.replace(Some(response));
         self.comb.store(h + 1, Ordering::Relaxed);
     }
 

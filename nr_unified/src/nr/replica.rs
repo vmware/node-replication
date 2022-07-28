@@ -23,19 +23,17 @@ use super::log::{Log, LogToken};
 use super::rwlock::RwLock;
 use super::Dispatch;
 
-/// Unique identifier for the given replicas.
-///
-/// It's unique within a [`crate::NodeReplicated`] instance. It makes sense to
-/// be e.g., the same as the NUMA node that this replica corresponds to.
-pub type ReplicaId = usize;
+pub use crate::replica::ReplicaId;
+pub use crate::replica::ReplicaToken;
+pub use crate::replica::MAX_THREADS_PER_REPLICA;
 
 /// Errors a replica can encounter (and return to clients) when they execute
 /// operations.
 ///
 /// Note that these errors are not fatal and are resolved as part of the
-/// [`crate::NodeReplicated`] logic and not passed on to clients. Therefore,
+/// [`crate::nr::NodeReplicated`] logic and not passed on to clients. Therefore,
 /// clients of the library don't need to worry about this if they don't
-/// implement their own version of [`crate::NodeReplicated`].
+/// implement their own version of [`crate::nr::NodeReplicated`].
 pub enum ReplicaError<'r, D>
 where
     D: Sized + Dispatch + Sync,
@@ -92,57 +90,6 @@ where
     }
 }
 
-/// A (monotoically increasing) number that uniquely identifies a thread that's
-/// registered with the replica.
-///
-/// `ThreadIdx` will start at 1 because they're used in the [`CombinerLock`] to
-/// indicate which thread holds the lock, and 0 means no one holds the lock. See
-/// also [`Replica::register`].
-pub type ThreadIdx = usize;
-
-/// A token handed out to threads that [`Replica::register`] with replicas.
-///
-/// It is a bug to supply this token to another replica object than the one that
-/// issued it. This would ideally be a runtime check which leads to a panic in
-/// the future.
-///
-/// # Implementation detail on types
-/// Ideally this would be an affine type (not Clone/Copy) for max. type safety
-/// and returned again by [`Replica::execute()`] and [`Replica::execute_mut()`].
-/// However it feels like this would hurt API ergonomics a lot.
-#[derive(Copy, Clone, Debug, PartialEq)]
-pub struct ReplicaToken(ThreadIdx);
-
-/// Make it harder to accidentially use the same ReplicaToken on multiple
-/// threads.
-///
-/// That would be a disaster.
-#[cfg(features = "unstable")]
-impl !Send for ReplicaToken {}
-
-impl ReplicaToken {
-    /// Creates a new ReplicaToken.
-    ///
-    /// # Safety
-    /// This should only ever be used for the benchmark harness to create additional fake
-    /// replica implementations.
-    ///
-    /// If `pub(test)` is ever supported, we should do that instead.
-    #[doc(hidden)]
-    pub unsafe fn new(tid: ThreadIdx) -> Self {
-        ReplicaToken(tid)
-    }
-
-    /// Get the (replica specific) thread identifier for this particular token.
-    ///
-    /// This method always returns something >= 1.
-    pub fn tid(&self) -> ThreadIdx {
-        self.0
-    }
-}
-
-pub use crate::replica::MAX_THREADS_PER_REPLICA;
-
 /// An instance of a replicated data structure which uses a shared [`Log`] to
 /// scale operations on the data structure across cores and processors.
 ///
@@ -157,57 +104,62 @@ pub use crate::replica::MAX_THREADS_PER_REPLICA;
 ///   [`Dispatch::dispatch_mut`] along with any operations that we received from
 ///   other replicas/threads that share the same underlying log.
 ///
-/// - A immutable operation uses [`Replica::execute()`] and eventually calls D's
+/// - A immutable operation uses [`Replica::execute`] and eventually calls D's
 ///   [`Dispatch::dispatch`] method.
 ///
 /// # When to use Replica
 ///
 /// In most common cases, a client of this library doesn't need to interact
 /// directly with a [`Replica`] object, but instead should use
-/// [`crate::NodeReplicated`] which encapsulates multiple replica objects and a
-/// log, handles registration and ensures liveness when using multiple replicas.
+/// [`crate::nr::NodeReplicated`] which encapsulates multiple replica objects
+/// and a log, handles registration and ensures liveness when using multiple
+/// replicas.
 pub struct Replica<D>
 where
     D: Sized + Dispatch + Sync,
 {
-    /// An identifier that we got from the Log when the replica was registered against the
-    /// shared-log ([`Log::register()`]). Required to pass to the log when consuming
-    /// operations from the log.
+    /// An identifier that we got from the Log when the replica was registered
+    /// against the shared-log ([`Log::register()`]). Required to pass to the
+    /// log when consuming operations from the log.
     log_tkn: LogToken,
 
-    /// Stores the index of the thread currently doing flat combining. Field is zero if
-    /// there isn't any thread actively performing flat-combining. Atomic since this acts
-    /// as the combiner lock.
+    /// Stores the index of the thread currently doing flat combining. Field is
+    /// zero if there isn't any thread actively performing flat-combining.
+    /// Atomic since this acts as the combiner lock.
     combiner: CachePadded<AtomicUsize>,
 
-    /// Thread index that will be handed out to the next thread that registers with the
-    /// replica when calling [`Replica::register()`].
+    /// Thread index that will be handed out to the next thread that registers
+    /// with the replica when calling [`Replica::register()`].
     next: CachePadded<AtomicUsize>,
 
-    /// List of per-thread contexts. Threads buffer write operations here when they cannot
-    /// perform flat combining (because another thread might already be doing so).
+    /// List of per-thread contexts. Threads buffer write operations here when
+    /// they cannot perform flat combining (because another thread might already
+    /// be doing so).
     ///
-    /// The vector is initialized with [`MAX_THREADS_PER_REPLICA`] [`Context`] elements.
+    /// The vector is initialized with [`MAX_THREADS_PER_REPLICA`] [`Context`]
+    /// elements.
     contexts: Vec<Context<<D as Dispatch>::WriteOperation, <D as Dispatch>::Response>>,
 
     /// A buffer of operations for flat combining.
     ///
-    /// The combiner stages operations in this vector and then batch appends them in the
-    /// shared log. This helps amortize the cost of the `compare_and_swap` on the tail of
-    /// the log.
+    /// The combiner stages operations in this vector and then batch appends
+    /// them in the shared log. This helps amortize the cost of the
+    /// `compare_and_swap` on the tail of the log.
     buffer: RefCell<Vec<<D as Dispatch>::WriteOperation>>,
 
-    /// Number of operations collected by the combiner from each thread at any given point
-    /// of time. Index `i` holds the number of operations collected from thread with
-    /// [`ThreadIdx`] `i + 1`.
+    /// Number of operations collected by the combiner from each thread at any
+    /// given point of time. Index `i` holds the number of operations collected
+    /// from thread with [`crate::replica::ThreadIdx`] `i + 1`.
     inflight: RefCell<[usize; MAX_THREADS_PER_REPLICA]>,
 
-    /// A buffer of results collected after flat combining. With the help of `inflight`,
-    /// the combiner enqueues these results into the appropriate thread context.
+    /// A buffer of results collected after flat combining. With the help of
+    /// `inflight`, the combiner enqueues these results into the appropriate
+    /// thread context.
     result: RefCell<Vec<<D as Dispatch>::Response>>,
 
     /// The underlying data structure. This is shared among all threads that are
-    /// registered with this replica. Each replica maintains its own copy of `data`.
+    /// registered with this replica. Each replica maintains its own copy of
+    /// `data`.
     data: CachePadded<RwLock<D>>,
 }
 
@@ -243,9 +195,9 @@ where
     ///
     /// ```
     /// #![feature(generic_associated_types)]
-    /// use node_replication::Dispatch;
-    /// use node_replication::log::Log;
-    /// use node_replication::replica::Replica;
+    /// use node_replication::nr::Dispatch;
+    /// use node_replication::nr::Log;
+    /// use node_replication::nr::Replica;
     ///
     /// // The data structure we want replicated.
     /// #[derive(Default)]
@@ -292,7 +244,7 @@ where
 /// The CombinerLock object indicates that we succesfully hold the combiner lock of the
 /// [`Replica`].
 ///
-/// The atomic `combiner` field is set to the [`ThreadIdx`] of the owner. On `drop` we have
+/// The atomic `combiner` field is set to the [`crate::replica::ThreadIdx`] of the owner. On `drop` we have
 /// to reset it to 0.
 pub struct CombinerLock<'a, D>
 where
@@ -406,9 +358,9 @@ where
     ///
     /// ```
     /// #![feature(generic_associated_types)]
-    /// use node_replication::Dispatch;
-    /// use node_replication::log::Log;
-    /// use node_replication::replica::Replica;
+    /// use node_replication::nr::Dispatch;
+    /// use node_replication::nr::Log;
+    /// use node_replication::nr::Replica;
     ///
     /// #[derive(Default)]
     /// struct Data {
@@ -487,9 +439,9 @@ where
     ///
     /// ```
     /// #![feature(generic_associated_types)]
-    /// use node_replication::Dispatch;
-    /// use node_replication::log::Log;
-    /// use node_replication::replica::Replica;
+    /// use node_replication::nr::Dispatch;
+    /// use node_replication::nr::Log;
+    /// use node_replication::nr::Replica;
     ///
     /// #[derive(Default)]
     /// struct Data {
@@ -548,7 +500,7 @@ where
     /// of the error.
     ///
     /// Before calling, the client should have ensured that progress was made on
-    /// the replica that was reported as stuck. Study [`crate::NodeReplicated`]
+    /// the replica that was reported as stuck. Study [`crate::nr::NodeReplicated`]
     /// for an example on how to use this method.
     pub fn execute_mut_locked<'lock>(
         &'lock self,
@@ -584,9 +536,9 @@ where
     ///
     /// ```
     /// #![feature(generic_associated_types)]
-    /// use node_replication::Dispatch;
-    /// use node_replication::log::Log;
-    /// use node_replication::replica::Replica;
+    /// use node_replication::nr::Dispatch;
+    /// use node_replication::nr::Log;
+    /// use node_replication::nr::Replica;
     ///
     /// use std::sync::Arc;
     ///
@@ -658,7 +610,7 @@ where
     /// as part of the error.
     ///
     /// Before calling, the client should have ensured that progress was made on
-    /// the replica that was reported as stuck. Study [`crate::NodeReplicated`]
+    /// the replica that was reported as stuck. Study [`crate::nr::NodeReplicated`]
     /// for an example on how to use this method.
     pub fn execute_locked<'rop, 'lock>(
         &'lock self,

@@ -1,9 +1,10 @@
 // Copyright © 2019-2020 VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+//! The Replica implementation for CNR.
+
 use core::cell::RefCell;
 use core::hint::spin_loop;
-#[cfg(feature = "unstable")]
 use core::intrinsics::unlikely;
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -11,77 +12,32 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use crossbeam_utils::CachePadded;
-use static_assertions::const_assert;
 
 use super::context::Context;
 use super::log::Log;
 use super::Dispatch;
 use super::LogMapper;
 
-#[cfg(not(feature = "unstable"))]
-#[inline]
-fn unlikely(b: bool) -> bool {
-    b
-}
-
-/// A token handed out to threads registered with replicas.
-///
-/// # Note
-/// Ideally this would be an affine type and returned again by
-/// `execute` and `execute_ro`. However it feels like this would
-/// hurt API ergonomics a lot.
-#[derive(Copy, Clone, Debug, PartialEq)]
-pub struct ReplicaToken(pub usize);
-
-/// To make it harder to use the same ReplicaToken on multiple threads.
-#[cfg(features = "unstable")]
-impl !Send for ReplicaToken {}
-
-impl ReplicaToken {
-    /// Creates a new ReplicaToken
-    ///
-    /// # Safety
-    /// This should only ever be used for the benchmark harness to create
-    /// additional fake replica implementations.
-    /// If we had a means to declare this not-pub we should do that instead.
-    #[doc(hidden)]
-    pub unsafe fn new(ident: usize) -> Self {
-        ReplicaToken(ident)
-    }
-
-    /// Getter for id
-    pub fn id(&self) -> usize {
-        self.0
-    }
-}
-
-/// The maximum number of threads that can be registered with a replica. If more than
-/// this number of threads try to register, the register() function will return None.
-///
-/// # Important
-/// If this number is adjusted due to the use of the `arr_macro::arr` macro we
-/// have to adjust the `256` literals in the `new` constructor of `Replica`.
-pub const MAX_THREADS_PER_REPLICA: usize = 256;
-const_assert!(
-    MAX_THREADS_PER_REPLICA >= 1 && (MAX_THREADS_PER_REPLICA & (MAX_THREADS_PER_REPLICA - 1) == 0)
-);
+use crate::log::LogToken;
+use crate::replica::ReplicaToken;
+pub use crate::replica::MAX_THREADS_PER_REPLICA;
 
 /// Type that has meta-data about either scan or write op while it's in the log.
 type OperationState<D> = (<D as Dispatch>::WriteOperation, usize, bool);
 
 /// An instance of per log state maintained by each replica.
-pub(self) struct LogState<'a, D>
+pub(self) struct LogState<D>
 where
     D: Sized + Dispatch + Sync,
 {
     /// References to the shared logs that operations will be appended to and the
     /// data structure will be updated from.
-    slog: Arc<Log<'a, <D as Dispatch>::WriteOperation>>,
+    slog: Arc<Log<<D as Dispatch>::WriteOperation>>,
 
     /// A replica receives a replica-identifier when it registers against
     /// a log. Each replica registers itself against all the shared logs.
     /// It is required when consuming operations from the log.
-    idx: usize,
+    idx: LogToken,
 
     /// Thread idx of the thread currently responsible for flat combining. Zero
     /// if there isn't any thread actively performing flat combining on the log.
@@ -103,11 +59,11 @@ where
     scan_buffer: CachePadded<RefCell<Vec<OperationState<D>>>>,
 }
 
-impl<'a, D> LogState<'a, D>
+impl<D> LogState<D>
 where
     D: Sized + Dispatch + Sync,
 {
-    fn new(log: Arc<Log<'a, <D as Dispatch>::WriteOperation>>) -> LogState<'a, D> {
+    fn new(log: Arc<Log<<D as Dispatch>::WriteOperation>>) -> LogState<D> {
         #[allow(clippy::declare_interior_mutable_const)]
         const PENDING_DEFAULT: CachePadded<AtomicBool> = CachePadded::new(AtomicBool::new(false));
 
@@ -147,7 +103,7 @@ where
 /// `execute`). A mutable operation will be eventually executed against the replica
 /// along with any operations that were received on other replicas that share
 /// the same underlying log.
-pub struct Replica<'a, D>
+pub struct Replica<D>
 where
     D: Sized + Dispatch + Sync,
 {
@@ -171,14 +127,14 @@ where
     hash: Vec<CachePadded<RefCell<Vec<usize>>>>,
 
     /// An instance of per log state maintained by each replica.
-    logstate: Vec<CachePadded<LogState<'a, D>>>,
+    logstate: Vec<CachePadded<LogState<D>>>,
 }
 
 /// The Replica is Sync. Member variables are protected by a CAS on `combiner`.
 /// Contexts are thread-safe.
-unsafe impl<'a, D> Sync for Replica<'a, D> where D: Sized + Sync + Dispatch {}
+unsafe impl<D> Sync for Replica<D> where D: Sized + Sync + Dispatch {}
 
-impl<'a, D> core::fmt::Debug for Replica<'a, D>
+impl<D> core::fmt::Debug for Replica<D>
 where
     D: Sized + Sync + Dispatch,
 {
@@ -187,7 +143,7 @@ where
     }
 }
 
-impl<'a, D> Replica<'a, D>
+impl<D> Replica<D>
 where
     D: Sized + Dispatch + Default + Sync,
 {
@@ -199,10 +155,11 @@ where
     /// # Example
     ///
     /// ```
-    /// use cnr::Dispatch;
-    /// use cnr::Log;
-    /// use cnr::LogMapper;
-    /// use cnr::Replica;
+    /// #![feature(generic_associated_types)]
+    /// use node_replication::cnr::Dispatch;
+    /// use node_replication::cnr::Log;
+    /// use node_replication::cnr::LogMapper;
+    /// use node_replication::cnr::Replica;
     ///
     /// use core::sync::atomic::{AtomicUsize, Ordering};
     /// use std::sync::Arc;
@@ -237,14 +194,14 @@ where
     ///
     /// // This trait allows the `Data` to be used with node-replication.
     /// impl Dispatch for Data {
-    ///     type ReadOperation = OpRd;
+    ///     type ReadOperation<'rop> = OpRd;
     ///     type WriteOperation = OpWr;
     ///     type Response = Option<usize>;
     ///
     ///     // A read returns the underlying u64.
-    ///     fn dispatch(
+    ///     fn dispatch<'rop>(
     ///         &self,
-    ///         _op: Self::ReadOperation,
+    ///         _op: Self::ReadOperation<'rop>,
     ///     ) -> Self::Response {
     ///         Some(self.junk.load(Ordering::Relaxed))
     ///     }
@@ -265,12 +222,12 @@ where
     /// // Create a replica that uses the above log.
     /// let replica = Replica::<Data>::new(vec![log]);
     /// ```
-    pub fn new(logs: Vec<Arc<Log<'_, <D as Dispatch>::WriteOperation>>>) -> Arc<Replica<'_, D>> {
+    pub fn new(logs: Vec<Arc<Log<<D as Dispatch>::WriteOperation>>>) -> Arc<Replica<D>> {
         Replica::with_data(logs, Default::default())
     }
 }
 
-impl<'a, D> Replica<'a, D>
+impl<D> Replica<D>
 where
     D: Sized + Dispatch + Sync,
 {
@@ -319,9 +276,9 @@ where
     /// See `with_data` documentation without unstable feature.
     #[cfg(feature = "unstable")]
     pub fn with_data(
-        logs: Vec<Arc<Log<'_, <D as Dispatch>::WriteOperation>>>,
+        logs: Vec<Arc<Log<<D as Dispatch>::WriteOperation>>>,
         d: D,
-    ) -> Arc<Replica<'_, D>> {
+    ) -> Arc<Replica<D>> {
         use core::mem::MaybeUninit;
 
         let mut uninit_replica: Arc<MaybeUninit<Replica<D>>> = Arc::new_zeroed();
@@ -375,10 +332,11 @@ where
     /// # Example
     ///
     /// ```
-    /// use cnr::Dispatch;
-    /// use cnr::Log;
-    /// use cnr::LogMapper;
-    /// use cnr::Replica;
+    /// #![feature(generic_associated_types)]
+    /// use node_replication::cnr::Dispatch;
+    /// use node_replication::cnr::Log;
+    /// use node_replication::cnr::LogMapper;
+    /// use node_replication::cnr::Replica;
     ///
     /// use core::sync::atomic::{AtomicUsize, Ordering};
     /// use std::sync::Arc;
@@ -411,13 +369,13 @@ where
     /// }
     ///
     /// impl Dispatch for Data {
-    ///     type ReadOperation = OpRd;
+    ///     type ReadOperation<'rop> = OpRd;
     ///     type WriteOperation = OpWr;
     ///     type Response = Option<usize>;
     ///
-    ///     fn dispatch(
+    ///     fn dispatch<'rop>(
     ///         &self,
-    ///         _op: Self::ReadOperation,
+    ///         _op: Self::ReadOperation<'rop>,
     ///     ) -> Self::Response {
     ///         Some(self.junk.load(Ordering::Relaxed))
     ///     }
@@ -465,10 +423,11 @@ where
     /// # Example
     ///
     /// ```
-    /// use cnr::Dispatch;
-    /// use cnr::Log;
-    /// use cnr::LogMapper;
-    /// use cnr::Replica;
+    /// #![feature(generic_associated_types)]
+    /// use node_replication::cnr::Dispatch;
+    /// use node_replication::cnr::Log;
+    /// use node_replication::cnr::LogMapper;
+    /// use node_replication::cnr::Replica;
     ///
     /// use core::sync::atomic::{AtomicUsize, Ordering};
     /// use std::sync::Arc;
@@ -501,13 +460,13 @@ where
     /// }
     ///
     /// impl Dispatch for Data {
-    ///     type ReadOperation = OpRd;
+    ///     type ReadOperation<'rop> = OpRd;
     ///     type WriteOperation = OpWr;
     ///     type Response = Option<usize>;
     ///
-    ///     fn dispatch(
+    ///     fn dispatch<'rop>(
     ///         &self,
-    ///         _op: Self::ReadOperation,
+    ///         _op: Self::ReadOperation<'rop>,
     ///     ) -> Self::Response {
     ///         Some(self.junk.load(Ordering::Relaxed))
     ///     }
@@ -558,10 +517,11 @@ where
     /// # Example
     ///
     /// ```
-    /// use cnr::Dispatch;
-    /// use cnr::Log;
-    /// use cnr::LogMapper;
-    /// use cnr::Replica;
+    /// #![feature(generic_associated_types)]
+    /// use node_replication::cnr::Dispatch;
+    /// use node_replication::cnr::Log;
+    /// use node_replication::cnr::LogMapper;
+    /// use node_replication::cnr::Replica;
     ///
     /// use core::sync::atomic::{AtomicUsize, Ordering};
     /// use std::sync::Arc;
@@ -594,13 +554,13 @@ where
     /// }
     ///
     /// impl Dispatch for Data {
-    ///     type ReadOperation = OpRd;
+    ///     type ReadOperation<'rop> = OpRd;
     ///     type WriteOperation = OpWr;
     ///     type Response = Option<usize>;
     ///
-    ///     fn dispatch(
+    ///     fn dispatch<'rop>(
     ///         &self,
-    ///         _op: Self::ReadOperation,
+    ///         _op: Self::ReadOperation<'rop>,
     ///     ) -> Self::Response {
     ///         Some(self.junk.load(Ordering::Relaxed))
     ///     }
@@ -672,7 +632,7 @@ where
                         self.handle_scan_op(o, thread_id, *logidx, rid, tid, is_read_op, depends_on)
                     } else {
                         let resp = self.data.dispatch_mut(o);
-                        if rid == self.logstate[*logidx].idx {
+                        if rid == self.logstate[*logidx].idx.0 {
                             self.contexts[tid - 1].enqueue_resp(resp);
                         }
                         true
@@ -681,7 +641,7 @@ where
 
                 match self.logstate[*logidx].slog.try_append_scan(
                     &op,
-                    self.logstate[*logidx].idx,
+                    &self.logstate[*logidx].idx,
                     &entries,
                     f,
                 ) {
@@ -700,7 +660,7 @@ where
         // Update scan entry depends_on.
         self.logstate[root_log].slog.fix_scan_entry(
             &op,
-            self.logstate[root_log].idx,
+            &self.logstate[root_log].idx,
             Arc::new(offset),
         );
     }
@@ -711,10 +671,11 @@ where
     /// # Example
     ///
     /// ```
-    /// use cnr::Dispatch;
-    /// use cnr::Log;
-    /// use cnr::LogMapper;
-    /// use cnr::Replica;
+    /// #![feature(generic_associated_types)]
+    /// use node_replication::cnr::Dispatch;
+    /// use node_replication::cnr::Log;
+    /// use node_replication::cnr::LogMapper;
+    /// use node_replication::cnr::Replica;
     ///
     /// use core::sync::atomic::{AtomicUsize, Ordering};
     /// use std::sync::Arc;
@@ -747,13 +708,13 @@ where
     /// }
     ///
     /// impl Dispatch for Data {
-    ///     type ReadOperation = OpRd;
+    ///     type ReadOperation<'rop> = OpRd;
     ///     type WriteOperation = OpWr;
     ///     type Response = Option<usize>;
     ///
-    ///     fn dispatch(
+    ///     fn dispatch<'rop>(
     ///         &self,
-    ///         _op: Self::ReadOperation,
+    ///         _op: Self::ReadOperation<'rop>,
     ///     ) -> Self::Response {
     ///         Some(self.junk.load(Ordering::Relaxed))
     ///     }
@@ -791,10 +752,11 @@ where
     /// # Example
     ///
     /// ```
-    /// use cnr::Dispatch;
-    /// use cnr::Log;
-    /// use cnr::LogMapper;
-    /// use cnr::Replica;
+    /// #![feature(generic_associated_types)]
+    /// use node_replication::cnr::Dispatch;
+    /// use node_replication::cnr::Log;
+    /// use node_replication::cnr::LogMapper;
+    /// use node_replication::cnr::Replica;
     ///
     /// use core::sync::atomic::{AtomicUsize, Ordering};
     /// use std::sync::Arc;
@@ -827,13 +789,13 @@ where
     /// }
     ///
     /// impl Dispatch for Data {
-    ///     type ReadOperation = OpRd;
+    ///     type ReadOperation<'rop> = OpRd;
     ///     type WriteOperation = OpWr;
     ///     type Response = Option<usize>;
     ///
-    ///     fn dispatch(
+    ///     fn dispatch<'rop>(
     ///         &self,
-    ///         _op: Self::ReadOperation,
+    ///         _op: Self::ReadOperation<'rop>,
     ///     ) -> Self::Response {
     ///         Some(self.junk.load(Ordering::Relaxed))
     ///     }
@@ -871,7 +833,7 @@ where
             let ctail = self.logstate[hash_idx].slog.get_ctail();
             while !self.logstate[hash_idx]
                 .slog
-                .is_replica_synced_for_reads(self.logstate[hash_idx].idx, ctail)
+                .is_replica_synced_for_reads(&self.logstate[hash_idx].idx, ctail)
             {
                 self.try_combine(idx.0, hash_idx);
                 spin_loop();
@@ -947,7 +909,7 @@ where
             true
         };
 
-        self.logstate[0].slog.exec(self.logstate[0].idx, &mut f);
+        self.logstate[0].slog.exec(&self.logstate[0].idx, &mut f);
 
         v(&self.data);
 
@@ -964,7 +926,7 @@ where
             let ctail = self.logstate[i].slog.get_ctail();
             while !self.logstate[i]
                 .slog
-                .is_replica_synced_for_reads(self.logstate[i].idx, ctail)
+                .is_replica_synced_for_reads(&self.logstate[i].idx, ctail)
             {
                 self.try_combine(idx.0, i);
                 spin_loop();
@@ -981,7 +943,7 @@ where
         let ctail = self.logstate[log_id - 1].slog.get_ctail();
         if !self.logstate[log_id - 1]
             .slog
-            .is_replica_synced_for_reads(self.logstate[log_id - 1].idx, ctail)
+            .is_replica_synced_for_reads(&self.logstate[log_id - 1].idx, ctail)
         {
             self.try_combine(idx.0, log_id - 1);
         }
@@ -1006,7 +968,7 @@ where
         let ctail = self.logstate[hash_idx].slog.get_ctail();
         while !self.logstate[hash_idx]
             .slog
-            .is_replica_synced_for_reads(self.logstate[hash_idx].idx, ctail)
+            .is_replica_synced_for_reads(&self.logstate[hash_idx].idx, ctail)
         {
             self.try_combine(tid, hash_idx);
             spin_loop();
@@ -1027,7 +989,7 @@ where
         is_read_op: bool,
     ) -> bool {
         loop {
-            if self.contexts[tid - 1].enqueue(op.clone(), hash, is_scan, is_read_op) {
+            if self.contexts[tid - 1].enqueue(op.clone(), (hash, is_scan, is_read_op)) {
                 self.logstate[hash].pending[tid - 1].store(true, Ordering::Release);
                 break;
             }
@@ -1113,7 +1075,7 @@ where
                 match is_scan {
                     false => {
                         let resp = self.data.dispatch_mut(o);
-                        if rid == self.logstate[hashidx].idx {
+                        if rid == self.logstate[hashidx].idx.0 {
                             self.contexts[tid - 1].enqueue_resp(resp);
                         }
                         true
@@ -1126,7 +1088,7 @@ where
             };
             self.logstate[hashidx]
                 .slog
-                .append(&buffer, self.logstate[hashidx].idx, f);
+                .append(&buffer, &self.logstate[hashidx].idx, f);
 
             for i in 0..scan_buffer.len() {
                 self.append_scan(scan_buffer[i].clone(), thread_id);
@@ -1147,7 +1109,7 @@ where
                     self.handle_scan_op(o, thread_id, hashidx, rid, tid, is_read_op, depends_on)
                 } else {
                     let resp = self.data.dispatch_mut(o);
-                    if rid == self.logstate[hashidx].idx {
+                    if rid == self.logstate[hashidx].idx.0 {
                         self.contexts[tid - 1].enqueue_resp(resp);
                     };
                     true
@@ -1155,7 +1117,7 @@ where
             };
             self.logstate[hashidx]
                 .slog
-                .exec(self.logstate[hashidx].idx, &mut f);
+                .exec(&self.logstate[hashidx].idx, &mut f);
         }
     }
 
@@ -1175,7 +1137,7 @@ where
     ) -> bool {
         // Return immediately if its an immutable scan op and the
         // executor replica-id is not same as the issuer replica-id.
-        if is_read_op && issuer_rid != self.logstate[hashidx].idx {
+        if is_read_op && issuer_rid != self.logstate[hashidx].idx.0 {
             return true;
         }
 
@@ -1190,7 +1152,7 @@ where
             {
                 if !self.logstate[logidx]
                     .slog
-                    .is_replica_synced_for_reads(self.logstate[logidx].idx, *depends_on)
+                    .is_replica_synced_for_reads(&self.logstate[logidx].idx, *depends_on)
                 {
                     self.try_combine(thread_id, logidx);
                 }
@@ -1198,7 +1160,7 @@ where
 
             if self.is_replica_sync_for_logs(1, self.logstate.len(), depends_on) {
                 let resp = self.data.dispatch_mut(op);
-                if issuer_rid == self.logstate[hashidx].idx {
+                if issuer_rid == self.logstate[hashidx].idx.0 {
                     self.contexts[issuer_tid - 1].enqueue_resp(resp);
                 };
                 true
@@ -1210,7 +1172,7 @@ where
             let logidx = 0;
             match self.logstate[logidx]
                 .slog
-                .is_replica_synced_for_reads(self.logstate[logidx].idx, depends_on[logidx])
+                .is_replica_synced_for_reads(&self.logstate[logidx].idx, depends_on[logidx])
             {
                 true => true,
                 false => {
@@ -1235,7 +1197,7 @@ where
         for (logidx, tail) in tails.iter().enumerate().take(end).skip(start) {
             if !self.logstate[logidx]
                 .slog
-                .is_replica_synced_for_reads(self.logstate[logidx].idx, *tail)
+                .is_replica_synced_for_reads(&self.logstate[logidx].idx, *tail)
             {
                 is_synced = false;
             }
@@ -1247,6 +1209,8 @@ where
 #[cfg(test)]
 mod test {
     extern crate std;
+
+    use crate::cnr::log::LogMetaData;
 
     use super::*;
     use std::vec;
@@ -1277,11 +1241,11 @@ mod test {
     }
 
     impl Dispatch for Data {
-        type ReadOperation = OpRd;
+        type ReadOperation<'rop> = OpRd;
         type WriteOperation = OpWr;
         type Response = Result<usize, ()>;
 
-        fn dispatch(&self, _op: Self::ReadOperation) -> Self::Response {
+        fn dispatch<'rop>(&self, _op: Self::ReadOperation<'rop>) -> Self::Response {
             Ok(self.junk.load(Ordering::Relaxed))
         }
 
@@ -1294,9 +1258,12 @@ mod test {
     // Tests whether we can construct a Replica given a log.
     #[test]
     fn test_replica_create() {
-        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new(1024, 1));
+        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new_with_bytes(
+            1024,
+            LogMetaData::new(1),
+        ));
         let repl = Replica::<Data>::new(vec![slog]);
-        assert_eq!(repl.logstate[0].idx, 1);
+        assert_eq!(repl.logstate[0].idx.0, 1);
         assert_eq!(repl.logstate[0].combiner.load(Ordering::SeqCst), 0);
         assert_eq!(repl.next.load(Ordering::SeqCst), 1);
         assert_eq!(repl.contexts.len(), MAX_THREADS_PER_REPLICA);
@@ -1310,7 +1277,10 @@ mod test {
     // Tests whether we can register with this replica and receive an idx.
     #[test]
     fn test_replica_register() {
-        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new(1024, 1));
+        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new_with_bytes(
+            1024,
+            LogMetaData::new(1),
+        ));
         let repl = Replica::<Data>::new(vec![slog]);
         assert_eq!(repl.register(), Some(ReplicaToken(1)));
         assert_eq!(repl.next.load(Ordering::SeqCst), 2);
@@ -1322,7 +1292,10 @@ mod test {
     // Tests whether registering more than the maximum limit of threads per replica is disallowed.
     #[test]
     fn test_replica_register_none() {
-        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new(1024, 1));
+        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new_with_bytes(
+            1024,
+            LogMetaData::new(1),
+        ));
         let repl = Replica::<Data>::new(vec![slog]);
         repl.next
             .store(MAX_THREADS_PER_REPLICA + 1, Ordering::SeqCst);
@@ -1332,7 +1305,10 @@ mod test {
     // Tests that we can successfully allow operations to go pending on this replica.
     #[test]
     fn test_replica_make_pending() {
-        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new(1024, 1));
+        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new_with_bytes(
+            1024,
+            LogMetaData::new(1),
+        ));
         let repl = Replica::<Data>::new(vec![slog]);
         let mut o = vec![];
         let mut scan = vec![];
@@ -1378,7 +1354,10 @@ mod test {
     // Tests whether try_combine() fails if someone else is currently flat combining.
     #[test]
     fn test_replica_try_combine_fail() {
-        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new(1024, 1));
+        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new_with_bytes(
+            1024,
+            LogMetaData::new(1),
+        ));
         let repl = Replica::<Data>::new(vec![slog]);
 
         repl.next.store(9, Ordering::SeqCst);
@@ -1437,10 +1416,10 @@ mod test {
         let repl = Replica::<Data>::new(vec![slog.clone()]);
 
         // Add in operations to the log off the side, not through the replica.
-        let _ignore = slog.register().expect("Failed to register with log.");
+        let ltkn = slog.register().expect("Failed to register with log.");
         let o = [(OpWr(121), 1, false), (OpWr(212), 1, false)];
-        slog.append(&o, 2, |_o: OpWr, _i: usize, _, _, _, _| true);
-        slog.exec(2, &mut |_o: OpWr, _i: usize, _, _, _, _| true);
+        slog.append(&o, &ltkn, |_o: OpWr, _i: usize, _, _, _, _| true);
+        slog.exec(&ltkn, &mut |_o: OpWr, _i: usize, _, _, _, _| true);
 
         let t1 = repl.register().expect("Failed to register with replica.");
         assert_eq!(Ok(2), repl.execute(OpRd(11), t1));
@@ -1500,11 +1479,11 @@ mod test {
         }
 
         impl Dispatch for Block {
-            type ReadOperation = OpRd;
+            type ReadOperation<'rop> = OpRd;
             type WriteOperation = OpWr;
             type Response = Result<usize, ()>;
 
-            fn dispatch(&self, _op: Self::ReadOperation) -> Self::Response {
+            fn dispatch<'rop>(&self, _op: Self::ReadOperation<'rop>) -> Self::Response {
                 Ok(self.junk.load(Ordering::Relaxed))
             }
 
@@ -1591,11 +1570,11 @@ mod test {
     }
 
     impl Dispatch for ScanDS {
-        type ReadOperation = ReadOp;
+        type ReadOperation<'rop> = ReadOp;
         type WriteOperation = WriteOp;
         type Response = Result<usize, ()>;
 
-        fn dispatch(&self, _op: Self::ReadOperation) -> Self::Response {
+        fn dispatch<'rop>(&self, _op: Self::ReadOperation<'rop>) -> Self::Response {
             Ok(self.junk.load(Ordering::Relaxed))
         }
 
@@ -1611,10 +1590,12 @@ mod test {
         let nlogs = 4;
 
         for i in 0..nlogs {
-            logs.push(Arc::new(Log::<<ScanDS as Dispatch>::WriteOperation>::new(
-                4 * 1024 * 1024,
-                i + 1,
-            )));
+            logs.push(Arc::new(
+                Log::<<ScanDS as Dispatch>::WriteOperation>::new_with_bytes(
+                    4 * 1024 * 1024,
+                    LogMetaData::new(i + 1),
+                ),
+            ));
         }
 
         let repl = Replica::<ScanDS>::new(logs.clone());
@@ -1634,10 +1615,12 @@ mod test {
         let nlogs = 4;
 
         for i in 0..nlogs {
-            logs.push(Arc::new(Log::<<ScanDS as Dispatch>::WriteOperation>::new(
-                4 * 1024 * 1024,
-                i + 1,
-            )));
+            logs.push(Arc::new(
+                Log::<<ScanDS as Dispatch>::WriteOperation>::new_with_bytes(
+                    4 * 1024 * 1024,
+                    LogMetaData::new(i + 1),
+                ),
+            ));
         }
 
         let repl1 = Replica::<ScanDS>::new(logs.clone());
@@ -1646,7 +1629,7 @@ mod test {
         let idx2 = repl2.register().unwrap();
 
         for _i in 0..nlogs {
-            repl2.append_scan((WriteOp::SetScan(0), idx2.id(), false), idx2.id());
+            repl2.append_scan((WriteOp::SetScan(0), idx2.tid(), false), idx2.tid());
         }
         let resp = repl1.execute_mut(WriteOp::Set(0), idx1);
         assert_eq!(resp, Ok(nlogs));
@@ -1659,10 +1642,12 @@ mod test {
         let nlogs = 4;
 
         for i in 0..nlogs {
-            logs.push(Arc::new(Log::<<ScanDS as Dispatch>::WriteOperation>::new(
-                4 * 1024 * 1024,
-                i + 1,
-            )));
+            logs.push(Arc::new(
+                Log::<<ScanDS as Dispatch>::WriteOperation>::new_with_bytes(
+                    4 * 1024 * 1024,
+                    LogMetaData::new(i + 1),
+                ),
+            ));
         }
 
         let repl1 = Replica::<ScanDS>::new(logs.clone());
@@ -1671,7 +1656,7 @@ mod test {
         let idx2 = repl2.register().unwrap();
 
         for i in 0..nlogs {
-            repl2.append_scan((WriteOp::SetScan(10 + i), idx2.id(), false), idx2.id());
+            repl2.append_scan((WriteOp::SetScan(10 + i), idx2.tid(), false), idx2.tid());
         }
         let _ignore = repl2.execute_mut(WriteOp::Set(0), idx2);
 
@@ -1685,17 +1670,19 @@ mod test {
         let nlogs = 4;
 
         for i in 0..nlogs {
-            logs.push(Arc::new(Log::<<ScanDS as Dispatch>::WriteOperation>::new(
-                4 * 1024 * 1024,
-                i + 1,
-            )));
+            logs.push(Arc::new(
+                Log::<<ScanDS as Dispatch>::WriteOperation>::new_with_bytes(
+                    4 * 1024 * 1024,
+                    LogMetaData::new(i + 1),
+                ),
+            ));
         }
 
         let repl = Replica::<ScanDS>::new(logs.clone());
         let idx = repl.register().unwrap();
 
         for i in 0..nlogs {
-            repl.append_scan((WriteOp::SetScan(i), idx.id(), false), idx.id());
+            repl.append_scan((WriteOp::SetScan(i), idx.tid(), false), idx.tid());
         }
 
         let ltails = vec![0, 0, 0, 0];
@@ -1717,10 +1704,12 @@ mod test {
         let nlogs = 4;
 
         for i in 0..nlogs {
-            logs.push(Arc::new(Log::<<ScanDS as Dispatch>::WriteOperation>::new(
-                4 * 1024 * 1024,
-                i + 1,
-            )));
+            logs.push(Arc::new(
+                Log::<<ScanDS as Dispatch>::WriteOperation>::new_with_bytes(
+                    4 * 1024 * 1024,
+                    LogMetaData::new(i + 1),
+                ),
+            ));
         }
 
         let repl = Replica::<ScanDS>::new(logs.clone());
@@ -1745,10 +1734,12 @@ mod test {
         let hash = 0;
 
         for i in 0..nlogs {
-            logs.push(Arc::new(Log::<<ScanDS as Dispatch>::WriteOperation>::new(
-                4 * 1024 * 1024,
-                i + 1,
-            )));
+            logs.push(Arc::new(
+                Log::<<ScanDS as Dispatch>::WriteOperation>::new_with_bytes(
+                    4 * 1024 * 1024,
+                    LogMetaData::new(i + 1),
+                ),
+            ));
         }
 
         let repl = Replica::<ScanDS>::new(logs.clone());
@@ -1759,14 +1750,14 @@ mod test {
             true,
             repl.handle_scan_op(
                 WriteOp::SetScan(0),
-                idx.id(),
+                idx.tid(),
                 hash,
-                repl.logstate[0].idx,
-                idx.id(),
+                repl.logstate[0].idx.0,
+                idx.tid(),
                 false,
                 &ltails,
             )
         );
-        assert_eq!(Ok(0), repl.get_response(idx.id(), hash));
+        assert_eq!(Ok(0), repl.get_response(idx.tid(), hash));
     }
 }

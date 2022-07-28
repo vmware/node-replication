@@ -1,18 +1,16 @@
 // Copyright © 2019-2020 VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use alloc::vec::Vec;
-use core::cell::Cell;
-use core::default::Default;
-use core::sync::atomic::{AtomicUsize, Ordering};
+//! CNR specific Context.
 
-use crossbeam_utils::CachePadded;
+use alloc::vec::Vec;
+use core::sync::atomic::Ordering;
 
 pub use crate::context::MAX_PENDING_OPS;
 
 /// Pending operation meta-data for CNR.
 ///
-/// Cell contains: `hash`, `is_scan`, `is_read_only`
+/// Tuple contains: `hash`, `is_scan`, `is_read_only`
 pub(crate) type PendingMetaData = (usize, bool, bool);
 
 /// The CNR per-thread context.
@@ -75,6 +73,7 @@ where
 
 #[cfg(test)]
 mod test {
+
     use super::*;
     use std::vec;
 

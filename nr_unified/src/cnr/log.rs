@@ -87,6 +87,12 @@ impl LogMetaData {
     }
 }
 
+impl Default for LogMetaData {
+    fn default() -> Self {
+        Self::new(0)
+    }
+}
+
 pub type Log<T> = crate::log::Log<T, LogMetaData, EntryMetaData>;
 
 impl<T> Log<T>

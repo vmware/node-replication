@@ -1,12 +1,10 @@
 // Copyright © 2019-2020 VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use alloc::vec::Vec;
-use core::cell::Cell;
-use core::default::Default;
-use core::sync::atomic::Ordering;
+//! NR specific Context.
 
-use crossbeam_utils::CachePadded;
+use alloc::vec::Vec;
+use core::sync::atomic::Ordering;
 
 pub use crate::context::MAX_PENDING_OPS;
 

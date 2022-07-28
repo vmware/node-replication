@@ -34,7 +34,7 @@ where
     ///     Write(u64),
     /// }
     ///
-    /// let l = Log::<Operation>::new_with_bytes(1 * 1024 * 1024);
+    /// let l = Log::<Operation, (), ()>::new_with_bytes(1 * 1024 * 1024, ());
     /// let idx = l.register().expect("Failed to register with the Log.");
     ///
     /// // The set of operations we would like to append. The order will
@@ -217,8 +217,10 @@ where
     ///
     /// # Example
     ///
+    /// (Example ignored for lack of access to `exec` in doctests.)
+    ///
     /// ```ignore
-    /// use node_replication::log::Log;
+    /// use node_replication::nr::Log;
     ///
     /// // Operation type that will go onto the log.
     /// #[derive(Clone)]
@@ -227,29 +229,29 @@ where
     ///     Write(u64),
     /// }
     ///
-    /// let l = Log::<Operation>::new(1 * 1024 * 1024);
+    /// let l = Log::<Operation>::new_with_bytes(1 * 1024 * 1024, ());
     /// let idx = l.register().expect("Failed to register with the Log.");
     /// let ops = [Operation::Write(100), Operation::Read];
     ///
-    /// let f = |op: Operation, id: usize| {
+    /// let f = |op: Operation, mine: bool| {
     ///     match(op) {
-    ///         Operation::Read => println!("Read by {}", id),
-    ///         Operation::Write(x) => println!("Write({}) by {}", x, id),
+    ///         Operation::Read => println!("Read by {} me?", mine),
+    ///         Operation::Write(x) => println!("Write({}) by me? {}", x, mine),
     ///     }
     /// };
-    /// l.append(&ops, idx, f);
+    /// l.append(&ops, &idx, f);
     ///
     /// // This closure is executed on every operation appended to the
     /// // since the last call to `exec()` by this replica/thread.
     /// let mut d = 0;
-    /// let mut g = |op: Operation, id: usize| {
+    /// let mut g = |op: Operation, mine: bool| {
     ///     match(op) {
     ///         // The write happened before the read.
     ///         Operation::Read => assert_eq!(100, d),
     ///         Operation::Write(x) => d += 100,
     ///     }
     /// };
-    /// l.exec(idx, &mut g);
+    /// l.exec(&idx, &mut g);
     /// ```
     #[inline(always)]
     pub(crate) fn exec<F: FnMut(T, bool)>(&self, idx: &LogToken, d: &mut F) {
