@@ -25,12 +25,14 @@ structures.
   NR library in more details.
 - The implementation of CNR and a detailed evaluation can be found in this
   paper: [NrOS: Effective Replication and Sharing in an Operating
-  System](https://www.usenix.org/conference/osdi21/presentation/bhardwaj)
+  System](https://www.usenix.org/conference/osdi21/presentation/bhardwaj). The
+  [NrOS
+  documentation](https://nrkernel.systems/book/architecture/NodeReplication.html)
+  also has a brief overview of NR and CNR as these are the main concurrency
+  mechanisms in the nrkernel.
 - The NR code in this repo was [formally verified by porting it to
   Dafny](https://github.com/vmware-labs/verified-betrfs/tree/concurrency-experiments/concurrency/node-replication),
   including a proof that it ensures linearizability.
-- NR and CNR the main mechanisms for concurrency in the
-  [nrkernel](https://github.com/vmware-labs/node-replicated-kernel)
 
 ## How does it work (NR)
 
