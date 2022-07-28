@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 #![feature(is_sorted)]
+#![feature(generic_associated_types)]
 
 extern crate env_logger;
 
@@ -109,11 +110,11 @@ impl Default for CNRHashmap {
 }
 
 impl Dispatch for CNRHashmap {
-    type ReadOperation = OpRd;
+    type ReadOperation<'rop> = OpRd;
     type WriteOperation = OpWr;
     type Response = Option<usize>;
 
-    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
+    fn dispatch<'rop>(&self, op: Self::ReadOperation<'rop>) -> Self::Response {
         match op {
             OpRd::Get(key) => self.get(key),
         }
