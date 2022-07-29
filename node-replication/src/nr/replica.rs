@@ -820,7 +820,10 @@ where
 
         // Collect operations from each thread registered with this replica.
         for i in 1..num_registered_threads {
-            operations[i - 1] = self.contexts[i - 1].ops(buffer);
+            let ctxt_iter = self.contexts[i - 1].iter();
+            operations[i - 1] = ctxt_iter.len();
+            // meta-data is (), throw it away
+            buffer.extend(ctxt_iter.map(|op| op.0));
         }
     }
 
@@ -978,9 +981,10 @@ pub(crate) mod test {
         let lt = slog.register().unwrap();
         let repl = Replica::<Data>::new(lt);
         let mut o = vec![];
-
         assert!(repl.make_pending(121, 8));
-        assert_eq!(repl.contexts[7].ops(&mut o), 1);
+        let ctxt_iter = repl.contexts[7].iter();
+        assert_eq!(ctxt_iter.len(), 1);
+        o.extend(ctxt_iter.map(|o| o.0));
         assert_eq!(o.len(), 1);
         assert_eq!(o[0], 121);
     }

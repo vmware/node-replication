@@ -7,6 +7,7 @@
 
 use core::cell::{Cell, UnsafeCell};
 use core::default::Default;
+use core::iter::{ExactSizeIterator, Iterator};
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use crossbeam_utils::CachePadded;
@@ -25,7 +26,7 @@ const_assert!(MAX_PENDING_OPS.is_power_of_two());
 /// It is a combination of the actual operation (`T`), the corresponding
 /// expected result (`R`), along with potential meta-data (`M`) to keep track of
 /// other things.
-pub struct PendingOperation<T, R, M: Default> {
+pub struct PendingOperation<T, R, M> {
     pub(crate) op: UnsafeCell<Option<T>>,
     pub(crate) resp: Cell<Option<R>>,
     pub(crate) meta: UnsafeCell<M>,
@@ -66,7 +67,6 @@ pub(crate) struct Context<T, R, M>
 where
     T: Sized + Clone,
     R: Sized + Clone,
-    M: Default,
 {
     /// Array that will hold all pending operations to be appended to the shared
     /// log as well as the results obtained on executing them against a replica.
@@ -89,7 +89,7 @@ where
 
     /// Identifies the context number within a replica. It also maps to the
     /// thread-id because the partitioned nature of the contexts in the replica.
-    pub idx: usize,
+    pub _idx: usize,
 }
 
 impl<T, R, M> Default for Context<T, R, M>
@@ -111,7 +111,7 @@ where
             tail: CachePadded::new(AtomicUsize::new(0)),
             head: CachePadded::new(AtomicUsize::new(0)),
             comb: CachePadded::new(AtomicUsize::new(0)),
-            idx: 0,
+            _idx: 0,
         }
     }
 }
@@ -122,13 +122,19 @@ where
     R: Sized + Clone,
     M: Default,
 {
-    pub fn new(idx: usize) -> Self {
+    pub fn new(_idx: usize) -> Self {
         Self {
-            idx,
+            _idx,
             ..Default::default()
         }
     }
+}
 
+impl<T, R, M> Context<T, R, M>
+where
+    T: Sized + Clone,
+    R: Sized + Clone,
+{
     /// Enqueues an operation onto this context's batch of pending operations.
     ///
     /// Returns true if the operation was successfully enqueued. False
@@ -206,6 +212,27 @@ where
         self.batch[self.index(s)].resp.take()
     }
 
+    /// Adds any pending operations on this context to a passed in buffer.
+    /// Returns the the number of such operations that were added in.
+    #[inline(always)]
+    pub(crate) fn iter(&self) -> ContextIterator<T, R, M>
+    where
+        M: Copy,
+    {
+        let h = self.comb.load(Ordering::Relaxed);
+        let t = self.tail.load(Ordering::Relaxed);
+        if h > t {
+            panic!("Combiner Head of thread-local batch has advanced beyond tail!");
+        }
+
+        ContextIterator {
+            cur: h,
+            ctxt: self,
+            h,
+            t,
+        }
+    }
+
     /// Returns the maximum number of operations that will go pending on this context.
     #[inline(always)]
     pub(crate) fn batch_size() -> usize {
@@ -216,6 +243,73 @@ where
     #[inline(always)]
     pub(crate) fn index(&self, logical: usize) -> usize {
         logical & (MAX_PENDING_OPS - 1)
+    }
+}
+
+/// Iterator for the currently active window of the per-thread context buffer.
+///
+/// # Note on safety
+///
+/// It's not a good idea to have a [`ContextIterator`] while the context head
+/// and tail changes. Worst case will just panic due to unwrap on a None or give
+/// incorrect results, but needs some thought: If worse things are possible, we
+/// should instead make [`Context::iter`] unsafe.
+pub(crate) struct ContextIterator<'s, T, R, M>
+where
+    T: Sized + Clone,
+    R: Sized + Clone,
+    M: Copy,
+{
+    // A reference to the per-thread context with the window we're iterating
+    // over.
+    ctxt: &'s Context<T, R, M>,
+    /// Current index into the iteration window (h..t).
+    cur: usize,
+    /// The head (start) of the currently available context buffer window.
+    h: usize,
+    /// The tail (end) of the currently available context buffer window.
+    t: usize,
+}
+
+/// We know the exact window size for the [`ContextIterator`], it's the range
+/// from head to tail.
+impl<'s, T, R, M> ExactSizeIterator for ContextIterator<'s, T, R, M>
+where
+    T: Sized + Clone,
+    R: Sized + Clone,
+    M: Copy,
+{
+    fn len(&self) -> usize {
+        self.t - self.h
+    }
+}
+
+/// We can iterator over the active window by calling `.next()` until it returns
+/// None.
+impl<'s, T, R, M> Iterator for ContextIterator<'s, T, R, M>
+where
+    T: Sized + Clone,
+    R: Sized + Clone,
+    M: Copy,
+{
+    type Item = (T, M);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // No operations on this thread; return to the caller indicating so.
+        if self.len() == 0 {
+            return None;
+        }
+        // Reached the end of the window.
+        if self.cur == self.t {
+            return None;
+        }
+
+        let e = &self.ctxt.batch[self.ctxt.index(self.cur)];
+        let op = e.op.get();
+        let meta = e.meta.get();
+        self.cur += 1;
+
+        unsafe { Some(((&*op).clone().unwrap(), *meta)) }
     }
 }
 

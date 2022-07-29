@@ -1012,8 +1012,18 @@ where
                 Ordering::Relaxed,
             ) == Ok(true)
             {
-                // pass hash of current op to contexts, only get ops from context that have the same hash/log id
-                self.contexts[tid - 1].ops(&mut buffer, &mut scan_buffer, hashidx);
+                // pass hash of current op to contexts, only get ops from
+                // context that have the same hash/log id
+                let ctxt_iter = self.contexts[tid - 1].iter();
+                for (op, (hash, is_scan, is_read_only)) in ctxt_iter {
+                    if hash == hashidx {
+                        if is_scan {
+                            scan_buffer.push((op, tid, is_read_only));
+                        } else {
+                            buffer.push((op, tid, is_read_only));
+                        }
+                    }
+                }
             }
         }
 
@@ -1265,16 +1275,17 @@ mod test {
             LogMetaData::new(1),
         ));
         let repl = Replica::<Data>::new(vec![slog]);
-        let mut o = vec![];
-        let mut scan = vec![];
+
         let tid = 8;
 
         assert!(repl.make_pending(OpWr(121), tid, 0, false, false));
-        assert_eq!(repl.contexts[tid - 1].ops(&mut o, &mut scan, 0), 1);
-        assert_eq!(o.len(), 1);
-        assert_eq!(scan.len(), 0);
-        assert_eq!(o[0].0, OpWr(121));
-        assert_eq!(o[0].1, tid);
+
+        let mut ctxt_iter = repl.contexts[tid - 1].iter();
+        assert_eq!(ctxt_iter.len(), 1);
+        let (op, (_hash, is_scan, is_read_only)) = ctxt_iter.next().unwrap();
+        assert!(!is_scan);
+        assert!(!is_read_only);
+        assert_eq!(op, OpWr(121));
     }
 
     // Tests that we can append and execute operations using try_combine().
