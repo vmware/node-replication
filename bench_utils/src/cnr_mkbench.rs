@@ -105,7 +105,6 @@ impl<'a, T: Dispatch + Sync + Default> ReplicaTrait for Replica<T> {
     }
 
     fn log_sync(&self, idx: ReplicaToken, logid: usize) {
-        #[cfg(feature = "c_nr")]
         self.sync_log(idx, logid);
     }
 

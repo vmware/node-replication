@@ -22,7 +22,7 @@ cargo run --example cnr_hashmap
 cargo run --example cnr_stack
 
 
-cargo bench --bench log
+cargo bench --bench log --features smokebench
 cargo bench --bench hashmap --features smokebench
 cargo bench --bench synthetic --features smokebench
 cargo bench --bench stack --features smokebench

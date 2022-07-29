@@ -63,7 +63,7 @@ cmp = []
 # Make benchmark finish quickly to check if things work:
 smokebench = ["bench_utils/smokebench"]
 # Very exhaustive parameter sweep (takes a day to run on 4 sockets/192 threads):
-exhaustive = []
+exhaustive = ["bench_utils/exhaustive"]
 
 [[bench]]
 name = "hashmap"

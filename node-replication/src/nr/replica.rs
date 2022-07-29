@@ -167,9 +167,9 @@ where
 ///
 /// Member variables are protected by the combiner lock of the replica
 /// (`combiner`). Contexts are thread-safe.
-unsafe impl<'a, D> Sync for Replica<D> where D: Sized + Sync + Dispatch {}
+unsafe impl<D> Sync for Replica<D> where D: Sized + Sync + Dispatch {}
 
-impl<'a, D> core::fmt::Debug for Replica<D>
+impl<D> core::fmt::Debug for Replica<D>
 where
     D: Sized + Sync + Dispatch,
 {
@@ -297,7 +297,7 @@ where
     }
 }
 
-impl<'a, D> Replica<D>
+impl<D> Replica<D>
 where
     D: Sized + Dispatch + Sync,
 {

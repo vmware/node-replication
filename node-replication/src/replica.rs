@@ -46,7 +46,7 @@ pub type ThreadIdx = usize;
 /// and returned again by [`crate::nr::Replica::execute`] and
 /// [`crate::nr::Replica::execute_mut`]. However it feels like this would hurt
 /// API ergonomics a lot.
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct ReplicaToken(pub(crate) ThreadIdx);
 
 /// Make it harder to accidentially use the same ReplicaToken on multiple

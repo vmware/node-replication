@@ -142,7 +142,7 @@ pub trait Dispatch {
 /// For maximum type-safety this would be an affine type, then we'd have to
 /// return it again in `execute` and `execute_mut`. However it feels like this
 /// would hurt API ergonomics a lot.
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct ThreadToken {
     /// The replica this thread is registered with (reading from).
     ///
@@ -196,7 +196,7 @@ impl !Send for ThreadToken {}
 /// 2. library remembers `old` and does some stuff with different affinity...
 /// 3. `affinity_change_function(AffinityChange::Revert(old))`.
 /// 4. library continues to do work with original affinity of thread.
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum AffinityChange {
     /// Indicates that the system will execute operation on behalf of a
     /// different replica. The user-specified function likely should either

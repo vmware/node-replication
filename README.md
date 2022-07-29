@@ -19,18 +19,18 @@ structures.
 
 ## Background
 
-- The implementation of NR and a detailed evaluation can be found in this paper:
+* The implementation of NR and a detailed evaluation can be found in this paper:
   [Black-box Concurrent Data Structures for NUMA
   Architectures](https://dl.acm.org/citation.cfm?id=3037721) which explains the
   NR library in more details.
-- The implementation of CNR and a detailed evaluation can be found in this
+* The implementation of CNR and a detailed evaluation can be found in this
   paper: [NrOS: Effective Replication and Sharing in an Operating
   System](https://www.usenix.org/conference/osdi21/presentation/bhardwaj). The
   [NrOS
   documentation](https://nrkernel.systems/book/architecture/NodeReplication.html)
   also has a brief overview of NR and CNR as these are the main concurrency
   mechanisms in the nrkernel.
-- The NR code in this repo was [formally verified by porting it to
+* The NR code in this repo was [formally verified by porting it to
   Dafny](https://github.com/vmware-labs/verified-betrfs/tree/concurrency-experiments/concurrency/node-replication),
   including a proof that it ensures linearizability.
 
@@ -99,11 +99,11 @@ data-structure.
 
 It works especially well if
 
-- Your data-structure exceeds the L3 cache-size of your system (you may not see
+* Your data-structure exceeds the L3 cache-size of your system (you may not see
   any gain from replication if your data can always remain in the cache).
-- All your threads need to issue mixed, mutable and immutable operations (if
+* All your threads need to issue mixed, mutable and immutable operations (if
   not alternative techniques like RCU may work better).
-- You have enough DRAM to take advantage of the replication (i.e., it's
+* You have enough DRAM to take advantage of the replication (i.e., it's
   typically best to use one replica per-NUMA node which means your original
   memory foot-print is multiplied with the amount of NUMA nodes in the system).
 
@@ -132,13 +132,13 @@ After `x=96`, the remaining hyper-threads are used.
 
 ## Compile the library
 
-The works with `no_std` and currently requires a nightly rust compiler.
+The library works with `no_std` and currently requires a nightly rust compiler.
 
 ```bash
 cargo build
 ```
 
-As it as a dependency in your `Cargo.toml`:
+Add it as a dependency in your `Cargo.toml`:
 
 ```toml
 node-replication = "*"

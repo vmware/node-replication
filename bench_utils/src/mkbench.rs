@@ -507,8 +507,6 @@ where
     {
         // Log the per-thread runtimes to the CSV file
         let file_name = "scaleout_benchmarks.csv";
-        #[cfg(feature = "c_nr")]
-        let file_name = "scaleout_benchmarks_cnr.csv";
 
         ScaleBenchmark {
             name,
