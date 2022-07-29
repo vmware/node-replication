@@ -782,7 +782,7 @@ where
     }
 
     #[inline(always)]
-    fn try_exec<'r>(&'r self, slog: &Log<<D as Dispatch>::WriteOperation>) {
+    fn try_exec(&self, slog: &Log<<D as Dispatch>::WriteOperation>) {
         // First, check if there already is a flat combiner. If there is no active flat combiner
         // then try to acquire the combiner lock. If there is, then just return.
         for _ in 0..4 {
@@ -799,7 +799,7 @@ where
     }
 
     #[inline(always)]
-    fn exec<'r>(&'r self, slog: &Log<<D as Dispatch>::WriteOperation>) {
+    fn exec(&self, slog: &Log<<D as Dispatch>::WriteOperation>) {
         // Execute any operations on the shared log against this replica.
         let next = self.next.load(Ordering::Relaxed);
         {

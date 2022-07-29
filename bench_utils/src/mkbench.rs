@@ -549,16 +549,24 @@ where
             everything.extend(&thread_results);
             all_results.push((cid, tid, thread_results));
         }
-        let avg = crate::benchmark::mean(&everything).unwrap();
-        println!(
-            "Run({:?} {:?} {:?} {:?} BS={}) => {:.5}",
-            self.rs,
-            self.tm,
-            self.ts,
-            self.ls,
-            self.batch_size,
-            avg * (self.ts as f64),
-        );
+
+        if cfg!(not(feature = "smokebench")) {
+            let avg = crate::benchmark::mean(&everything).unwrap();
+            println!(
+                "Run({:?} {:?} {:?} {:?} BS={}) => {:.5}",
+                self.rs,
+                self.tm,
+                self.ts,
+                self.ls,
+                self.batch_size,
+                avg * (self.ts as f64),
+            );
+        } else {
+            println!(
+                "Run({:?} {:?} {:?} {:?} BS={}) => not measured",
+                self.rs, self.tm, self.ts, self.ls, self.batch_size,
+            );
+        }
 
         let write_headers = !Path::new(self.file_name).exists(); // write headers only to new file
         let csv_file = OpenOptions::new()

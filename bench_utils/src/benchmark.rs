@@ -147,13 +147,23 @@ impl TestHarness {
 
 impl TestHarness {
     pub fn new(d: Duration) -> Self {
-        TestHarness { duration: d }
+        if cfg!(feature = "smokebench") {
+            log::warn!("smokebench enabled, force execution to 500 ms");
+            let d = Duration::from_millis(500);
+            TestHarness { duration: d }
+        } else {
+            TestHarness { duration: d }
+        }
     }
 }
 
 impl Default for TestHarness {
     fn default() -> Self {
-        TestHarness::new(Duration::from_secs(5))
+        if cfg!(feature = "smokebench") {
+            TestHarness::new(Duration::from_millis(500))
+        } else {
+            TestHarness::new(Duration::from_secs(5))
+        }
     }
 }
 

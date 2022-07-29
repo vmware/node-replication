@@ -69,7 +69,7 @@ where
 
         let idx = log.register().unwrap();
         LogState {
-            slog: log.clone(),
+            slog: log,
             idx,
             combiner: CachePadded::new(AtomicUsize::new(0)),
             pending: [PENDING_DEFAULT; MAX_THREADS_PER_REPLICA],
@@ -701,12 +701,30 @@ where
     /// // execute() can be used to read from the replicated data structure.
     /// let res = replica.execute(OpRd(()), idx);
     /// assert_eq!(Some(100), res);
-    pub fn execute<'rop>(
+    pub fn execute(
         &self,
-        op: <D as Dispatch>::ReadOperation<'rop>,
+        op: <D as Dispatch>::ReadOperation<'_>,
         idx: ReplicaToken,
     ) -> <D as Dispatch>::Response {
-        self.read_only(op, idx.0)
+        let mut hash_vec = self.hash[idx.0 - 1].borrow_mut();
+        hash_vec.clear();
+        // Calculate the hash of the operation to map the operation to a log.
+        op.hash(self.logstate.len(), &mut hash_vec);
+        assert_eq!(hash_vec.len(), 1);
+        let hash_idx = hash_vec[0];
+
+        // We can perform the read only if our replica is synced up against
+        // the shared log. If it isn't, then try to combine until it is synced up.
+        let ctail = self.logstate[hash_idx].slog.get_ctail();
+        while !self.logstate[hash_idx]
+            .slog
+            .is_replica_synced_for_reads(&self.logstate[hash_idx].idx, ctail)
+        {
+            self.try_combine(idx.0, hash_idx);
+            spin_loop();
+        }
+
+        self.data.dispatch(op)
     }
 
     /// This method executes an mutable operation against this replica that depends
@@ -912,34 +930,6 @@ where
         {
             self.try_combine(idx.0, log_id - 1);
         }
-    }
-
-    /// Issues a read-only operation against the replica and returns a response.
-    /// Makes sure the replica is synced up against the log before doing so.
-    fn read_only<'rop>(
-        &self,
-        op: <D as Dispatch>::ReadOperation<'rop>,
-        tid: usize,
-    ) -> <D as Dispatch>::Response {
-        let mut hash_vec = self.hash[tid - 1].borrow_mut();
-        hash_vec.clear();
-        // Calculate the hash of the operation to map the operation to a log.
-        op.hash(self.logstate.len(), &mut hash_vec);
-        assert_eq!(hash_vec.len(), 1);
-        let hash_idx = hash_vec[0];
-
-        // We can perform the read only if our replica is synced up against
-        // the shared log. If it isn't, then try to combine until it is synced up.
-        let ctail = self.logstate[hash_idx].slog.get_ctail();
-        while !self.logstate[hash_idx]
-            .slog
-            .is_replica_synced_for_reads(&self.logstate[hash_idx].idx, ctail)
-        {
-            self.try_combine(tid, hash_idx);
-            spin_loop();
-        }
-
-        self.data.dispatch(op)
     }
 
     /// Enqueues an operation inside a thread local context. Returns a boolean

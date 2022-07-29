@@ -328,6 +328,8 @@ fn main() {
 
     let write_ratios = if cfg!(feature = "exhaustive") {
         vec![0, 10, 20, 40, 60, 80, 100]
+    } else if cfg!(feature = "smokebench") {
+        vec![10]
     } else {
         vec![0, 10, 100]
     };

@@ -7,10 +7,10 @@ set -ex
 cd node-replication
 
 # Disable all the Linux policies that are up to no good
-##sudo sh -c "echo 0 > /proc/sys/kernel/numa_balancing"
-##sudo sh -c "echo 0 > /sys/kernel/mm/ksm/run"
-##sudo sh -c "echo 0 > /sys/kernel/mm/ksm/merge_across_nodes"
-##sudo sh -c "echo never > /sys/kernel/mm/transparent_hugepage/enabled"
+sudo sh -c "echo 0 > /proc/sys/kernel/numa_balancing"
+sudo sh -c "echo 0 > /sys/kernel/mm/ksm/run"
+sudo sh -c "echo 0 > /sys/kernel/mm/ksm/merge_across_nodes"
+sudo sh -c "echo never > /sys/kernel/mm/transparent_hugepage/enabled"
 
 cd benches
 #timeout 1h cargo bench --bench log

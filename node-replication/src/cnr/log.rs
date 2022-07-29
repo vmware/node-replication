@@ -232,8 +232,6 @@ where
         mut s: F,
     ) -> Result<usize, usize> {
         let nops = 1;
-        let log_offset;
-
         let tail = self.tail.load(Ordering::Relaxed);
         let head = self.head.load(Ordering::Relaxed);
 
@@ -264,7 +262,7 @@ where
         }
 
         // Successfully reserved entries on the shared log. Add the operations in.
-        log_offset = tail;
+        let log_offset = tail;
         if self.metadata.idx != 1 {
             unsafe {
                 self.update_entry(log_offset, op, idx.0, true, Some(Arc::new(vec![offset[0]])))
@@ -505,7 +503,8 @@ where
     /// # Example
     ///
     /// ```
-    /// use cnr::Log;
+    /// use node_replication::cnr::Log;
+    /// use node_replication::cnr::LogMetaData;
     /// use core::sync::atomic::AtomicBool;
     ///
     /// // Operation type that will go onto the log.
@@ -517,10 +516,10 @@ where
     /// }
     ///
     /// // Creates a 1 Mega Byte sized log.
-    /// let mut l = Log::<Operation>::new(1 * 1024 * 1024, 1);
+    /// let mut l = Log::<Operation>::new_with_bytes(1 * 1024 * 1024, LogMetaData::new(1));
     ///
     /// // Update the callback function for the log.
-    /// let callback_func = |rid: &[AtomicBool; 192], idx: usize| {
+    /// let callback_func = |rid: &[AtomicBool; 16], idx: usize| {
     ///     // Take action on log `idx` and replicas in `rid`.
     /// };
     /// l.update_closure(callback_func)

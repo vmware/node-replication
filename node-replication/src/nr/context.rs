@@ -42,7 +42,7 @@ where
             // `tail` is a valid operation ready for flat combining. Hence,
             // calling unwrap() here on the operation is safe.
             let op = self.batch[self.index(i)].op.get();
-            unsafe { buffer.push((&mut *op).clone().unwrap()) };
+            unsafe { buffer.push((&*op).clone().unwrap()) };
             n += 1;
         }
 

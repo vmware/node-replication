@@ -61,7 +61,7 @@ async = [ "tokio", "futures" ]
 # Compare with alternate data-structures:
 cmp = []
 # Make benchmark finish quickly to check if things work:
-smokebench = []
+smokebench = ["bench_utils/smokebench"]
 # Very exhaustive parameter sweep (takes a day to run on 4 sockets/192 threads):
 exhaustive = []
 

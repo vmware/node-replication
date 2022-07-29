@@ -596,15 +596,20 @@ where
             .iter()
             .map(|(cid, time_vec)| time_vec.iter().sum())
             .collect();
-        let min_tput = *core_aggregate_tput.iter().min().unwrap_or(&1) / intervals;
-        let max_tput = *core_aggregate_tput.iter().max().unwrap_or(&1) / intervals;
-        let total_tput = core_aggregate_tput.iter().sum::<usize>() / intervals;
-        println!(
-            ">> {:.2} Mops (min {:.2} Mops, max {:.2}) Mops",
-            total_tput as f64 / 1_000_000 as f64,
-            min_tput as f64 / 1_000_000 as f64,
-            max_tput as f64 / 1_000_000 as f64,
-        );
+
+        if cfg!(not(feature = "smokebench")) {
+            let min_tput = *core_aggregate_tput.iter().min().unwrap_or(&1) / intervals;
+            let max_tput = *core_aggregate_tput.iter().max().unwrap_or(&1) / intervals;
+            let total_tput = core_aggregate_tput.iter().sum::<usize>() / intervals;
+            println!(
+                ">> {:.2} Mops (min {:.2} Mops, max {:.2}) Mops",
+                total_tput as f64 / 1_000_000 as f64,
+                min_tput as f64 / 1_000_000 as f64,
+                max_tput as f64 / 1_000_000 as f64,
+            );
+        } else {
+            println!(">> not measured (somkebench mode)");
+        }
 
         let mut results = self.results.lock().unwrap();
         results.insert(duration, core_iteratios.clone());

@@ -63,7 +63,7 @@ fn main() {
     let dur = time::Duration::from_secs(5);
     let dur_in_ns = dur.as_secs() * 1_000_000_000_u64 + dur.subsec_nanos() as u64;
     let dur_in_s = dur_in_ns as f64 / 1_000_000_000_f64;
-    SPAN.store(CAPACITY / writers, Ordering::Release);
+    SPAN.store(CAPACITY, Ordering::Release);
     let span = SPAN.load(Ordering::Acquire);
 
     let stat = |var: &str, op, results: Vec<(_, usize)>| {
@@ -145,9 +145,8 @@ fn drive<B: Backend>(
     dist: String,
     write: bool,
     span: usize,
-    tid: usize,
+    _tid: usize,
 ) -> (bool, usize) {
-    let base = ((tid - 1) * span) as u64;
     use rand::Rng;
 
     let mut ops = 0;
@@ -159,7 +158,7 @@ fn drive<B: Backend>(
         let id_uniform: u64 = t_rng.gen_range(0..span as u64);
         let id_skewed = zipf.sample(&mut t_rng) as u64;
         let id = if skewed { id_skewed } else { id_uniform };
-        let id = base + id;
+
         if write {
             backend.b_put(id, t_rng.next_u64());
         } else {

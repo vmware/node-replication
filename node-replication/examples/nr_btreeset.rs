@@ -59,7 +59,7 @@ impl Dispatch for NrBtreeSet {
 
 fn main() {
     let _r = env_logger::try_init();
-    const N_OPS: u64 = 2_948_048;
+    const N_OPS: u64 = 1_000_000;
 
     for n_replicas in 1..=4 {
         for thread_num in 1..=4 {
@@ -67,11 +67,6 @@ fn main() {
             let nrht = Arc::new(NodeReplicated::<NrBtreeSet>::new(num_replica, |_rid| 0).unwrap());
 
             let thread_loop = |replica: Arc<NodeReplicated<NrBtreeSet>>, ttkn, thread_id| {
-                println!(
-                    "thread_id {} assigned range {:?}.",
-                    thread_id,
-                    (thread_id as u64) * N_OPS..(thread_id as u64 + 1) * N_OPS
-                );
                 for i in (thread_id as u64) * N_OPS..(thread_id as u64 + 1) * N_OPS {
                     let _r = match i % 4 {
                         0 => replica.execute_mut(Modify::Put(i), ttkn),
@@ -97,7 +92,7 @@ fn main() {
 
             let t_now = std::time::Instant::now();
 
-            println!(
+            print!(
                 "Running with {} replicas and {} threads",
                 n_replicas, thread_num
             );
@@ -120,7 +115,7 @@ fn main() {
             }
 
             println!(
-                "({} ns/op)",
+                " ({} ns/op)",
                 t_now.elapsed().as_nanos() / (thread_num as u128 * N_OPS as u128)
             );
         }

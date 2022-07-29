@@ -1,6 +1,12 @@
 // Copyright © 2019-2022 VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+//! Node replication is a library for easily constructing concurrent
+//! data-structures.
+//!
+//! You'll probably want to start navigating the documentation by first looking
+//! at the [`nr`] module and [`cnr`] afterwards.
+
 #![no_std]
 #![feature(
     new_uninit,
@@ -40,5 +46,5 @@ mod test_readme {
         };
     }
 
-    external_doc_test!(include_str!("../README.md"));
+    external_doc_test!(include_str!("../../README.md"));
 }

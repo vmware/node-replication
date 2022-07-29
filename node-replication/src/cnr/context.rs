@@ -53,7 +53,7 @@ where
             // `tail` is a valid operation ready for flat combining. Hence,
             // calling unwrap() here on the operation is safe.
             let e = self.batch[self.index(i)].op.get();
-            let op = unsafe { (&mut *e).clone().unwrap() };
+            let op = unsafe { (&*e).clone().unwrap() };
 
             let me = self.batch[self.index(i)].meta.get();
             let (entry_hash, is_scan, is_read_only) = unsafe { *me };

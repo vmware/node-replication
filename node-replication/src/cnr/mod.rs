@@ -150,7 +150,7 @@ pub trait Dispatch {
 
     /// Method on the data structure that allows a read-only operation to be
     /// executed against it.
-    fn dispatch<'a>(&self, op: Self::ReadOperation<'a>) -> Self::Response;
+    fn dispatch(&self, op: Self::ReadOperation<'_>) -> Self::Response;
 
     /// Method on the data structure that allows a write operation to be
     /// executed against it.

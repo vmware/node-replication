@@ -58,7 +58,7 @@ impl Dispatch for NrHashMap {
 fn main() {
     // Setup logging and some constants.
     let _r = env_logger::try_init();
-    const PER_THREAD_OPS: u64 = 2_948_048; // How many ops each thread performs
+    const PER_THREAD_OPS: u64 = 500_000; // How many ops each thread performs
 
     // Next, we create the NodeReplicated HashMap (we run this code 4 times with different
     // amounts of replicas for demonstration purposes)

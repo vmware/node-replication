@@ -287,6 +287,8 @@ fn main() {
     let mut harness = Default::default();
     let write_ratios = if cfg!(feature = "exhaustive") {
         vec![0, 10, 80, 100]
+    } else if cfg!(feature = "smokebench") {
+        vec![10]
     } else {
         vec![10, 100]
     };

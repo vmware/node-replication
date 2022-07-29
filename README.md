@@ -88,7 +88,8 @@ impl Dispatch for NrHashMap {
 ```
 
 The full example (using `HashMap` as the underlying data-structure) can be found
-[here](examples/hashmap.rs). To run, execute: `cargo run --example hashmap`
+[here](node-replication/examples/hashmap.rs).
+To run, execute: `cargo run --example hashmap`
 
 ## How does it perform (NR)
 
