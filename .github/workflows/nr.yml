@@ -38,15 +38,15 @@ jobs:
         cargo run --example nr_stack
         cargo run --example cnr_hashmap
         cargo run --example cnr_stack
-    - name: Compile and run benchmarks
+    - name: Compile benchmarks
       working-directory: ./node-replication
       run: |
-        cargo bench --bench log --features smokebench
-        cargo bench --bench hashmap --features smokebench
-        cargo bench --bench synthetic --features smokebench
-        cargo bench --bench stack --features smokebench
-        cargo bench --bench vspace --features smokebench
-        cargo bench --bench lockfree --features smokebench
+        cargo bench --bench log --features smokebench --no-run
+        cargo bench --bench hashmap --features smokebench --no-run
+        cargo bench --bench synthetic --features smokebench --no-run
+        cargo bench --bench stack --features smokebench --no-run
+        cargo bench --bench vspace --features smokebench --no-run
+        cargo bench --bench lockfree --features smokebench --no-run
         cargo bench --bench hashbench -- --readers 1 --writers 1
         cargo bench --bench rwlockbench -- --readers 1 --writers 1
         cargo bench --bench chashbench -- --readers 1 --writers 1
