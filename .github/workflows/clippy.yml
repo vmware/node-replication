@@ -5,9 +5,7 @@ on:
     branches-ignore:
       - 'dependabot/**'
     paths:
-      - nr/**
-      - cnr/**
-      - benches/**
+      - node-replication/**
       - .github/**
 
 jobs:
@@ -19,15 +17,9 @@ jobs:
     - uses: actions/checkout@v2.4.0
     - name: Install rust toolchain
       run: rustup show
-    - name: Run clippy for NR
+    - name: Run clippy
       uses: actions-rs/clippy-check@v1
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
-        args: --manifest-path nr/Cargo.toml
+        args: --manifest-path node-replication/Cargo.toml
         name: nr clippy
-    - name: Run clippy for CNR
-      uses: actions-rs/clippy-check@v1
-      with:
-        token: ${{ secrets.GITHUB_TOKEN }}
-        args: --manifest-path cnr/Cargo.toml
-        name: cnr clippy

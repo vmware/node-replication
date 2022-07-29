@@ -3,54 +3,53 @@ name: Compilation and static checks NR
 on:
   push:
     paths:
-      - nr/**
-      - benches/**
+      - node-replication/**
+      - bench_utils/**
       - .github/**
 
 jobs:
   build:
     name: Build and check
     runs-on: ubuntu-latest
-
     steps:
     - name: Install dependencies
       run: sudo apt-get update && sudo apt-get install -y libhwloc-dev gnuplot libfuse-dev liburcu-dev liburcu6
     - uses: actions/checkout@v2.4.0
     - name: Install rust toolchain
       run: rustup show
-    - name: Check formatting
+    - name: Check formatting of bench_utils
+      working-directory: ./bench_utils
       run: cargo fmt -- --check
-      working-directory: ./nr
-    - name: Check formatting (benches)
+    - name: Check formatting of NR
+      working-directory: ./node-replication
       run: cargo fmt -- --check
-      working-directory: ./benches
-    - name: Build NR
+    - name: Build
+      working-directory: ./node-replication
       run: cargo build --release
-      working-directory: ./nr
-    - name: Build NR (unstable)
-      run: cargo build --release --features unstable
-      working-directory: ./nr
-    - name: Compile tests
-      run: cargo test --release --no-run
-      working-directory: ./nr
-    - name: Compile benchmarks
+    - name: Test
+      working-directory: ./node-replication
+      run: cargo test --release
+    - name: Compile and run examples
+      working-directory: ./node-replication
       run: |
-        cargo bench --bench log --features="nr" --no-run
-        cargo bench --bench rwlockbench --features="nr" --no-run
-        cargo bench --bench synthetic --features="nr" --no-run
-        cargo bench --bench stack --features="nr" --no-run
-        cargo bench --bench hashmap --features="nr cmp" --no-run
-        cargo bench --bench hashmap --features="nr async" --no-run
-        cargo bench --bench vspace --features="nr" --no-run
-        cargo bench --bench hashbench --features="nr" --no-run
-        cargo bench --bench memfs --features="nr" --no-run
-      working-directory: ./benches
-    - name: Execute unit-tests
-      run: cargo test
-      working-directory: ./nr
-    - name: Execute loom tests
-      run: RUSTFLAGS="--cfg loom" cargo test --test read_linearizes --release -- --nocapture
-      working-directory: ./nr
-    - name: Try the stack example
-      run: RUST_BACKTRACE=1 RUST_LOG='trace' cargo run --release --example stack -- -t1,2 --nop 100000 -l 1 -m sequential
-      working-directory: ./nr
+        cargo run --example nr_async_hashmap
+        cargo run --example nr_btreeset
+        cargo run --example nr_hashmap
+        cargo run --example nr_stack
+        cargo run --example cnr_hashmap
+        cargo run --example cnr_stack
+    - name: Compile and run benchmarks
+      working-directory: ./node-replication
+      run: |
+        cargo bench --bench log --features smokebench
+        cargo bench --bench hashmap --features smokebench
+        cargo bench --bench synthetic --features smokebench
+        cargo bench --bench stack --features smokebench
+        cargo bench --bench vspace --features smokebench
+        cargo bench --bench lockfree --features smokebench
+        cargo bench --bench hashbench -- --readers 1 --writers 1
+        cargo bench --bench rwlockbench -- --readers 1 --writers 1
+        cargo bench --bench chashbench -- --readers 1 --writers 1
+#    - name: Execute loom tests
+#      run: RUSTFLAGS="--cfg loom" cargo test --test read_linearizes --release -- --nocapture
+#      working-directory: ./node-replication
