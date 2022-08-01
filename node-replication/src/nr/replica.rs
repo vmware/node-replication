@@ -145,7 +145,7 @@ where
     /// The combiner stages operations in this vector and then batch appends
     /// them in the shared log. This helps amortize the cost of the
     /// `compare_and_swap` on the tail of the log.
-    buffer: RefCell<Vec<<D as Dispatch>::WriteOperation>>,
+    buffer: RefCell<Vec<(<D as Dispatch>::WriteOperation, ())>>,
 
     /// Number of operations collected by the combiner from each thread at any
     /// given point of time. Index `i` holds the number of operations collected
@@ -694,8 +694,9 @@ where
         }
 
         let mut data = self.data.write(self.next.load(Ordering::Relaxed));
-        let mut f = |o: <D as Dispatch>::WriteOperation, _mine: bool| {
+        let mut f = |o: <D as Dispatch>::WriteOperation, _mine: bool, _md: ()| {
             data.dispatch_mut(o);
+            true
         };
 
         slog.exec(&self.log_tkn, &mut f);
@@ -807,18 +808,23 @@ where
         let next = self.next.load(Ordering::Relaxed);
         {
             let mut data = self.data.write(next);
-            let mut f = |o: <D as Dispatch>::WriteOperation, mine: bool| {
+            let mut f = |o: <D as Dispatch>::WriteOperation, mine: bool, _md: ()| {
                 let _resp = data.dispatch_mut(o);
                 if mine {
                     panic!("Ups -- we just lost a result?");
                 }
+                true
             };
             slog.exec(&self.log_tkn, &mut f);
         }
     }
 
     #[inline(always)]
-    fn collect_thread_ops(&self, buffer: &mut Vec<D::WriteOperation>, operations: &mut [usize]) {
+    fn collect_thread_ops(
+        &self,
+        buffer: &mut Vec<(D::WriteOperation, ())>,
+        operations: &mut [usize],
+    ) {
         let num_registered_threads = self.next.load(Ordering::Relaxed);
 
         // Collect operations from each thread registered with this replica.
@@ -826,7 +832,7 @@ where
             let ctxt_iter = self.contexts[i - 1].iter();
             operations[i - 1] = ctxt_iter.len();
             // meta-data is (), throw it away
-            buffer.extend(ctxt_iter.map(|op| op.0));
+            buffer.extend(ctxt_iter.map(|op| (op.0, ())));
         }
     }
 
@@ -850,7 +856,7 @@ where
         // in here because operations on the log might need to be consumed for GC.
         let res = {
             let mut data = self.data.write(num_registered_threads);
-            let f = |o: <D as Dispatch>::WriteOperation, mine: bool| {
+            let f = |o: <D as Dispatch>::WriteOperation, mine: bool, _md: ()| {
                 #[cfg(not(loom))]
                 let resp = data.dispatch_mut(o);
                 #[cfg(loom)]
@@ -858,6 +864,7 @@ where
                 if mine {
                     results.push(resp);
                 }
+                true
             };
             match slog.append(&buffer, &self.log_tkn, f) {
                 Ok(None) => Ok(()),
@@ -878,11 +885,12 @@ where
         // Execute outstanding operations on the shared log against this replica
         {
             let mut data = self.data.write(num_registered_threads);
-            let mut f = |o: <D as Dispatch>::WriteOperation, mine: bool| {
+            let mut f = |o: <D as Dispatch>::WriteOperation, mine: bool, _md: ()| {
                 let resp = data.dispatch_mut(o);
                 if mine {
                     results.push(resp)
                 }
+                true
             };
             slog.exec(&self.log_tkn, &mut f);
         }
@@ -1100,9 +1108,9 @@ pub(crate) mod test {
 
         let lt = slog.register().unwrap();
         // Add in operations to the log off the side, not through the replica.
-        let o = [121, 212];
-        assert!(slog.append(&o, &lt, |_o, _mine| {}).is_ok());
-        slog.exec(&lt, &mut |_o, _mine| {});
+        let o = [(121, ()), (212, ())];
+        assert!(slog.append(&o, &lt, |_o, _mine, _md| { true }).is_ok());
+        slog.exec(&lt, &mut |_o, _mine, _md| true);
 
         let t1 = repl.register().expect("Failed to register with replica.");
         assert_eq!(Ok(2), repl.execute(&slog, 11, t1).unwrap());

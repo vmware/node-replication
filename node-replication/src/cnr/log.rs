@@ -45,6 +45,18 @@ pub struct EntryMetaData {
     refcnt: AtomicUsize,
 }
 
+impl Clone for EntryMetaData {
+    fn clone(&self) -> Self {
+        Self {
+            is_scan: self.is_scan,
+            thread: self.thread,
+            is_read_op: self.is_read_op,
+            depends_on: self.depends_on.clone(),
+            refcnt: AtomicUsize::new(self.refcnt.load(Ordering::Relaxed)),
+        }
+    }
+}
+
 /// The additional meta-data we need to store in the log for CNR operations.
 pub struct LogMetaData {
     /// A global unique id for each log.
@@ -99,132 +111,10 @@ impl<T> Log<T>
 where
     T: Sized + Clone,
 {
-    /// Adds a batch of operations to the shared log.
-    ///
-    /// # Note
-    /// `append` is not intended as a public interface. It is marked
-    /// as public due to being used by the benchmarking code.
-    #[inline(always)]
-    #[doc(hidden)]
-    pub fn append<F: FnMut(T, usize, usize, bool, bool, Option<Arc<Vec<usize>>>) -> bool>(
-        &self,
-        ops: &[(T, usize, bool)],
-        idx: &LogToken,
-        mut s: F,
-    ) {
-        let nops = ops.len();
-        let mut iteration = 1;
-        let mut waitgc = 1;
-
-        // Keep trying to reserve entries and add operations to the log until
-        // we succeed in doing so.
-        loop {
-            if iteration % WARN_THRESHOLD == 0 {
-                warn!(
-                    "append(ops.len()={}, {}) takes too many iterations ({}) to complete...",
-                    ops.len(),
-                    idx.0,
-                    iteration,
-                );
-            }
-            iteration += 1;
-
-            let tail = self.tail.load(Ordering::Relaxed);
-            let head = self.head.load(Ordering::Relaxed);
-
-            // Head and tail doesn't wrap around; so it works.
-            let used = tail - head + 1;
-
-            if used > self.slog.len() / 3 {
-                let r = self.next.load(Ordering::Relaxed);
-                let mut is_stuck = false;
-                let cur_local_tail = self.ltails[idx.0 - 1].load(Ordering::Relaxed);
-
-                // Find the smallest local tail across all replicas.
-                for idx_iter in 1..r {
-                    let local_tail = self.ltails[idx_iter - 1].load(Ordering::Relaxed);
-                    if cur_local_tail > local_tail
-                        && cur_local_tail - local_tail > self.slog.len() / 3
-                    {
-                        self.metadata.dormant_replicas[idx_iter - 1].store(true, Ordering::Relaxed);
-                        is_stuck = true;
-                    }
-                }
-
-                if is_stuck
-                    && self.metadata.notify_replicas.compare_exchange_weak(
-                        true,
-                        false,
-                        Ordering::Relaxed,
-                        Ordering::Relaxed,
-                    ) == Ok(true)
-                {
-                    unsafe {
-                        (*self.metadata.gc.get())(
-                            &self.metadata.dormant_replicas,
-                            self.metadata.idx,
-                        )
-                    };
-                }
-            }
-
-            // If there are fewer than `GC_FROM_HEAD` entries on the log, then just
-            // try again. The replica that reserved entry (h + self.size - GC_FROM_HEAD)
-            // is currently trying to advance the head of the log. Keep refreshing the
-            // replica against the log to make sure that it isn't deadlocking GC.
-            if tail > head + self.slog.len() - GC_FROM_HEAD {
-                if waitgc % WARN_THRESHOLD == 0 {
-                    warn!(
-                        "append(ops.len()={}, {}) takes too many iterations ({}) waiting for gc...",
-                        ops.len(),
-                        idx.0,
-                        waitgc,
-                    );
-                }
-                waitgc += 1;
-                self.exec(idx, &mut s);
-                continue;
-            }
-
-            // If on adding in the above entries there would be fewer than `GC_FROM_HEAD`
-            // entries left on the log, then we need to advance the head of the log.
-            let mut advance = false;
-            if tail + nops > head + self.slog.len() - GC_FROM_HEAD {
-                advance = true
-            };
-
-            // Try reserving slots for the operations. If that fails, then restart
-            // from the beginning of this loop.
-            if self.tail.compare_exchange_weak(
-                tail,
-                tail + nops,
-                Ordering::Acquire,
-                Ordering::Acquire,
-            ) != Ok(tail)
-            {
-                continue;
-            };
-
-            // Successfully reserved entries on the shared log. Add the operations in.
-            for (i, op) in ops.iter().enumerate().take(nops) {
-                unsafe { self.update_entry(tail + i, op, idx.0, false, None) };
-            }
-
-            // If needed, advance the head of the log forward to make room on the log.
-            if advance {
-                self.advance_head(idx, &mut s);
-            }
-
-            return;
-        }
-    }
-
     /// Adds a scan operation to the shared log.
     #[inline(always)]
     #[doc(hidden)]
-    pub(crate) fn try_append_scan<
-        F: FnMut(T, usize, usize, bool, bool, Option<Arc<Vec<usize>>>) -> bool,
-    >(
+    pub(crate) fn try_append_scan<F: FnMut(T, bool, EntryMetaData) -> bool>(
         &self,
         op: &(T, usize, bool),
         idx: &LogToken,
@@ -288,38 +178,6 @@ where
         unsafe { self.update_entry(offsets[0], op, idx.0, true, Some(offsets)) };
     }
 
-    #[inline(always)]
-    unsafe fn update_entry(
-        &self,
-        offset: usize,
-        op: &(T, usize, bool),
-        idx: usize,
-        is_scan: bool,
-        depends_on: Option<Arc<Vec<usize>>>,
-    ) {
-        let num_replicas = self.next.load(Ordering::Relaxed) - 1;
-        let e = self.slog[self.index(offset)].as_ptr();
-        let mut m = self.lmasks[idx - 1].get();
-
-        // This entry was just reserved so it should be dead (!= m). However, if
-        // the log has wrapped around, then the alive mask has flipped. In this
-        // case, we flip the mask we were originally going to write into the
-        // allocated entry. We cannot flip lmasks[idx - 1] because this replica
-        // might still need to execute a few entries before the wrap around.
-        if (*e).alivef.load(Ordering::Relaxed) == m {
-            m = !m;
-        }
-
-        (*e).operation = Some(op.0.clone());
-        (*e).replica = idx;
-        (*e).metadata.thread = op.1;
-        (*e).metadata.is_scan = is_scan;
-        (*e).metadata.is_read_op = op.2;
-        (*e).metadata.depends_on = depends_on;
-        (*e).metadata.refcnt = AtomicUsize::new(num_replicas);
-        (*e).alivef.store(m, Ordering::Release);
-    }
-
     /// Try to acquire the scan lock.
     fn try_scan_lock(&self, tid: usize) -> bool {
         if self.metadata.scanlock.compare_exchange_weak(
@@ -347,142 +205,6 @@ where
     /// Release the scan lock.
     pub(crate) fn release_scan_lock(&self) {
         self.metadata.scanlock.store(0, Ordering::Release);
-    }
-
-    /// Executes a passed in closure (`d`) on all operations starting from
-    /// a replica's local tail on the shared log. The replica is identified through an
-    /// `idx` passed in as an argument.
-    ///
-    /// The passed in closure is expected to take in two arguments: The operation
-    /// from the shared log to be executed and the replica that issued it.
-    #[inline(always)]
-    pub(crate) fn exec<F: FnMut(T, usize, usize, bool, bool, Option<Arc<Vec<usize>>>) -> bool>(
-        &self,
-        idx: &LogToken,
-        d: &mut F,
-    ) {
-        // Load the logical log offset from which we must execute operations.
-        let ltail = self.ltails[idx.0 - 1].load(Ordering::Relaxed);
-
-        // Check if we have any work to do by comparing our local tail with the log's
-        // global tail. If they're equal, then we're done here and can simply return.
-        let gtail = self.tail.load(Ordering::Relaxed);
-        if ltail == gtail {
-            return;
-        }
-
-        let h = self.head.load(Ordering::Relaxed);
-
-        // Make sure we're within the shared log. If we aren't, then panic.
-        if ltail > gtail || ltail < h {
-            panic!("Local tail not within the shared log!")
-        };
-
-        // Execute all operations from the passed in offset to the shared log's tail. Check if
-        // the entry is live first; we could have a replica that has reserved entries, but not
-        // filled them into the log yet.
-        for i in ltail..gtail {
-            let mut iteration = 1;
-            let e = self.slog[self.index(i)].as_ptr();
-
-            while unsafe { (*e).alivef.load(Ordering::Acquire) != self.lmasks[idx.0 - 1].get() } {
-                if iteration % WARN_THRESHOLD == 0 {
-                    warn!(
-                        "alivef not being set for self.index(i={}) = {} (self.lmasks[{}] is {})...",
-                        i,
-                        self.index(i),
-                        idx.0 - 1,
-                        self.lmasks[idx.0 - 1].get()
-                    );
-                }
-                iteration += 1;
-            }
-
-            let mut depends_on = None;
-            unsafe {
-                if (*e).metadata.is_scan {
-                    depends_on = Some((*e).metadata.depends_on.as_ref().unwrap().clone());
-                }
-
-                if !d(
-                    (*e).operation.as_ref().unwrap().clone(),
-                    (*e).replica,
-                    (*e).metadata.thread,
-                    (*e).metadata.is_scan,
-                    (*e).metadata.is_read_op,
-                    depends_on,
-                ) {
-                    // if the operation is unable to complete; then update the ctail for
-                    // already executed operations and return. Only happends for scan ops.
-                    self.ctail.fetch_max(i, Ordering::Relaxed);
-                    return;
-                }
-                if (*e).metadata.refcnt.fetch_sub(1, Ordering::Release) == 1 {
-                    (*e).operation = None;
-                }
-            }
-
-            // Increment ltail for each operations, needed for scan
-            // operations as the rubberband is ltail sensitive.
-            self.ltails[idx.0 - 1].fetch_add(1, Ordering::Relaxed);
-
-            // Looks like we're going to wrap around now; flip this replica's local mask.
-            if self.index(i) == self.slog.len() - 1 {
-                self.lmasks[idx.0 - 1].set(!self.lmasks[idx.0 - 1].get());
-                //trace!("idx: {} lmask: {}", idx, self.lmasks[idx - 1].get());
-            }
-        }
-
-        // Update the completed tail after we've executed these operations.
-        // Also update this replica's local tail.
-        self.ctail.fetch_max(gtail, Ordering::Relaxed);
-        self.ltails[idx.0 - 1].store(gtail, Ordering::Relaxed);
-    }
-
-    /// Advances the head of the log forward. If a replica has stopped making progress,
-    /// then this method will never return. Accepts a closure that is passed into exec()
-    /// to ensure that this replica does not deadlock GC.
-    #[inline(always)]
-    fn advance_head<F: FnMut(T, usize, usize, bool, bool, Option<Arc<Vec<usize>>>) -> bool>(
-        &self,
-        rid: &LogToken,
-        mut s: &mut F,
-    ) {
-        // Keep looping until we can advance the head and create some free space
-        // on the log. If one of the replicas has stopped making progress, then
-        // this method might never return.
-        let mut iteration = 1;
-        loop {
-            let global_head = self.head.load(Ordering::Relaxed);
-            let f = self.tail.load(Ordering::Relaxed);
-            let (_min_replica_idx, min_local_tail) = self.find_min_tail();
-            // If we cannot advance the head further, then start
-            // from the beginning of this loop again. Before doing so, try consuming
-            // any new entries on the log to prevent deadlock.
-            if min_local_tail == global_head {
-                if iteration % WARN_THRESHOLD == 0 {
-                    warn!("Spending a long time in `advance_head`, are we starving?");
-                }
-                iteration += 1;
-                self.exec(rid, &mut s);
-                continue;
-            }
-
-            // There are entries that can be freed up; update the head offset.
-            self.head.store(min_local_tail, Ordering::Relaxed);
-
-            // Reset notify replicas after the GC.
-            self.metadata.notify_replicas.store(true, Ordering::Relaxed);
-
-            // Make sure that we freed up enough space so that threads waiting for
-            // GC in append can make progress. Otherwise, try to make progress again.
-            // If we're making progress again, then try consuming entries on the log.
-            if f < min_local_tail + self.slog.len() - GC_FROM_HEAD {
-                return;
-            } else {
-                self.exec(rid, &mut s);
-            }
-        }
     }
 
     /// The application calls this function to update the callback function.
