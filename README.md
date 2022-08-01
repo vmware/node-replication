@@ -1,15 +1,14 @@
 # node-replication
 
-This library can be used to implement a concurrent version of single threaded
-data structures: It takes in a single threaded implementation of said data
-structure, and scales it out to multiple cores and NUMA nodes by combining three
-techniques: readers-writer locks, operation logging and flat combining.
+The node-replication library is used to implement concurrent and replicated
+versions of (single-threaded) data structures by combining a set of different
+concurrency techniques: flat combining, operation logging, readers-writer locks,
+and partitioning.
 
 ## Implementations
 
-Node replication converts a data structure to its NUMA-aware concurrent version.
 The crate contains two variants of node-replication: NR for transforming
-sequential data-structures and CNR for already concurrent or partitioned data
+sequential data-structures and CNR for already concurrent or partitionable data
 structures.
 
 * [`nr`](node-replication/src/nr) converts a sequental data structure to its
@@ -88,8 +87,8 @@ impl Dispatch for NrHashMap {
 ```
 
 The full example (using `HashMap` as the underlying data-structure) can be found
-[here](node-replication/examples/hashmap.rs).
-To run, execute: `cargo run --example hashmap`
+[here](node-replication/examples/nr_hashmap.rs).
+To run, execute: `cargo run --example nr_hashmap`
 
 ## How does it perform (NR)
 

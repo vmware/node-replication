@@ -304,10 +304,6 @@ pub fn baseline_comparison<R: DsInterface>(
             .expect("Can't create NodeReplicated")
     };
     let ridx = r.register(0).expect("Failed to register with Replica.");
-    //#[cfg(feature = "c_nr")]
-    //let log = Arc::new(Log::<<R::D as Dispatch>::WriteOperation>::new(log_size, 1));
-    //#[cfg(feature = "c_nr")]
-    //let r = Replica::<R::D>::new(vec![log]);
 
     let mut operations_per_second: Vec<usize> = Vec::with_capacity(32);
     group.bench_function("log", |b| {

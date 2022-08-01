@@ -453,20 +453,9 @@ where
         // this method might never return.
         let mut iteration = 1;
         loop {
-            let r = self.next.load(Ordering::Relaxed);
             let global_head = self.head.load(Ordering::Relaxed);
             let f = self.tail.load(Ordering::Relaxed);
-
-            let mut min_local_tail = self.ltails[0].load(Ordering::Relaxed);
-
-            // Find the smallest local tail across all replicas.
-            for idx in 1..r {
-                let cur_local_tail = self.ltails[idx - 1].load(Ordering::Relaxed);
-                if min_local_tail > cur_local_tail {
-                    min_local_tail = cur_local_tail
-                };
-            }
-
+            let (_min_replica_idx, min_local_tail) = self.find_min_tail();
             // If we cannot advance the head further, then start
             // from the beginning of this loop again. Before doing so, try consuming
             // any new entries on the log to prevent deadlock.

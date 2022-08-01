@@ -99,26 +99,6 @@ where
                     iteration,
                     min_replica_idx,
                 );
-                let r = self.next.load(Ordering::Relaxed);
-                let (mut min_replica_idx, mut min_local_tail) =
-                    (0, self.ltails[0].load(Ordering::Relaxed));
-
-                // Find the smallest local tail across all replicas.
-                for idx in 1..r {
-                    let cur_local_tail = self.ltails[idx - 1].load(Ordering::Relaxed);
-                    info!(
-                        "Replica {} cur_local_tail {} head {}.",
-                        idx - 1,
-                        cur_local_tail,
-                        self.head.load(Ordering::Relaxed)
-                    );
-
-                    if cur_local_tail < min_local_tail {
-                        min_local_tail = cur_local_tail;
-                        min_replica_idx = idx - 1;
-                    }
-                }
-
                 return Err(min_replica_idx);
             }
             iteration += 1;

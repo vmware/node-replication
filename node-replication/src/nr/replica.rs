@@ -740,6 +740,16 @@ where
     // Try to become acquire the combiner lock here. If this fails, then return None.
     #[inline(always)]
     fn acquire_combiner_lock(&self) -> Option<CombinerLock<D>> {
+        // First, check if there already is a flat combiner. If there is no active flat combiner
+        // then try to acquire the combiner lock. If there is, then just return.
+        for _ in 0..4 {
+            if self.combiner.load(Ordering::Relaxed) != 0 {
+                #[cfg(loom)]
+                loom::thread::yield_now();
+                return None;
+            }
+        }
+
         if self
             .combiner
             .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Acquire)
@@ -759,16 +769,6 @@ where
         &'r self,
         slog: &Log<<D as Dispatch>::WriteOperation>,
     ) -> Result<(), ReplicaError<D>> {
-        // First, check if there already is a flat combiner. If there is no active flat combiner
-        // then try to acquire the combiner lock. If there is, then just return.
-        for _ in 0..4 {
-            if self.combiner.load(Ordering::Relaxed) != 0 {
-                #[cfg(loom)]
-                loom::thread::yield_now();
-                return Ok(());
-            }
-        }
-
         // Try to become the combiner here. If this fails, then simply return.
         if let Some(combiner_lock) = self.acquire_combiner_lock() {
             // Successfully became the combiner; perform one round of flat combining.
@@ -783,14 +783,6 @@ where
 
     #[inline(always)]
     fn try_exec(&self, slog: &Log<<D as Dispatch>::WriteOperation>) {
-        // First, check if there already is a flat combiner. If there is no active flat combiner
-        // then try to acquire the combiner lock. If there is, then just return.
-        for _ in 0..4 {
-            if self.combiner.load(Ordering::Relaxed) != 0 {
-                return;
-            }
-        }
-
         // Try to become the combiner here. If this fails, then simply return.
         if let Some(_combiner_lock) = self.acquire_combiner_lock() {
             // Successfully became the combiner; perform one round of flat combining.
