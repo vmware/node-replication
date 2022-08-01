@@ -570,7 +570,7 @@ where
     /// the entry: only after everything else has been written, as this signals
     /// to the consumers that the entry is ready to be read.
     #[inline(always)]
-    unsafe fn update_entry(&self, idx: &LogToken, offset: usize, op: &T, metadata: &M) {
+    pub(crate) unsafe fn update_entry(&self, idx: &LogToken, offset: usize, op: &T, metadata: &M) {
         let e = self.slog[self.index(offset)].as_ptr();
         let mut m = self.lmasks[idx.0 - 1].get();
 

@@ -29,20 +29,32 @@ type CallbackFn = dyn FnMut(&[AtomicBool; MAX_REPLICAS_PER_LOG], usize);
 #[derive(Default)]
 pub struct EntryMetaData {
     /// Identifies if the operation is of scan type or not.
-    is_scan: bool,
+    pub(crate) is_scan: bool,
 
     /// Identifies the replica-local thread-id that issued the operation.
-    thread: usize,
+    pub(crate) thread: usize,
 
     /// Identifies if the operation is immutable scan or not.
-    is_read_op: bool,
+    pub(crate) is_read_op: bool,
 
     /// If operation is of scan type, then `depends_on` stores
     /// the offsets in other logs this operation depends on.
-    depends_on: Option<Arc<Vec<usize>>>,
+    pub(crate) depends_on: Option<Arc<Vec<usize>>>,
 
     /// Used to remove operation once all the replica consumes the entry.
-    refcnt: AtomicUsize,
+    pub(crate) refcnt: AtomicUsize,
+}
+
+impl EntryMetaData {
+    /// Instantiate default `EntryMetaData` with a custom, provided thread
+    /// member.
+    #[cfg(test)]
+    pub(super) fn with_thread(thread: usize) -> Self {
+        Self {
+            thread,
+            ..Default::default()
+        }
+    }
 }
 
 impl Clone for EntryMetaData {
@@ -75,11 +87,11 @@ pub struct LogMetaData {
 
     /// Check if the log can issue a GC callback; reset
     /// after the GC is done in `advance_head` function.
-    notify_replicas: CachePadded<AtomicBool>,
+    _notify_replicas: CachePadded<AtomicBool>,
 
     /// Use this array in GC callback function to notify other replicas to make progress.
     /// Assumes that the callback handler clears the replica-ids which need to do GC.
-    dormant_replicas: [AtomicBool; MAX_REPLICAS_PER_LOG],
+    _dormant_replicas: [AtomicBool; MAX_REPLICAS_PER_LOG],
 }
 
 impl LogMetaData {
@@ -93,8 +105,8 @@ impl LogMetaData {
             gc: UnsafeCell::new(Box::new(
                 |_rid: &[AtomicBool; MAX_REPLICAS_PER_LOG], _lid: usize| {},
             )),
-            notify_replicas: CachePadded::new(AtomicBool::new(true)),
-            dormant_replicas: [DORMANT_DEFAULT; MAX_REPLICAS_PER_LOG],
+            _notify_replicas: CachePadded::new(AtomicBool::new(true)),
+            _dormant_replicas: [DORMANT_DEFAULT; MAX_REPLICAS_PER_LOG],
         }
     }
 }
@@ -116,7 +128,7 @@ where
     #[doc(hidden)]
     pub(crate) fn try_append_scan<F: FnMut(T, bool, EntryMetaData) -> bool>(
         &self,
-        op: &(T, usize, bool),
+        op: &(T, EntryMetaData),
         idx: &LogToken,
         offset: &[usize],
         mut s: F,
@@ -154,14 +166,15 @@ where
         // Successfully reserved entries on the shared log. Add the operations in.
         let log_offset = tail;
         if self.metadata.idx != 1 {
-            unsafe {
-                self.update_entry(log_offset, op, idx.0, true, Some(Arc::new(vec![offset[0]])))
-            }
+            let mut md = op.1.clone();
+            md.depends_on = Some(Arc::new(vec![offset[0]]));
+            unsafe { self.update_entry(idx, log_offset, &op.0, &op.1) }
         }
 
         // If needed, advance the head of the log forward to make room on the log.
         if advance {
-            self.advance_head(idx, &mut s);
+            self.advance_head(idx, &mut s)
+                .expect("TODO(livenr): handle");
         }
 
         Ok(log_offset)
@@ -169,13 +182,9 @@ where
 
     /// Update the depends_on field for scan operation. Replica mainatins the
     /// offset for the scan entry and later it updates the remaining offset there.
-    pub(crate) fn fix_scan_entry(
-        &self,
-        op: &(T, usize, bool),
-        idx: &LogToken,
-        offsets: Arc<Vec<usize>>,
-    ) {
-        unsafe { self.update_entry(offsets[0], op, idx.0, true, Some(offsets)) };
+    pub(crate) fn fix_scan_entry(&self, op: &(T, EntryMetaData), idx: &LogToken) {
+        let offset = op.1.depends_on.as_ref().unwrap()[0];
+        unsafe { self.update_entry(idx, offset, &op.0, &op.1) };
     }
 
     /// Try to acquire the scan lock.
@@ -308,10 +317,8 @@ mod tests {
     fn test_log_append() {
         let l = Log::<Operation>::new_with_metadata(LogMetaData::new(1));
         let tkn = l.register().unwrap();
-        let o = [(Operation::Read, 1, false)];
-        l.append(&o, &tkn, |_o: Operation, _i: usize, _, _, _, _| -> bool {
-            true
-        });
+        let o = [(Operation::Read, EntryMetaData::default())];
+        l.append(&o, &tkn, |_o: Operation, _mine, _md| -> bool { true });
 
         assert_eq!(l.head.load(Ordering::Relaxed), 0);
         assert_eq!(l.tail.load(Ordering::Relaxed), 1);
@@ -326,12 +333,10 @@ mod tests {
         let l = Log::<Operation>::new_with_metadata(LogMetaData::new(1));
         let tkn = l.register().unwrap();
         let o = [
-            (Operation::Read, 1, false),
-            (Operation::Write(119), 1, false),
+            (Operation::Read, EntryMetaData::default()),
+            (Operation::Write(119), EntryMetaData::default()),
         ];
-        l.append(&o, &tkn, |_o: Operation, _i: usize, _, _, _, _| -> bool {
-            true
-        });
+        l.append(&o, &tkn, |_o, _mine, _md| -> bool { true });
 
         assert_eq!(l.head.load(Ordering::Relaxed), 0);
         assert_eq!(l.tail.load(Ordering::Relaxed), 2);
@@ -349,9 +354,7 @@ mod tests {
         l.ltails[2].store(4096, Ordering::Relaxed);
         l.ltails[3].store(799, Ordering::Relaxed);
 
-        l.advance_head(&tkn, &mut |_o: Operation, _i: usize, _, _, _, _| -> bool {
-            true
-        });
+        l.advance_head(&tkn, &mut |_o, _mine, _md| -> bool { true });
         assert_eq!(l.head.load(Ordering::Relaxed), 224);
     }
 
@@ -361,11 +364,11 @@ mod tests {
         let l = Log::<Operation>::new_with_metadata(LogMetaData::new(1));
         let tkn = l.register().unwrap();
 
-        let o: [(Operation, usize, bool); 4] = unsafe {
-            let mut a: [(Operation, usize, bool); 4] =
+        let o: [(Operation, EntryMetaData); 4] = unsafe {
+            let mut a: [(Operation, EntryMetaData); 4] =
                 ::std::mem::MaybeUninit::zeroed().assume_init();
             for i in &mut a[..] {
-                ::std::ptr::write(i, (Operation::Read, 1, false));
+                ::std::ptr::write(i, (Operation::Read, EntryMetaData::default()));
             }
             a
         };
@@ -374,9 +377,7 @@ mod tests {
         l.tail
             .store(l.slog.len() - GC_FROM_HEAD - 1, Ordering::Relaxed);
         l.ltails[0].store(1024, Ordering::Relaxed);
-        l.append(&o, &tkn, |_o: Operation, _i: usize, _, _, _, _| -> bool {
-            true
-        });
+        l.append(&o, &tkn, |_o, _mine, _md| -> bool { true });
 
         assert_eq!(l.head.load(Ordering::Relaxed), 1024);
         assert_eq!(
@@ -392,11 +393,11 @@ mod tests {
         let l = Log::<Operation>::new_with_metadata(LogMetaData::new(1));
         let tkn = l.register().unwrap();
 
-        let o: [(Operation, usize, bool); 1024] = unsafe {
-            let mut a: [(Operation, usize, bool); 1024] =
+        let o: [(Operation, EntryMetaData); 1024] = unsafe {
+            let mut a: [(Operation, EntryMetaData); 1024] =
                 ::std::mem::MaybeUninit::zeroed().assume_init();
             for i in &mut a[..] {
-                ::std::ptr::write(i, (Operation::Read, 1, false));
+                ::std::ptr::write(i, (Operation::Read, EntryMetaData::default()));
             }
             a
         };
@@ -404,9 +405,7 @@ mod tests {
         l.next.store(2, Ordering::Relaxed);
         l.head.store(2 * 8192, Ordering::Relaxed);
         l.tail.store(l.slog.len() - 10, Ordering::Relaxed);
-        l.append(&o, &tkn, |_o: Operation, _i: usize, _, _, _, _| -> bool {
-            true
-        });
+        l.append(&o, &tkn, |_o, _mine, _md| -> bool { true });
 
         assert_eq!(l.lmasks[0].get(), true);
         assert_eq!(l.tail.load(Ordering::Relaxed), l.slog.len() + 1014);
@@ -418,16 +417,15 @@ mod tests {
         let l = Log::<Operation>::new_with_metadata(LogMetaData::new(1));
         let tkn = l.register().unwrap();
 
-        let o = [(Operation::Read, 1, false)];
-        let mut f = |op: Operation, i: usize, _, _, _, _| -> bool {
+        let o = [(Operation::Read, EntryMetaData::default())];
+        let mut f = |op: Operation, mine: bool, md: EntryMetaData| -> bool {
             assert_eq!(op, Operation::Read);
-            assert_eq!(i, 1);
+            assert!(mine);
+            //assert_eq!(md, EntryMetaData::default());
             true
         };
 
-        l.append(&o, &tkn, |_o: Operation, _i: usize, _, _, _, _| -> bool {
-            true
-        });
+        l.append(&o, &tkn, |_o, _mine, _md| -> bool { true });
         l.exec(&tkn, &mut f);
 
         assert_eq!(
@@ -446,7 +444,7 @@ mod tests {
         let l = Log::<Operation>::new_with_metadata(LogMetaData::new(1));
         let tkn = l.register().unwrap();
 
-        let mut f = |_o: Operation, _i: usize, _, _, _, _| -> bool {
+        let mut f = |_o: Operation, _mine: bool, _md: EntryMetaData| -> bool {
             assert!(false);
             true
         };
@@ -460,20 +458,22 @@ mod tests {
         let l = Log::<Operation>::new_with_metadata(LogMetaData::new(1));
         let tkn = l.register().unwrap();
 
-        let o = [(Operation::Read, 1, false)];
-        let mut f = |op: Operation, i: usize, _, _, _, _| -> bool {
+        let o = [(Operation::Read, EntryMetaData::default())];
+        let mut f = |op: Operation, mine: bool, _md: EntryMetaData| -> bool {
             assert_eq!(op, Operation::Read);
-            assert_eq!(i, 1);
+            assert!(mine);
             true
         };
-        let mut g = |_op: Operation, _i: usize, _, _, _, _| -> bool {
+        let mut g = |_o: Operation, _mine: bool, _md: EntryMetaData| -> bool {
             assert!(false);
             true
         };
 
-        l.append(&o, &tkn, |_o: Operation, _i: usize, _, _, _, _| -> bool {
-            true
-        });
+        l.append(
+            &o,
+            &tkn,
+            |_o: Operation, _mine: bool, _md: EntryMetaData| -> bool { true },
+        );
         l.exec(&tkn, &mut f);
         l.exec(&tkn, &mut g);
     }
@@ -485,11 +485,11 @@ mod tests {
         let tkn = l.register().unwrap();
 
         let o = [
-            (Operation::Read, 1, false),
-            (Operation::Write(119), 1, false),
+            (Operation::Read, EntryMetaData::default()),
+            (Operation::Write(119), EntryMetaData::default()),
         ];
         let mut s = 0;
-        let mut f = |op: Operation, _i: usize, _, _, _, _| -> bool {
+        let mut f = |op: Operation, _mine: bool, _md: EntryMetaData| -> bool {
             match op {
                 Operation::Read => s += 121,
                 Operation::Write(v) => s += v,
@@ -498,9 +498,11 @@ mod tests {
             true
         };
 
-        l.append(&o, &tkn, |_o: Operation, _i: usize, _, _, _, _| -> bool {
-            true
-        });
+        l.append(
+            &o,
+            &tkn,
+            |_op: Operation, _mine: bool, _md: EntryMetaData| -> bool { true },
+        );
         l.exec(&tkn, &mut f);
         assert_eq!(s, 240);
 
@@ -521,29 +523,33 @@ mod tests {
         let l = Log::<Operation>::new_with_metadata(LogMetaData::new(1));
         let tkn = l.register().unwrap();
 
-        let o: [(Operation, usize, bool); 1024] = unsafe {
-            let mut a: [(Operation, usize, bool); 1024] =
+        let o: [(Operation, EntryMetaData); 1024] = unsafe {
+            let mut a: [(Operation, EntryMetaData); 1024] =
                 ::std::mem::MaybeUninit::zeroed().assume_init();
             for i in &mut a[..] {
-                ::std::ptr::write(i, (Operation::Read, 1, false));
+                ::std::ptr::write(i, (Operation::Read, EntryMetaData::default()));
             }
             a
         };
-        let mut f = |op: Operation, i: usize, _, _, _, _| -> bool {
+        let mut f = |op: Operation, mine: bool, _md: EntryMetaData| -> bool {
             assert_eq!(op, Operation::Read);
-            assert_eq!(i, 1);
+            assert!(mine);
             true
         };
 
-        l.append(&o, &tkn, |_o: Operation, _i: usize, _, _, _, _| -> bool {
-            true
-        }); // Required for GC to work correctly.
+        l.append(
+            &o,
+            &tkn,
+            |op: Operation, mine: bool, _md: EntryMetaData| -> bool { true },
+        ); // Required for GC to work correctly.
         l.next.store(2, Ordering::SeqCst);
         l.head.store(2 * 8192, Ordering::SeqCst);
         l.tail.store(l.slog.len() - 10, Ordering::SeqCst);
-        l.append(&o, &tkn, |_o: Operation, _i: usize, _, _, _, _| -> bool {
-            true
-        });
+        l.append(
+            &o,
+            &tkn,
+            |op: Operation, mine: bool, _md: EntryMetaData| -> bool { true },
+        );
 
         l.ltails[0].store(l.slog.len() - 10, Ordering::SeqCst);
         l.exec(&tkn, &mut f);
@@ -559,22 +565,24 @@ mod tests {
         let l = Log::<Operation>::new_with_metadata(LogMetaData::new(1));
         let tkn = l.register().unwrap();
 
-        let o: [(Operation, usize, bool); 1024] = unsafe {
-            let mut a: [(Operation, usize, bool); 1024] =
+        let o: [(Operation, EntryMetaData); 1024] = unsafe {
+            let mut a: [(Operation, EntryMetaData); 1024] =
                 ::std::mem::MaybeUninit::zeroed().assume_init();
             for i in &mut a[..] {
-                ::std::ptr::write(i, (Operation::Read, 1, false));
+                ::std::ptr::write(i, (Operation::Read, EntryMetaData::default()));
             }
             a
         };
-        let mut f = |_op: Operation, _i: usize, _, _, _, _| -> bool {
+        let mut f = |_op: Operation, _mine: bool, _md: EntryMetaData| -> bool {
             assert!(false);
             true
         };
 
-        l.append(&o, &tkn, |_o: Operation, _i: usize, _, _, _, _| -> bool {
-            true
-        });
+        l.append(
+            &o,
+            &tkn,
+            |_op: Operation, _mine: bool, _md: EntryMetaData| -> bool { true },
+        );
         l.head.store(8192, Ordering::SeqCst);
 
         l.exec(&tkn, &mut f);
@@ -585,8 +593,8 @@ mod tests {
     #[test]
     fn test_log_change_refcount() {
         let l = Log::<Arc<Operation>>::new_with_metadata(LogMetaData::new(1));
-        let o1 = [(Arc::new(Operation::Read), 1, false)];
-        let o2 = [(Arc::new(Operation::Read), 1, false)];
+        let o1 = [(Arc::new(Operation::Read), EntryMetaData::default())];
+        let o2 = [(Arc::new(Operation::Read), EntryMetaData::default())];
         assert_eq!(Arc::strong_count(&o1[0].0), 1);
         assert_eq!(Arc::strong_count(&o2[0].0), 1);
         let tkn = l.register().unwrap();
@@ -594,13 +602,13 @@ mod tests {
         l.append(
             &o1[..],
             &tkn,
-            |_o: Arc<Operation>, _i: usize, _, _, _, _| -> bool { true },
+            |_op: Arc<Operation>, _mine: bool, _md: EntryMetaData| -> bool { true },
         );
         assert_eq!(Arc::strong_count(&o1[0].0), 2);
         l.append(
             &o1[..],
             &tkn,
-            |_o: Arc<Operation>, _i: usize, _, _, _, _| -> bool { true },
+            |_op: Arc<Operation>, _mine: bool, _md: EntryMetaData| -> bool { true },
         );
         assert_eq!(Arc::strong_count(&o1[0].0), 3);
 
@@ -612,14 +620,14 @@ mod tests {
         l.append(
             &o2[..],
             &tkn,
-            |_o: Arc<Operation>, _i: usize, _, _, _, _| -> bool { true },
+            |_op: Arc<Operation>, _mine: bool, _md: EntryMetaData| -> bool { true },
         );
         assert_eq!(Arc::strong_count(&o1[0].0), 2);
         assert_eq!(Arc::strong_count(&o2[0].0), 2);
         l.append(
             &o2[..],
             &tkn,
-            |_o: Arc<Operation>, _i: usize, _, _, _, _| -> bool { true },
+            |_op: Arc<Operation>, _mine: bool, _md: EntryMetaData| -> bool { true },
         );
         assert_eq!(Arc::strong_count(&o1[0].0), 1);
         assert_eq!(Arc::strong_count(&o2[0].0), 3);
@@ -640,8 +648,8 @@ mod tests {
         // Intentionally not using `register()`, (will fail the test due to GC).
         let tkn = LogToken(1);
 
-        let o1 = [(Arc::new(Operation::Read), 1, false)];
-        let o2 = [(Arc::new(Operation::Read), 1, false)];
+        let o1 = [(Arc::new(Operation::Read), EntryMetaData::default())];
+        let o2 = [(Arc::new(Operation::Read), EntryMetaData::default())];
         assert_eq!(Arc::strong_count(&o1[0].0), 1);
         assert_eq!(Arc::strong_count(&o2[0].0), 1);
 
@@ -649,7 +657,7 @@ mod tests {
             l.append(
                 &o1[..],
                 &tkn,
-                |_o: Arc<Operation>, _i: usize, _, _, _, _| -> bool { true },
+                |_op: Arc<Operation>, _mine: bool, _md: EntryMetaData| -> bool { true },
             );
             assert_eq!(Arc::strong_count(&o1[0].0), i + 1);
         }
@@ -659,7 +667,7 @@ mod tests {
             l.append(
                 &o2[..],
                 &tkn,
-                |_o: Arc<Operation>, _i: usize, _, _, _, _| -> bool { true },
+                |_op: Arc<Operation>, _mine: bool, _md: EntryMetaData| -> bool { true },
             );
             assert_eq!(Arc::strong_count(&o1[0].0), (total_entries + 1) - i);
             assert_eq!(Arc::strong_count(&o2[0].0), i + 1);
@@ -680,16 +688,18 @@ mod tests {
         assert_eq!(one, LogToken(1));
         assert_eq!(two, LogToken(2));
 
-        let o = [(Operation::Read, 1, false)];
-        let mut f = |op: Operation, i: usize, _, _, _, _| -> bool {
+        let o = [(Operation::Read, EntryMetaData::default())];
+        let mut f = |op: Operation, mine: bool, _md: EntryMetaData| -> bool {
             assert_eq!(op, Operation::Read);
-            assert_eq!(i, 1);
+            assert!(mine);
             true
         };
 
-        l.append(&o, &one, |_o: Operation, _i: usize, _, _, _, _| -> bool {
-            true
-        });
+        l.append(
+            &o,
+            &one,
+            |_op: Operation, _mine: bool, _md: EntryMetaData| -> bool { true },
+        );
         l.exec(&one, &mut f);
         assert_eq!(l.is_replica_synced_for_reads(&one, l.get_ctail()), true);
         assert_eq!(l.is_replica_synced_for_reads(&two, l.get_ctail()), false);

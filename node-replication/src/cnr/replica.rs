@@ -16,14 +16,14 @@ use crossbeam_utils::CachePadded;
 use super::context::Context;
 use super::log::Log;
 use super::Dispatch;
-use super::LogMapper;
+use super::{EntryMetaData, LogMapper};
 
 use crate::log::LogToken;
 use crate::replica::ReplicaToken;
 pub use crate::replica::MAX_THREADS_PER_REPLICA;
 
 /// Type that has meta-data about either scan or write op while it's in the log.
-type OperationState<D> = (<D as Dispatch>::WriteOperation, usize, bool);
+type OperationState<D> = (<D as Dispatch>::WriteOperation, EntryMetaData);
 
 /// An instance of per log state maintained by each replica.
 pub(self) struct LogState<D>
@@ -571,8 +571,12 @@ where
         self.get_response(idx.0, hash)
     }
 
-    fn append_scan(&self, op: (<D as Dispatch>::WriteOperation, usize, bool), thread_id: usize) {
-        let mut hash_vec = self.hash[op.1 - 1].borrow_mut();
+    fn append_scan(
+        &self,
+        mut op: (<D as Dispatch>::WriteOperation, EntryMetaData),
+        thread_id: usize,
+    ) {
+        let mut hash_vec = self.hash[op.1.thread - 1].borrow_mut();
         let mut entries = self.offsets[thread_id - 1].borrow_mut();
         entries.clear();
 
@@ -585,24 +589,18 @@ where
         self.logstate[root_log].slog.acquire_scan_lock(thread_id);
         for logidx in hash_vec.iter() {
             let entry = loop {
-                let f = |o: <D as Dispatch>::WriteOperation,
-                         rid: usize,
-                         tid: usize,
-                         is_scan,
-                         is_read_op,
-                         depends_on: Option<Arc<Vec<usize>>>|
-                 -> bool {
-                    if unlikely(is_scan) {
-                        let depends_on = depends_on.as_ref().unwrap();
-                        self.handle_scan_op(o, thread_id, *logidx, rid, tid, is_read_op, depends_on)
-                    } else {
-                        let resp = self.data.dispatch_mut(o);
-                        if rid == self.logstate[*logidx].idx.0 {
-                            self.contexts[tid - 1].enqueue_resp(resp);
+                let f =
+                    |o: <D as Dispatch>::WriteOperation, mine: bool, md: EntryMetaData| -> bool {
+                        if unlikely(md.is_scan) {
+                            self.handle_scan_op(o, mine, md)
+                        } else {
+                            let resp = self.data.dispatch_mut(o);
+                            if mine {
+                                self.contexts[md.thread - 1].enqueue_resp(resp);
+                            }
+                            true
                         }
-                        true
-                    }
-                };
+                    };
 
                 match self.logstate[*logidx].slog.try_append_scan(
                     &op,
@@ -623,11 +621,10 @@ where
         offset.append(&mut entries);
 
         // Update scan entry depends_on.
-        self.logstate[root_log].slog.fix_scan_entry(
-            &op,
-            &self.logstate[root_log].idx,
-            Arc::new(offset),
-        );
+        op.1.depends_on = Some(Arc::try_new(offset).expect("handle OOM"));
+        self.logstate[root_log]
+            .slog
+            .fix_scan_entry(&op, &self.logstate[root_log].idx);
     }
 
     /// Executes a read-only operation against this replica and returns a response.
@@ -881,13 +878,7 @@ where
             spin_loop();
         }
 
-        let mut f = |o: <D as Dispatch>::WriteOperation,
-                     _i: usize,
-                     _tid,
-                     _is_scan,
-                     _is_read_op,
-                     _depends_on|
-         -> bool {
+        let mut f = |o: <D as Dispatch>::WriteOperation, _mine, _md| -> bool {
             self.data.dispatch_mut(o);
             true
         };
@@ -1015,12 +1006,20 @@ where
                 // pass hash of current op to contexts, only get ops from
                 // context that have the same hash/log id
                 let ctxt_iter = self.contexts[tid - 1].iter();
-                for (op, (hash, is_scan, is_read_only)) in ctxt_iter {
+                for (op, (hash, is_scan, is_read_op)) in ctxt_iter {
+                    let md = EntryMetaData {
+                        is_read_op,
+                        is_scan,
+                        thread: tid,
+                        // TODO(livecnr): md.refcnt = log.next?
+                        ..Default::default()
+                    };
+
                     if hash == hashidx {
                         if is_scan {
-                            scan_buffer.push((op, tid, is_read_only));
+                            scan_buffer.push((op, md));
                         } else {
-                            buffer.push((op, tid, is_read_only));
+                            buffer.push((op, md));
                         }
                     }
                 }
@@ -1030,56 +1029,43 @@ where
         // Append all collected operations into the shared log. We pass a closure
         // in here because operations on the log might need to be consumed for GC.
         {
-            let f = |o: <D as Dispatch>::WriteOperation,
-                     rid: usize,
-                     tid: usize,
-                     is_scan,
-                     is_read_op,
-                     depends_on: Option<Arc<Vec<usize>>>|
-             -> bool {
-                match is_scan {
-                    false => {
-                        let resp = self.data.dispatch_mut(o);
-                        if rid == self.logstate[hashidx].idx.0 {
-                            self.contexts[tid - 1].enqueue_resp(resp);
-                        }
-                        true
+            let f = |o: <D as Dispatch>::WriteOperation, mine: bool, md: EntryMetaData| -> bool {
+                if md.is_scan {
+                    self.handle_scan_op(o, mine, md)
+                } else {
+                    let resp = self.data.dispatch_mut(o);
+                    if mine {
+                        self.contexts[md.thread].enqueue_resp(resp);
                     }
-                    true => {
-                        let depends_on = depends_on.as_ref().unwrap();
-                        self.handle_scan_op(o, thread_id, hashidx, rid, tid, is_read_op, depends_on)
-                    }
+                    true
                 }
             };
+
             self.logstate[hashidx]
                 .slog
-                .append(&buffer, &self.logstate[hashidx].idx, f);
+                .append(&buffer, &self.logstate[hashidx].idx, f)
+                .expect("TODO(livenr): handle");
 
-            for i in 0..scan_buffer.len() {
-                self.append_scan(scan_buffer[i].clone(), thread_id);
+            for (op, md) in scan_buffer.iter() {
+                let op_md = (op.clone(), md.clone());
+                self.append_scan(op_md, thread_id);
             }
         }
 
         // Execute any operations on the shared log against this replica.
         {
-            let mut f = |o: <D as Dispatch>::WriteOperation,
-                         rid: usize,
-                         tid: usize,
-                         is_scan,
-                         is_read_op,
-                         depends_on: Option<Arc<Vec<usize>>>|
-             -> bool {
-                if unlikely(is_scan) {
-                    let depends_on = depends_on.as_ref().unwrap();
-                    self.handle_scan_op(o, thread_id, hashidx, rid, tid, is_read_op, depends_on)
-                } else {
-                    let resp = self.data.dispatch_mut(o);
-                    if rid == self.logstate[hashidx].idx.0 {
-                        self.contexts[tid - 1].enqueue_resp(resp);
-                    };
-                    true
-                }
-            };
+            let mut f =
+                |o: <D as Dispatch>::WriteOperation, mine: bool, md: EntryMetaData| -> bool {
+                    if unlikely(md.is_scan) {
+                        self.handle_scan_op(o, mine, md)
+                    } else {
+                        let resp = self.data.dispatch_mut(o);
+                        if mine {
+                            self.contexts[md.thread - 1].enqueue_resp(resp);
+                        }
+                        true
+                    }
+                };
             self.logstate[hashidx]
                 .slog
                 .exec(&self.logstate[hashidx].idx, &mut f);
@@ -1093,18 +1079,15 @@ where
     fn handle_scan_op(
         &self,
         op: <D as Dispatch>::WriteOperation,
-        thread_id: usize,
-        hashidx: usize,
-        issuer_rid: usize,
-        issuer_tid: usize,
-        is_read_op: bool,
-        depends_on: &[usize],
+        mine: bool,
+        md: EntryMetaData,
     ) -> bool {
         // Return immediately if its an immutable scan op and the
         // executor replica-id is not same as the issuer replica-id.
-        if is_read_op && issuer_rid != self.logstate[hashidx].idx.0 {
+        if md.is_read_op && !mine {
             return true;
         }
+        let depends_on = md.depends_on.as_ref().unwrap().as_slice();
 
         let is_root = depends_on.len() == self.logstate.len();
         if is_root {
@@ -1119,14 +1102,14 @@ where
                     .slog
                     .is_replica_synced_for_reads(&self.logstate[logidx].idx, *depends_on)
                 {
-                    self.try_combine(thread_id, logidx);
+                    self.try_combine(md.thread, logidx);
                 }
             }
 
             if self.is_replica_sync_for_logs(1, self.logstate.len(), depends_on) {
                 let resp = self.data.dispatch_mut(op);
-                if issuer_rid == self.logstate[hashidx].idx.0 {
-                    self.contexts[issuer_tid - 1].enqueue_resp(resp);
+                if mine {
+                    self.contexts[md.thread - 1].enqueue_resp(resp);
                 };
                 true
             } else {
@@ -1141,7 +1124,7 @@ where
             {
                 true => true,
                 false => {
-                    self.try_combine(thread_id, logidx);
+                    self.try_combine(md.thread, logidx);
                     self.is_replica_sync_for_logs(logidx, logidx + 1, depends_on)
                 }
             }
@@ -1383,9 +1366,12 @@ mod test {
 
         // Add in operations to the log off the side, not through the replica.
         let ltkn = slog.register().expect("Failed to register with log.");
-        let o = [(OpWr(121), 1, false), (OpWr(212), 1, false)];
-        slog.append(&o, &ltkn, |_o: OpWr, _i: usize, _, _, _, _| true);
-        slog.exec(&ltkn, &mut |_o: OpWr, _i: usize, _, _, _, _| true);
+        let o = [
+            (OpWr(121), EntryMetaData::default()),
+            (OpWr(212), EntryMetaData::default()),
+        ];
+        slog.append(&o, &ltkn, |_o: OpWr, _mine: bool, _md: EntryMetaData| true);
+        slog.exec(&ltkn, &mut |_o: OpWr, _mine: bool, _md: EntryMetaData| true);
 
         let t1 = repl.register().expect("Failed to register with replica.");
         assert_eq!(Ok(2), repl.execute(OpRd(11), t1));
@@ -1595,7 +1581,8 @@ mod test {
         let idx2 = repl2.register().unwrap();
 
         for _i in 0..nlogs {
-            repl2.append_scan((WriteOp::SetScan(0), idx2.tid(), false), idx2.tid());
+            let md = EntryMetaData::with_thread(idx2.tid());
+            repl2.append_scan((WriteOp::SetScan(0), md), idx2.tid());
         }
         let resp = repl1.execute_mut(WriteOp::Set(0), idx1);
         assert_eq!(resp, Ok(nlogs));
@@ -1622,7 +1609,8 @@ mod test {
         let idx2 = repl2.register().unwrap();
 
         for i in 0..nlogs {
-            repl2.append_scan((WriteOp::SetScan(10 + i), idx2.tid(), false), idx2.tid());
+            let md = EntryMetaData::with_thread(idx2.tid());
+            repl2.append_scan((WriteOp::SetScan(10 + i), md), idx2.tid());
         }
         let _ignore = repl2.execute_mut(WriteOp::Set(0), idx2);
 
@@ -1648,7 +1636,8 @@ mod test {
         let idx = repl.register().unwrap();
 
         for i in 0..nlogs {
-            repl.append_scan((WriteOp::SetScan(i), idx.tid(), false), idx.tid());
+            let md = EntryMetaData::with_thread(idx.tid());
+            repl.append_scan((WriteOp::SetScan(i), md), idx.tid());
         }
 
         let ltails = vec![0, 0, 0, 0];
@@ -1712,18 +1701,14 @@ mod test {
         let idx = repl.register().unwrap();
 
         let ltails = vec![0, 0, 0, 0];
-        assert_eq!(
-            true,
-            repl.handle_scan_op(
-                WriteOp::SetScan(0),
-                idx.tid(),
-                hash,
-                repl.logstate[0].idx.0,
-                idx.tid(),
-                false,
-                &ltails,
-            )
-        );
+        let md = EntryMetaData {
+            thread: idx.tid(),
+            is_scan: false,
+            is_read_op: true,
+            depends_on: Some(Arc::new(ltails)),
+            refcnt: AtomicUsize::new(0),
+        };
+        assert_eq!(true, repl.handle_scan_op(WriteOp::SetScan(0), true, md));
         assert_eq!(Ok(0), repl.get_response(idx.tid(), hash));
     }
 }
