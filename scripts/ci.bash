@@ -12,7 +12,6 @@ sudo sh -c "echo 0 > /sys/kernel/mm/ksm/run"
 sudo sh -c "echo 0 > /sys/kernel/mm/ksm/merge_across_nodes"
 sudo sh -c "echo never > /sys/kernel/mm/transparent_hugepage/enabled"
 
-cd benches
 #timeout 1h cargo bench --bench log
 timeout 1h cargo bench --bench synthetic
 timeout 1h cargo bench --bench stack
@@ -21,14 +20,14 @@ timeout 1h cargo bench --bench vspace
 #timeout 1h cargo bench --bench nrfs
 timeout 20h cargo bench --bench lockfree
 
-timeout 1.5h bash hashbench/hashbench_run.sh
-timeout 1.5h bash rwlockbench/rwlockbench_run.sh
+timeout 1.5h bash benches/hashbench/hashbench_run.sh
+timeout 1.5h bash benches/rwlockbench/rwlockbench_run.sh
 
 mv *.csv .. || true
 mv *.log .. || true
 mv *.png .. || true
-
 cd ..
+
 # Check that we can checkout gh-pages early:
 rm -rf gh-pages
 git clone --depth 1 -b master git@github.com:gz/nr-benchmarks.git gh-pages
