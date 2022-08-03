@@ -721,13 +721,33 @@ where
     /// reference that does not match the log-token supplied to the constructor
     /// of the Replica. Ideally, this is runtime checked and panics in the
     /// future.
-    pub fn sync(&self, slog: &Log<<D as Dispatch>::WriteOperation>) -> Result<(), usize> {
+    ///
+    /// # See also
+    /// - [`Replica::try_sync`]
+    pub fn sync(&self, slog: &Log<<D as Dispatch>::WriteOperation>) {
         let ctail = slog.get_ctail();
         while !slog.is_replica_synced_for_reads(&self.log_tkn, ctail) {
-            self.try_exec(slog);
+            self.try_sync(slog);
             spin_loop();
         }
-        Ok(())
+    }
+
+    /// Similar to [`Replica::sync`] but doesn't repeatedly try to acquire the
+    /// combiner lock: if another thread already holds the lock and works
+    /// towards advancing the replica it will just return.
+    ///
+    /// # Note
+    /// This method should ideally be preferred over [`Replica::sync`] whenever
+    /// we don't need strict guarantees that the replica has advanced.
+    /// [`Replica::sync`] can lead to "a thundering herd effect" if many threads
+    /// call it at the same time.
+    #[inline(always)]
+    pub(crate) fn try_sync(&self, slog: &Log<<D as Dispatch>::WriteOperation>) {
+        // Try to become the combiner here. If this fails, then simply return.
+        if let Some(_combiner_lock) = self.acquire_combiner_lock() {
+            // Successfully became the combiner; perform one round of flat combining.
+            self.exec(slog);
+        }
     }
 
     /// Enqueues an operation inside a thread local context. Returns a boolean
@@ -778,15 +798,6 @@ where
             #[cfg(loom)]
             loom::thread::yield_now();
             Ok(())
-        }
-    }
-
-    #[inline(always)]
-    fn try_exec(&self, slog: &Log<<D as Dispatch>::WriteOperation>) {
-        // Try to become the combiner here. If this fails, then simply return.
-        if let Some(_combiner_lock) = self.acquire_combiner_lock() {
-            // Successfully became the combiner; perform one round of flat combining.
-            self.exec(slog);
         }
     }
 

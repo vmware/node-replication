@@ -597,16 +597,9 @@ where
                 ResolveOp::Sync(ridx) => {
                     // Holds trivially because of all the other asserts in this function
                     debug_assert_ne!(ridx, tkn.rid);
+                    //warn!("execute_mut ResolveOp::Sync {}", ridx);
                     let _aftkn = self.affinity_mngr.switch(ridx);
-                    match self.replicas[ridx].sync(&self.log) {
-                        Ok(()) => continue,
-                        Err(stuck_ridx) => {
-                            assert_ne!(stuck_ridx, tkn.rid);
-                            // This doesn't do an allocation so it's ok that
-                            // we're in a different affinity.
-                            q.push(ResolveOp::Sync(stuck_ridx));
-                        }
-                    }
+                    self.replicas[ridx].try_sync(&self.log);
                     // _aftkn is dropped here, reverting affinity change
                 }
             }
@@ -713,13 +706,7 @@ where
                     // Holds trivially because of all the other asserts in this function
                     debug_assert_ne!(ridx, tkn.rid);
                     let _aftkn = self.affinity_mngr.switch(ridx);
-                    match self.replicas[ridx].sync(&self.log) {
-                        Ok(()) => continue,
-                        Err(stuck_ridx) => {
-                            assert!(stuck_ridx != tkn.rid);
-                            q.push(ResolveOp::Sync(stuck_ridx));
-                        }
-                    }
+                    self.replicas[ridx].try_sync(&self.log);
                     // _aftkn is dropped here, reverting affinity change
                 }
             }
@@ -760,10 +747,7 @@ where
 
     #[doc(hidden)]
     pub fn sync(&self, tkn: ThreadToken) {
-        match self.replicas[tkn.rid].sync(&self.log) {
-            Ok(r) => r,
-            Err(stuck_ridx) => panic!("replica#{} is stuck", stuck_ridx),
-        }
+        self.replicas[tkn.rid].sync(&self.log)
     }
 }
 
