@@ -16,6 +16,7 @@ jobs:
     steps:
     - uses: actions/checkout@v2.4.0
     - name: Install rust toolchain
+      working-directory: ./node-replication
       run: rustup show
     - name: Run clippy
       uses: actions-rs/clippy-check@v1
