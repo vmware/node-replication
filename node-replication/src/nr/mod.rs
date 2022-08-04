@@ -586,7 +586,7 @@ where
                         {
                             assert_ne!(stuck_ridx, tkn.rid);
                             let _aftkn = self.affinity_mngr.switch(stuck_ridx);
-                            let _r = self.replicas[stuck_ridx].sync(&self.log);
+                            self.replicas[stuck_ridx].sync(&self.log);
                             // Affinity is reverted here, _aftkn is dropped.
                         }
                         return self.replicas[tkn.rid]

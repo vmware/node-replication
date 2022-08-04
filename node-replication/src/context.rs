@@ -309,7 +309,7 @@ where
         let meta = e.meta.get();
         self.cur += 1;
 
-        unsafe { Some(((&*op).clone().unwrap(), *meta)) }
+        unsafe { Some(((*op).clone().unwrap(), *meta)) }
     }
 }
 

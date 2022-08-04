@@ -844,7 +844,7 @@ where
         results.clear();
         buffer.clear();
 
-        self.collect_thread_ops(&mut buffer, &mut *operations);
+        self.collect_thread_ops(&mut buffer, operations.as_mut_slice());
 
         // Append all collected operations into the shared log. We pass a closure
         // in here because operations on the log might need to be consumed for GC.
