@@ -16,6 +16,7 @@ jobs:
       run: sudo apt-get update && sudo apt-get install -y libhwloc-dev gnuplot libfuse-dev liburcu-dev liburcu6
     - uses: actions/checkout@v2.4.0
     - name: Install rust toolchain
+      working-directory: ./node-replication
       run: rustup show
     - name: Check formatting of bench_utils
       working-directory: ./bench_utils
