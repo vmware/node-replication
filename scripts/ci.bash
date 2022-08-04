@@ -18,7 +18,7 @@ timeout 1h cargo bench --bench stack
 timeout 20h cargo bench --bench hashmap
 timeout 1h cargo bench --bench vspace
 #timeout 1h cargo bench --bench nrfs
-timeout 20h cargo bench --bench lockfree
+#timeout 20h cargo bench --bench lockfree
 
 timeout 1.5h bash benches/hashbench/hashbench_run.sh
 timeout 1.5h bash benches/rwlockbench/rwlockbench_run.sh
@@ -46,12 +46,12 @@ rm -rf ${SCALEBENCH_DEPLOY}
 mkdir -p ${SCALEBENCH_DEPLOY}
 mv baseline_comparison.csv ${SCALEBENCH_DEPLOY}
 mv scaleout_benchmarks.csv ${SCALEBENCH_DEPLOY}
-mv scaleout_benchmarks_cnr.csv ${SCALEBENCH_DEPLOY}
+mv scaleout_benchmarks_cnr.csv ${SCALEBENCH_DEPLOY} || true
 mv per_thread_times.* ${SCALEBENCH_DEPLOY}
 mv throughput-*-*.* ${SCALEBENCH_DEPLOY}
 gzip ${SCALEBENCH_DEPLOY}/baseline_comparison.csv
 gzip ${SCALEBENCH_DEPLOY}/scaleout_benchmarks.csv
-gzip ${SCALEBENCH_DEPLOY}/scaleout_benchmarks_cnr.csv
+gzip ${SCALEBENCH_DEPLOY}/scaleout_benchmarks_cnr.csv || true
 
 # Copy hashbench results
 HASHBENCH_DEPLOY="gh-pages/hashbench/${CI_MACHINE_TYPE}/${GIT_REV_CURRENT}"
