@@ -43,6 +43,7 @@ x86 = "0.51.0"
 clap = { version = "2", features = ["yaml"] }
 crossbeam-skiplist = { git = "https://github.com/crossbeam-rs/crossbeam" }
 nrfs = { git = "https://github.com/ankit-iitb/nrfs.git", branch = "master" }
+memmap = "0.7"
 
 [target.'cfg(not(loom))'.dev-dependencies]
 # Config based dependency due to https://github.com/tokio-rs/tokio/issues/2463
