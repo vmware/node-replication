@@ -67,6 +67,10 @@ smokebench = ["bench_utils/smokebench"]
 exhaustive = ["bench_utils/exhaustive"]
 
 [[bench]]
+name = "simdr"
+harness = false
+
+[[bench]]
 name = "hashmap"
 harness = false
 
