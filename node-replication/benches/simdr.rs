@@ -31,7 +31,8 @@ fn make_regions(region_count: usize, region_size: usize) -> Vec<MmapMut> {
             .get(0)
             .expect("No core on NUMA node found");
         bench_utils::pin_thread(core.cpu);
-        let region = MmapOptions::new().len(region_size).map_anon().unwrap();
+        let mut region = MmapOptions::new().len(region_size).map_anon().unwrap();
+        region.as_mut().fill(0x0);
         regions.push(region);
     }
 
