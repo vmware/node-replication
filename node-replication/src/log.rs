@@ -25,7 +25,7 @@ use crate::replica::MAX_THREADS_PER_REPLICA;
 /// A token that identifies a replica for a log.
 ///
 /// The replica is supposed to call [`Log::register()`] to get the token.
-#[derive(Eq, PartialEq, Debug)]
+#[derive(Eq, PartialEq, Debug, Clone)]
 #[cfg(not(loom))]
 pub struct LogToken(pub(crate) usize);
 #[cfg(loom)]
@@ -429,6 +429,29 @@ where
         (min_replica_idx, min_local_tail)
     }
 
+    /// Loops over all `ltails` and finds the replica with the highest tail.
+    ///
+    /// # Returns
+    /// The ID (in `LogToken`) of the replica with the highest tail and the
+    /// corresponding/highest tail `idx` in the `Log`.
+    pub(crate) fn find_max_tail(&self) -> (usize, usize) {
+        let r = self.next.load(Ordering::Relaxed);
+        let (mut max_replica_idx, mut max_local_tail) = (0, self.ltails[0].load(Ordering::Relaxed));
+
+        // Find the local tail across all replicas.
+        for idx in 1..r {
+            let cur_local_tail = self.ltails[idx - 1].load(Ordering::Relaxed);
+            //info!("Replica {} cur_local_tail {}.", idx - 1, cur_local_tail);
+
+            if cur_local_tail > max_local_tail {
+                max_local_tail = cur_local_tail;
+                max_replica_idx = idx - 1;
+            }
+        }
+
+        (max_replica_idx, max_local_tail)
+    }
+
     /// Resets the log. This is required for microbenchmarking the log; with
     /// this method, we can re-use the log across experimental runs without
     /// having to re-allocate the log over and over again (which blows up the
@@ -679,5 +702,35 @@ mod tests {
             assert!(l.register().is_some());
         }
         assert!(l.register().is_none());
+    }
+
+    // Tests to ensure find_max_tail() gets the most up to date replica when called
+    #[test]
+    fn test_find_max_tail_gets_highest() {
+        let l = Log::<Operation, (), ()>::default();
+        let _lt = l.register().unwrap();
+
+        l.next.store(5, Ordering::Relaxed);
+        l.ltails[0].store(1023, Ordering::Relaxed);
+        l.ltails[1].store(224, Ordering::Relaxed);
+        l.ltails[2].store(4096, Ordering::Relaxed);
+        l.ltails[3].store(799, Ordering::Relaxed);
+
+        assert_eq!(l.find_max_tail(), (2, 4096))
+    }
+
+    // Tests to ensure find_min_tail() finds the replica with the lowest tail.
+    #[test]
+    fn test_find_min_tail_gets_lowest() {
+        let l = Log::<Operation, (), ()>::default();
+        let _lt = l.register().unwrap();
+
+        l.next.store(5, Ordering::Relaxed);
+        l.ltails[0].store(1023, Ordering::Relaxed);
+        l.ltails[1].store(224, Ordering::Relaxed);
+        l.ltails[2].store(4096, Ordering::Relaxed);
+        l.ltails[3].store(799, Ordering::Relaxed);
+
+        assert_eq!(l.find_min_tail(), (1, 224))
     }
 }

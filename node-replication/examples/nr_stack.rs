@@ -28,6 +28,7 @@ enum Access {
 }
 
 /// The actual stack is implemented with a (single-threaded) Vec.
+#[derive(Clone)]
 struct Stack<T>
 where
     T: Default,

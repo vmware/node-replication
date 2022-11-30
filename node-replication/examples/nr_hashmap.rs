@@ -12,7 +12,7 @@ use node_replication::nr::Dispatch;
 use node_replication::nr::NodeReplicated;
 
 /// The node-replicated hashmap uses a std hashmap internally.
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct NrHashMap {
     storage: HashMap<u64, u64>,
 }

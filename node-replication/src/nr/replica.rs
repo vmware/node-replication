@@ -36,7 +36,7 @@ pub use crate::replica::MAX_THREADS_PER_REPLICA;
 /// implement their own version of [`crate::nr::NodeReplicated`].
 pub enum ReplicaError<'r, D>
 where
-    D: Sized + Dispatch + Sync,
+    D: Sized + Dispatch + Sync + Clone,
 {
     /// We don't have space in the log to enqueue our batch of operations.
     ///
@@ -76,7 +76,7 @@ where
 
 impl<D> Debug for ReplicaError<'_, D>
 where
-    D: Sized + Dispatch + Sync,
+    D: Sized + Dispatch + Sync + Clone,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -116,7 +116,7 @@ where
 /// replicas.
 pub struct Replica<D>
 where
-    D: Sized + Dispatch + Sync,
+    D: Sized + Dispatch + Sync + Clone,
 {
     /// An identifier that we got from the Log when the replica was registered
     /// against the shared-log ([`Log::register()`]). Required to pass to the
@@ -160,18 +160,18 @@ where
     /// The underlying data structure. This is shared among all threads that are
     /// registered with this replica. Each replica maintains its own copy of
     /// `data`.
-    data: CachePadded<RwLock<D>>,
+    pub data: CachePadded<RwLock<D>>,
 }
 
 /// The Replica is [`Sync`].
 ///
 /// Member variables are protected by the combiner lock of the replica
 /// (`combiner`). Contexts are thread-safe.
-unsafe impl<D> Sync for Replica<D> where D: Sized + Sync + Dispatch {}
+unsafe impl<D> Sync for Replica<D> where D: Sized + Sync + Dispatch + Clone {}
 
 impl<D> core::fmt::Debug for Replica<D>
 where
-    D: Sized + Sync + Dispatch,
+    D: Sized + Sync + Dispatch + Clone,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         write!(f, "Replica")
@@ -180,7 +180,7 @@ where
 
 impl<D> Replica<D>
 where
-    D: Sized + Default + Dispatch + Sync,
+    D: Sized + Default + Dispatch + Sync + Clone,
 {
     /// Constructs an instance of a replicated data structure.
     ///
@@ -200,7 +200,7 @@ where
     /// use node_replication::nr::Replica;
     ///
     /// // The data structure we want replicated.
-    /// #[derive(Default)]
+    /// #[derive(Default, Clone)]
     /// struct Data {
     ///     junk: u64,
     /// }
@@ -248,14 +248,14 @@ where
 /// to reset it to 0.
 pub struct CombinerLock<'a, D>
 where
-    D: Sized + Dispatch + Sync,
+    D: Sized + Dispatch + Sync + Clone,
 {
     replica: &'a Replica<D>,
 }
 
 impl<'a, D> CombinerLock<'a, D>
 where
-    D: Sized + Dispatch + Sync,
+    D: Sized + Dispatch + Sync + Clone,
 {
     /// Inidcates we're holding the CombinerLock.
     ///
@@ -269,7 +269,7 @@ where
 
 impl<D> Drop for CombinerLock<'_, D>
 where
-    D: Sized + Dispatch + Sync,
+    D: Sized + Dispatch + Sync + Clone,
 {
     /// Allow other threads to perform flat combining once we have finished all
     /// our work.
@@ -290,7 +290,7 @@ where
 
 impl<D> Debug for CombinerLock<'_, D>
 where
-    D: Sized + Dispatch + Sync,
+    D: Sized + Dispatch + Sync + Clone,
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "CombinerLock")
@@ -299,7 +299,7 @@ where
 
 impl<D> Replica<D>
 where
-    D: Sized + Dispatch + Sync,
+    D: Sized + Dispatch + Sync + Clone,
 {
     /// Similar to [`Replica::new`], but we pass an existing data-structure as
     /// an argument (`d`) rather than relying on the [`Default`] trait to create
@@ -362,7 +362,7 @@ where
     /// use node_replication::nr::Log;
     /// use node_replication::nr::Replica;
     ///
-    /// #[derive(Default)]
+    /// #[derive(Default, Clone)]
     /// struct Data {
     ///     junk: u64,
     /// }
@@ -443,7 +443,7 @@ where
     /// use node_replication::nr::Log;
     /// use node_replication::nr::Replica;
     ///
-    /// #[derive(Default)]
+    /// #[derive(Default, Clone)]
     /// struct Data {
     ///     junk: u64,
     /// }
@@ -542,7 +542,7 @@ where
     ///
     /// use std::sync::Arc;
     ///
-    /// #[derive(Default)]
+    /// #[derive(Default, Clone)]
     /// struct Data {
     ///     junk: u64,
     /// }
@@ -912,7 +912,7 @@ pub(crate) mod test {
     use std::vec;
 
     // Really dumb data structure to test against the Replica and shared log.
-    #[derive(Default)]
+    #[derive(Default, Clone)]
     pub(crate) struct Data {
         pub(crate) junk: u64,
     }
