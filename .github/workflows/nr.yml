@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Install dependencies
-      run: sudo apt-get update && sudo apt-get install -y libhwloc-dev gnuplot libfuse-dev liburcu-dev liburcu6
+      run: sudo apt-get update && sudo apt-get install -y libhwloc-dev gnuplot libfuse-dev liburcu-dev liburcu8
     - uses: actions/checkout@v2.4.0
     - name: Install rust toolchain
       working-directory: ./node-replication
