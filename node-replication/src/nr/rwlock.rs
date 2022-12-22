@@ -67,7 +67,7 @@ pub struct ReadGuard<'a, T: Sized + Sync + Clone + 'a> {
 
 /// A write-guard that can be used to write to the underlying data structure. All
 /// reads will be blocked until this is dropped.
-pub struct WriteGuard<'a, T: Sized + Sync +  Clone + 'a> {
+pub struct WriteGuard<'a, T: Sized + Sync + Clone + 'a> {
     /// A reference to the Rwlock wrapping the data-structure.
     lock: &'a RwLock<T>,
 }

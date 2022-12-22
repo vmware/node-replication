@@ -473,7 +473,6 @@ where
         // Find the local tail across all replicas.
         for idx in 1..MAX_REPLICAS_PER_LOG {
             let cur_local_tail = self.ltails[&(idx - 1)].load(Ordering::Relaxed);
-            //info!("Replica {} cur_local_tail {}.", idx - 1, cur_local_tail);
 
             if cur_local_tail > max_local_tail {
                 max_local_tail = cur_local_tail;
@@ -482,6 +481,14 @@ where
         }
 
         (max_replica_idx, max_local_tail)
+    }
+
+    /// Removes log entries for associated replicas. This is to allow dynamic adding and removing
+    /// of replicas for memory efficiency & performance purposes.
+    pub(crate) fn remove_replica(&mut self, log_token: LogToken) {
+        self.replica_inventory.compare_and_swap(log_token.0,true,false,Ordering::Relaxed);
+        self.ltails.insert(log_token.0, CachePadded::new(AtomicUsize::new(0)));
+        self.lmasks.insert(log_token.0, CachePadded::new(Cell::new(true)));
     }
 
     /// Resets the log. This is required for microbenchmarking the log; with
@@ -659,7 +666,6 @@ mod tests {
         }
 
         for i in 0..MAX_REPLICAS_PER_LOG {
-            std::dbg!(i);
             assert_eq!(l.lmasks[&i].get(), true);
         }
     }

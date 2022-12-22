@@ -446,7 +446,7 @@ where
     /// let added_replica_data = async_ds.replicas[added_replica].data.read(0).junk;
     /// assert_eq!(2, added_replica_data);
     /// ```
-    pub fn add_replica(&mut self) -> Result<ReplicaId, NodeReplicatedError> {
+    pub fn add_replica(&mut self) -> Result<ThreadToken, NodeReplicatedError> {
         let log_token = self
             .log
             .register()
@@ -459,7 +459,6 @@ where
             // aff_tkn is dropped here
         };
 
-        // TODO: Need better algo to establish replica_id
         let replica_id = self.new_replica_id();
 
         if self.replicas.contains_key(&replica_id) {
@@ -472,7 +471,6 @@ where
         let (max_replica_idx, max_local_tail) = self.log.find_max_tail();
 
         // copy data from existing replica
-        std::dbg!(&max_replica_idx, &max_local_tail);
         let replica_locked = self.replicas[&max_replica_idx]
             .data
             .read(log_token.0)
@@ -488,13 +486,19 @@ where
         self.log.lmasks[&replica_id].set(lmask_status);
 
         // Register the the replica with a thread_id and return the ThreadToken
-        Ok(replica_id)
+        let registered_replica = self.register(replica_id);
+
+        match registered_replica {
+            Some(thread_token) => Ok(thread_token),
+            None => Err(NodeReplicatedError::DuplicateReplica),
+        }
     }
 
     pub fn remove_replica(
         &mut self,
         replica_id: ReplicaId,
     ) -> Result<ReplicaId, NodeReplicatedError> {
+        self.log.remove_replica(log::LogToken(replica_id));
         self.replicas.remove(&replica_id);
         Ok(replica_id)
     }
@@ -541,10 +545,7 @@ where
     ///
     /// # Arguments
     ///
-    /// - `replica_id`: Which replica the thread should be registered with. This
-    /// should be less than the `num_replicas` argument provided in the
-    /// constructor (see [`NodeReplicated::new`]). In most cases, `replica_id`
-    /// will correspond to the NUMA node that the thread is running on.
+    /// - `replica_id`: Which replica the thread should be registered with.
     ///
     /// # Example
     ///
@@ -567,11 +568,10 @@ where
     ///
     /// let replicas = NonZeroUsize::new(2).unwrap();
     /// let nrht = NodeReplicated::<Void>::new(replicas, |_| { 0 }).unwrap();
-    /// let ttkn = nrht.register(0).unwrap();
-    /// assert!(nrht.register(replicas.get()).is_none());
+    /// assert!(nrht.register(0).is_some());
     /// ```
     pub fn register(&self, replica_id: ReplicaId) -> Option<ThreadToken> {
-        if replica_id < self.replicas.len() {
+        if self.replicas.len() < MAX_REPLICAS_PER_LOG {
             let rtkn = self.replicas[&replica_id].register()?;
             Some(ThreadToken::new(replica_id, rtkn))
         } else {
@@ -905,7 +905,7 @@ mod test {
 
         let added_replica = async_ds.add_replica().unwrap();
 
-        let added_replica_data = async_ds.replicas[&added_replica].data.read(0).junk;
+        let added_replica_data = async_ds.replicas[&added_replica.rid].data.read(0).junk;
 
         assert_eq!(3, added_replica_data);
     }
@@ -923,7 +923,7 @@ mod test {
 
         let replica_lmask = async_ds.log.lmasks[&0].get();
         let added_replica = async_ds.add_replica().unwrap();
-        let added_replica_lmask = async_ds.log.lmasks[&added_replica].get();
+        let added_replica_lmask = async_ds.log.lmasks[&added_replica.rid].get();
         assert_eq!(replica_lmask, added_replica_lmask);
     }
 
@@ -941,7 +941,7 @@ mod test {
 
         let replica_ltails = async_ds.log.ltails[&0].load(Ordering::Relaxed);
         let added_replica = async_ds.add_replica().unwrap();
-        let added_replica_ltails = async_ds.log.ltails[&added_replica].load(Ordering::Relaxed);
+        let added_replica_ltails = async_ds.log.ltails[&added_replica.rid].load(Ordering::Relaxed);
         assert_eq!(replica_ltails, added_replica_ltails);
     }
 
@@ -959,11 +959,11 @@ mod test {
         let _ = async_ds.execute_mut(2, ttkn_c);
 
         let _ = async_ds.remove_replica(1);
-        let _ = async_ds.remove_replica(0);
+        let _ = async_ds.remove_replica(2);
 
         let added_replica_four = async_ds.add_replica().unwrap();
 
-        assert_eq!(added_replica_four, 4);
+        assert_eq!(added_replica_four.rid, 4);
     }
 
     #[test]
@@ -976,7 +976,7 @@ mod test {
     }
 
     #[test]
-    fn test_remove_replica_removes_replica_in_order() {
+    fn test_remove_replica_noop_on_invalid_replica_id_removal() {
         let replicas = NonZeroUsize::new(2).unwrap();
         let mut async_ds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
         let ttkn_a = async_ds.register(0).expect("Unable to register with log");
@@ -985,22 +985,30 @@ mod test {
         let _ = async_ds.execute_mut(1, ttkn_a);
         let _ = async_ds.execute_mut(4, ttkn_b);
 
-        let _ = async_ds.remove_replica(999);
+        let _ = async_ds.remove_replica(15);
+
+        assert_eq!(async_ds.replicas.len(), 2);
     }
 
     #[test]
-    fn test_remove_replica_error_on_invalid_replica_id_move() {
-        let replicas = NonZeroUsize::new(2).unwrap();
+    fn test_remove_replica_syncs_replica_data() {
+        let replicas = NonZeroUsize::new(1).unwrap();
         let mut async_ds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
+
         let ttkn_a = async_ds.register(0).expect("Unable to register with log");
-        let ttkn_b = async_ds.register(1).expect("Unable to register with log");
 
+        //add a few iterations of log entries
         let _ = async_ds.execute_mut(1, ttkn_a);
-        let _ = async_ds.execute_mut(4, ttkn_b);
+        let _ = async_ds.execute_mut(5, ttkn_a);
+        let _ = async_ds.execute_mut(2, ttkn_a);
 
-        let _ = async_ds.remove_replica(999);
+        let added_replica = async_ds.add_replica().unwrap();
 
-        assert_eq!(async_ds.replicas.len(), 2);
+        let _ = async_ds.remove_replica(0);
+        let _ = async_ds.execute_mut(5, added_replica);
+
+        let added_replica_data = async_ds.replicas[&added_replica.rid].data.read(0).junk;
+        assert_eq!(4, added_replica_data);
     }
     #[test]
     fn test_remove_replica_() {
@@ -1012,16 +1020,11 @@ mod test {
         let _ = async_ds.execute_mut(1, ttkn_a);
         let _ = async_ds.execute_mut(4, ttkn_b);
 
-        let _ = async_ds.remove_replica(999);
+        let _ = async_ds.remove_replica(15);
 
         assert_eq!(async_ds.replicas.len(), 2);
     }
 
     // Check Lock before removing
     // Check replica integrity after deletion
-    // Ensure correct keys
-
-    // ltails and lmasks need hashmap managment
-    // remove ltails and lmask entries on removal
-    //
 }
