@@ -135,6 +135,7 @@ impl fmt::Display for MapAction {
     }
 }
 
+#[derive(Clone)]
 pub struct VSpace {
     pub pml4: Pin<Box<PML4>>,
     allocs: Vec<(*mut u8, usize)>,
@@ -487,7 +488,7 @@ enum OpcodeRd {
     Identify(u64),
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct VSpaceDispatcher {
     vspace: VSpace,
 }
