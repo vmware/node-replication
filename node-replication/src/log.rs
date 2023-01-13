@@ -485,10 +485,13 @@ where
 
     /// Removes log entries for associated replicas. This is to allow dynamic adding and removing
     /// of replicas for memory efficiency & performance purposes.
-    pub(crate) fn remove_replica(&mut self, log_token: LogToken) {
-        self.replica_inventory.compare_and_swap(log_token.0,true,false,Ordering::Relaxed);
-        self.ltails.insert(log_token.0, CachePadded::new(AtomicUsize::new(0)));
-        self.lmasks.insert(log_token.0, CachePadded::new(Cell::new(true)));
+    pub(crate) fn remove_log_replica(&mut self, log_token: LogToken) {
+        self.replica_inventory
+            .compare_and_swap(log_token.0, true, false, Ordering::Relaxed);
+        self.ltails
+            .insert(log_token.0, CachePadded::new(AtomicUsize::new(0)));
+        self.lmasks
+            .insert(log_token.0, CachePadded::new(Cell::new(true)));
     }
 
     /// Resets the log. This is required for microbenchmarking the log; with
@@ -777,5 +780,29 @@ mod tests {
         l.ltails[&3].store(799, Ordering::Relaxed);
 
         assert_eq!(l.find_min_tail(), (1, 224))
+    }
+
+    // Test to validate that remove_replica operates correctly
+    #[test]
+    fn test_remove_replica() {
+        let mut log = Log::<Operation, (), ()>::default();
+        let mut replicas: Vec<LogToken> = Vec::new();
+        for _i in 0..MAX_REPLICAS_PER_LOG {
+            replicas.insert(0, log.register().unwrap());
+        }
+
+        let chosen_one = replicas.pop().unwrap();
+        let log_token = &chosen_one.0.clone();
+
+        log.remove_log_replica(chosen_one);
+
+        // replica inventory to be false for the deleted entry
+        assert_eq!(log.replica_inventory.get_bit(*log_token), false);
+
+        // ltails to be zerod out
+        assert_eq!(log.ltails[log_token].load(Ordering::Relaxed), 0);
+
+        // lmasks to be set to true
+        assert_eq!(log.lmasks[log_token].get(), true);
     }
 }

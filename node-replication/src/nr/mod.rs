@@ -287,6 +287,7 @@ pub enum NodeReplicatedError {
     /// Not enough memory to create a [`NodeReplicated`] instance.
     OutOfMemory,
     DuplicateReplica,
+    UnableToRemoveReplica,
 }
 
 impl From<core::alloc::AllocError> for NodeReplicatedError {
@@ -314,12 +315,6 @@ pub struct NodeReplicated<D: Dispatch + Sync + Clone> {
     log: Log<D::WriteOperation>,
     replicas: HashMap<usize, Replica<D>>,
     // thread_routing: HashMap<ThreadIdx, ReplicaId>,
-    // contexts: Vec<Context<<D as Dispatch>::WriteOperation, <D as Dispatch>::Response>>, // reroute
-    // threads'
-    // work
-    // queue to
-    // new
-    // replica
     affinity_mngr: AffinityManager,
 }
 
@@ -498,8 +493,14 @@ where
         &mut self,
         replica_id: ReplicaId,
     ) -> Result<ReplicaId, NodeReplicatedError> {
-        self.log.remove_replica(log::LogToken(replica_id));
-        self.replicas.remove(&replica_id);
+        self.log.remove_log_replica(log::LogToken(replica_id));
+
+        if self.replicas.contains_key(&replica_id) {
+            self.replicas.remove(&replica_id);
+        } else {
+            return Err(NodeReplicatedError::UnableToRemoveReplica);
+        }
+
         Ok(replica_id)
     }
 
