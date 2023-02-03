@@ -118,15 +118,33 @@ fn main() {
         }));
     }
 
-    // First we move from 4 to 1 replica by removing one every 3 seconds:
-    for next_rid in &[3, 2, 1] {
+    // Initially, we go from 4 to 6 replicas:
+    for next_rid in &[4, 5] {
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        println!("About to add a new replica {:?}", next_rid);
+        let r = nrht.write().unwrap().add_replica().unwrap();
+        println!("Added replica {:?}", r);
+        // We also spawn a thread that accesses that new replica:
+        let nrht_cln = nrht.clone();
+        let finished = finished.clone();
+        threads.push(std::thread::spawn(move || {
+            let ttkn =
+                nrht_cln.read().unwrap().register(*next_rid).expect(
+                    format!("Unable to register thread with replica {}", next_rid).as_str(),
+                );
+            thread_loop(nrht_cln, ttkn, finished);
+        }));
+    }
+
+    // Then we go from 6 to 1 replica by removing one every 3 seconds:
+    for next_rid in &[5, 4, 3, 2, 1] {
         std::thread::sleep(std::time::Duration::from_secs(3));
         println!("About to remove replica {:?}", next_rid);
         let x = nrht.write().unwrap().remove_replica(*next_rid).unwrap();
         println!("Removed replica {:?}", x);
     }
 
-    // Then we increase back from 1 to 4 replicas:
+    // Then we increase again from 1 to 4 replicas:
     for next_rid in &[1, 2, 3] {
         std::thread::sleep(std::time::Duration::from_secs(3));
         println!("About to add replica {:?}", next_rid);
