@@ -55,7 +55,7 @@ futures =  { version = "0.3.17" }
 debug = true
 
 [features]
-default = ["async"]
+default = []
 async = []
 
 # Benchmark features (not intended for public use, no impact on library code)

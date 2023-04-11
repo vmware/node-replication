@@ -11,7 +11,7 @@ use static_assertions::const_assert;
 /// [`crate::nr::Replica::register()`] or [`crate::cnr::Replica::register()`]
 /// function will start to return None.
 #[cfg(not(loom))]
-pub const MAX_THREADS_PER_REPLICA: usize = 256;
+pub const MAX_THREADS_PER_REPLICA: usize = 32;
 #[cfg(loom)]
 pub const MAX_THREADS_PER_REPLICA: usize = 2;
 // MAX_THREADS_PER_REPLICA must be a power of two
@@ -46,7 +46,7 @@ pub type ThreadIdx = usize;
 /// and returned again by [`crate::nr::Replica::execute`] and
 /// [`crate::nr::Replica::execute_mut`]. However it feels like this would hurt
 /// API ergonomics a lot.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
 pub struct ReplicaToken(pub(crate) ThreadIdx);
 
 /// Make it harder to accidentially use the same ReplicaToken on multiple

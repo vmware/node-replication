@@ -441,7 +441,7 @@ mod tests {
     #[test]
     fn test_parallel_readers() {
         let lock = Arc::new(RwLock::<usize>::default());
-        let t = 100;
+        let t = MAX_READER_THREADS;
 
         unsafe {
             *lock.data.get() = t;

@@ -33,6 +33,7 @@ use tokio::runtime::Runtime;
 use node_replication::cnr::{
     Dispatch, Log, LogMetaData, Replica, ReplicaToken, MAX_REPLICAS_PER_LOG,
 };
+#[cfg(feature = "async")]
 use node_replication::nr::reusable_box::ReusableBoxFuture;
 
 use crate::benchmark::*;
@@ -783,18 +784,24 @@ where
                             duration
                         );
 
-                        let mut futures: Vec<
-                            ReusableBoxFuture<<<R as ReplicaTrait>::D as Dispatch>::Response>,
-                        > = Vec::with_capacity(batch_size);
+                        #[cfg(feature = "async")]
+                        {
+                            let mut futures: Vec<
+                                ReusableBoxFuture<<<R as ReplicaTrait>::D as Dispatch>::Response>,
+                            > = Vec::with_capacity(batch_size);
 
-                        for _i in 0..batch_size {
-                            let resp = match &operations[0] {
-                                Operation::ReadOperation(op) => replica.exec_ro(*op, replica_token),
-                                Operation::WriteOperation(op) => replica.exec(*op, replica_token),
-                            };
-                            futures.push(ReusableBoxFuture::new(async { resp }));
+                            for _i in 0..batch_size {
+                                let resp = match &operations[0] {
+                                    Operation::ReadOperation(op) => {
+                                        replica.exec_ro(*op, replica_token)
+                                    }
+                                    Operation::WriteOperation(op) => {
+                                        replica.exec(*op, replica_token)
+                                    }
+                                };
+                                futures.push(ReusableBoxFuture::new(async { resp }));
+                            }
                         }
-
                         let mut operations_per_second: Vec<usize> = Vec::with_capacity(32);
                         let mut operations_completed: usize = 0;
                         let mut iter: usize = 0;
