@@ -36,7 +36,6 @@ pub mod replica;
 
 pub mod cnr;
 pub mod nr;
-pub mod simdr;
 
 #[cfg(doctest)]
 mod test_readme {

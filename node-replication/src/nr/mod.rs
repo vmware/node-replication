@@ -876,6 +876,46 @@ where
         }
     }
 
+    fn select_replica2(&self, tkn: ThreadToken) -> ReplicaId {
+        let replicas = self.replicas.keys().fold(0, |acc, rid| acc | (1 << rid)) as usize;
+        logging::info!("replicas: {:b}", replicas);
+
+        if ((1 << tkn.rid) & replicas) > 0 {
+            // Use the replica where the thread originally registered with if it
+            // exists
+            logging::info!("using original replica: {}", tkn.rid);
+            tkn.rid
+        }
+        else {
+            let key_idx = tkn.rtkn.0 % (replicas.count_ones() as usize);
+            logging::info!("key_idx: {key_idx}");
+            let mut replicas = replicas;
+            logging::info!("replica: {:b}", replicas);
+            let mut idx = 0;
+            logging::info!("idx: {idx}");
+            let mut replica_idx = 0;
+            logging::info!("replica_idx: {replica_idx}");
+
+            while idx <= key_idx {
+                replica_idx += replicas.trailing_zeros();
+                logging::info!("replica_idx: {replica_idx} leading zeros was {}", replicas.trailing_zeros());
+                replicas <<= replicas.trailing_zeros()+1;
+                idx += 1;
+            }
+
+            replica_idx as usize
+        }
+    }
+
+
+    fn context_iterator(&self, for_replica: ReplicaId) -> ContextIterator<D> {
+        ContextIterator {
+            contexts: &self.contexts,
+            for_replica,
+            next_idx: 0,
+        }
+    }
+
     /// Enqueues an operation inside a thread local context. Returns a boolean
     /// indicating whether the operation was enqueued (true) or not (false).
     #[inline(always)]
@@ -915,6 +955,30 @@ where
     }
 }
 
+struct ContextIterator<'a, D: Dispatch> {
+    contexts: &'a Vec<Context<<D as Dispatch>::WriteOperation, <D as Dispatch>::Response>>,
+    for_replica: ReplicaId,
+    next_idx: usize,
+}
+
+/*
+impl<'a, D: Dispatch> core::iter::Iterator for ContextIterator<'a, D> {
+    type Item = &'a Context<<D as Dispatch>::WriteOperation, <D as Dispatch>::Response>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.next_idx < self.contexts.len() {
+            let idx = self.next_idx;
+            self.next_idx += 1;
+
+            if let Some(ctx) = self.contexts[idx] {
+                return Some(ctx);
+            }
+        }
+        None
+    }
+}
+*/
+
 #[cfg(test)]
 mod test {
     use super::replica::test::Data;
@@ -925,6 +989,8 @@ mod test {
 
     #[test]
     fn select_correct_replica() {
+        env_logger::try_init();
+
         fn mkttkn(rid: usize, tid: usize) -> ThreadToken {
             ThreadToken {
                 rid,
@@ -936,15 +1002,23 @@ mod test {
         let nds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
 
         assert_eq!(nds.select_replica(mkttkn(0, 0)), 0);
+        assert_eq!(nds.select_replica(mkttkn(0, 0)), nds.select_replica2(mkttkn(0, 0)));
         assert_eq!(nds.select_replica(mkttkn(1, 1)), 1);
+        assert_eq!(nds.select_replica(mkttkn(1, 1)), nds.select_replica2(mkttkn(1, 1)));
+
         // Doesn't have active replica, assign to 0 or 1:
         assert_eq!(nds.select_replica(mkttkn(3, 0)), 0);
+        assert_eq!(nds.select_replica(mkttkn(3, 0)), nds.select_replica2(mkttkn(3, 0)));
         // Threads on same (inactive) replicas are split evenly among active
         // replicas:
         assert_eq!(nds.select_replica(mkttkn(3, 1)), 1);
+        assert_eq!(nds.select_replica(mkttkn(3, 1)), nds.select_replica2(mkttkn(3, 1)));
         assert_eq!(nds.select_replica(mkttkn(3, 2)), 0);
+        assert_eq!(nds.select_replica(mkttkn(3, 2)), nds.select_replica2(mkttkn(3, 2)));
         assert_eq!(nds.select_replica(mkttkn(4, 0)), 0);
+        assert_eq!(nds.select_replica(mkttkn(4, 0)), nds.select_replica2(mkttkn(4, 0)));
         assert_eq!(nds.select_replica(mkttkn(4, 1)), 1);
+        assert_eq!(nds.select_replica(mkttkn(4, 1)), nds.select_replica2(mkttkn(4, 1)));
     }
 
     #[cfg(feature = "async")]
