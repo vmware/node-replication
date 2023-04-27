@@ -11,7 +11,7 @@ use std::sync::Arc;
 use node_replication::nr::Dispatch;
 use node_replication::nr::NodeReplicated;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct NrBtreeSet {
     storage: BTreeSet<u64>,
 }

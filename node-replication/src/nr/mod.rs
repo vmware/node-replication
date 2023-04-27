@@ -70,15 +70,21 @@
 //! }
 //! ```
 
-use alloc::boxed::Box;
-use alloc::vec::Vec;
+extern crate std;
+
+use alloc::collections::BTreeMap;
+use alloc::{boxed::Box, vec::Vec};
 use core::fmt::Debug;
 use core::marker::Sync;
 use core::num::NonZeroUsize;
+use replica::MAX_THREADS_PER_REPLICA;
+
 #[cfg(feature = "async")]
 use reusable_box::ReusableBoxFuture;
 
 use arrayvec::ArrayVec;
+
+use core::sync::atomic::Ordering;
 
 mod context;
 pub mod log;
@@ -93,8 +99,11 @@ pub mod rwlock;
 #[path = "loom_rwlock.rs"]
 pub mod rwlock;
 
+use crate::nr::context::Context;
 pub use log::{Log, MAX_REPLICAS_PER_LOG};
 pub use replica::{CombinerLock, Replica, ReplicaError, ReplicaId, ReplicaToken};
+
+const MAX_THREADS_PER_INSTANCE: usize = MAX_REPLICAS_PER_LOG * MAX_THREADS_PER_REPLICA;
 
 /// Trait that a (single-threaded) data structure must implement to be usable
 /// with NR.
@@ -142,7 +151,7 @@ pub trait Dispatch {
 /// For maximum type-safety this would be an affine type, then we'd have to
 /// return it again in `execute` and `execute_mut`. However it feels like this
 /// would hurt API ergonomics a lot.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
 pub struct ThreadToken {
     /// The replica this thread is registered with (reading from).
     ///
@@ -164,6 +173,10 @@ impl ThreadToken {
     #[doc(hidden)]
     pub fn new(rid: ReplicaId, rtkn: ReplicaToken) -> Self {
         Self { rid, rtkn }
+    }
+
+    pub fn gtid(&self) -> usize {
+        self.rid * MAX_THREADS_PER_REPLICA + self.rtkn.0
     }
 }
 
@@ -277,10 +290,12 @@ impl<'f> Drop for AffinityToken<'f> {
 }
 
 /// Errors that can be encountered by interacting with [`NodeReplicated`].
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum NodeReplicatedError {
     /// Not enough memory to create a [`NodeReplicated`] instance.
     OutOfMemory,
+    DuplicateReplica,
+    UnableToRemoveReplica,
 }
 
 impl From<core::alloc::AllocError> for NodeReplicatedError {
@@ -304,15 +319,22 @@ impl From<alloc::collections::TryReserveError> for NodeReplicatedError {
 /// [`NodeReplicated`] instance. Finally, it routes threads to the correct
 /// replica and handles liveness of replicas by making sure to advance replicas
 /// which are behind automatically.
-pub struct NodeReplicated<D: Dispatch + Sync> {
+pub struct NodeReplicated<D: Dispatch + Sync + Clone> {
     log: Log<D::WriteOperation>,
-    replicas: Vec<Box<Replica<D>>>,
+    replicas: BTreeMap<usize, Replica<D>>,
+    /// List of per-thread contexts. Threads buffer write operations here when
+    /// they cannot perform flat combining (because another thread might already
+    /// be doing so).
+    ///
+    /// The vector is initialized with [`MAX_THREADS_PER_REPLICA`] [`Context`]
+    /// elements.
+    contexts: Vec<Context<<D as Dispatch>::WriteOperation, <D as Dispatch>::Response>>,
     affinity_mngr: AffinityManager,
 }
 
 impl<D> NodeReplicated<D>
 where
-    D: Default + Dispatch + Sized + Sync,
+    D: Default + Dispatch + Sized + Sync + Clone,
 {
     /// Creates a new, replicated data-structure from a single-threaded
     /// data-structure that implements [`Dispatch`]. It uses the [`Default`]
@@ -391,8 +413,12 @@ where
         let affinity_mngr = AffinityManager::new(Box::try_new(chg_mem_affinity)?);
         let log = Log::new_with_bytes(log_size, ());
 
-        let mut replicas = Vec::new();
-        replicas.try_reserve(num_replicas.get())?;
+        let mut contexts = Vec::with_capacity(MAX_THREADS_PER_INSTANCE);
+        for _idx in 0..MAX_THREADS_PER_INSTANCE {
+            contexts.push(Default::default());
+        }
+
+        let mut replicas = BTreeMap::new();
 
         for replica_id in 0..num_replicas.get() {
             let log_token = log
@@ -402,20 +428,111 @@ where
             let r = {
                 // Allocate the replica on the proper NUMA node
                 let _aff_tkn = affinity_mngr.switch(replica_id);
-                Box::try_new(Replica::new(log_token))?
+                Replica::new(log_token)
                 // aff_tkn is dropped here
             };
 
-            // This succeeds, we did `try_reserve` earlier so no `try_push` is
-            // necessary.
-            replicas.push(r);
+            replicas.insert(replica_id, r);
         }
 
         Ok(NodeReplicated {
-            replicas,
+            contexts,
             log,
+            replicas,
             affinity_mngr,
         })
+    }
+
+    /// Adds a new replica to the NodeReplicated. It returns the index of the added replica within
+    /// NodeReplicated.replicas[x].
+    ///
+    /// # Example
+    ///
+    /// Test ignored for lack of access to `MACHINE_TOPOLOGY` (see benchmark code
+    /// for an example).
+    ///
+    /// ```ignore
+    /// let replicas = NonZeroUsize::new(1).unwrap();
+    /// let mut async_ds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
+    /// let ttkn_a = async_ds.register(0).expect("Unable to register with log");
+    /// let _ = async_ds.execute_mut(1, ttkn_a);
+    /// let _ = async_ds.execute_mut(2, ttkn_a);
+    /// let added_replica = async_ds.add_replica().unwrap();
+    /// let added_replica_data = async_ds.replicas[added_replica].data.read(0).junk;
+    /// assert_eq!(2, added_replica_data);
+    /// ```
+    pub fn add_replica(&mut self) -> Result<(), NodeReplicatedError> {
+        let log_token = self
+            .log
+            .register()
+            .expect("Succeeds (num_replicas < MAX_REPLICAS_PER_LOG)");
+
+        let r = {
+            // Allocate the replica on the proper NUMA node
+            let _aff_tkn = self.affinity_mngr.switch(self.replicas.len());
+            Replica::new(log_token.clone())
+            // aff_tkn is dropped here
+        };
+
+        let replica_id = self.new_replica_id();
+
+        if self.replicas.contains_key(&replica_id) {
+            return core::prelude::v1::Err(NodeReplicatedError::DuplicateReplica);
+        }
+
+        self.replicas.insert(replica_id, r);
+
+        // get the most up to date replica
+        let (max_replica_idx, max_local_tail) = self.log.find_max_tail();
+
+        // copy data from existing replica
+        let replica_locked = self.replicas[&max_replica_idx]
+            .data
+            .read(log_token.0)
+            .clone();
+        let new_replica_data = &mut self.replicas[&replica_id].data.write(log_token.0);
+        **new_replica_data = replica_locked;
+
+        // push ltail entry for new replica
+        self.log.ltails[&replica_id].store(max_local_tail, Ordering::Relaxed);
+
+        // find and push existing lmask entry for new replica
+        let lmask_status = self.log.lmasks[&max_replica_idx].get();
+        self.log.lmasks[&replica_id].set(lmask_status);
+
+        // Register the the replica with a thread_id and return the ThreadToken
+        //let registered_replica = self.register(replica_id);
+
+        /*match registered_replica {
+            Some(thread_token) => Ok(thread_token),
+            None => Err(NodeReplicatedError::DuplicateReplica),
+        }*/
+        Ok(())
+    }
+
+    pub fn remove_replica(
+        &mut self,
+        replica_id: ReplicaId,
+    ) -> Result<ReplicaId, NodeReplicatedError> {
+        self.log.remove_log_replica(log::LogToken(replica_id));
+
+        if self.replicas.contains_key(&replica_id) {
+            self.replicas.remove(&replica_id);
+        } else {
+            return Err(NodeReplicatedError::UnableToRemoveReplica);
+        }
+
+        Ok(replica_id)
+    }
+
+    fn new_replica_id(&self) -> usize {
+        // identify max replica id
+        let max_key = self.replicas.iter().max_by_key(|&(k, _v)| k);
+        if let Some(key) = max_key {
+            *key.0 + 1
+        } else {
+            0
+        }
     }
 }
 
@@ -438,7 +555,7 @@ where
 
 impl<D> NodeReplicated<D>
 where
-    D: Dispatch + Sized + Sync,
+    D: Dispatch + Sized + Sync + Clone,
 {
     /// Registers a thread with a given replica in the [`NodeReplicated`]
     /// data-structure. Returns an Option containing a [`ThreadToken`] if the
@@ -450,10 +567,7 @@ where
     ///
     /// # Arguments
     ///
-    /// - `replica_id`: Which replica the thread should be registered with. This
-    /// should be less than the `num_replicas` argument provided in the
-    /// constructor (see [`NodeReplicated::new`]). In most cases, `replica_id`
-    /// will correspond to the NUMA node that the thread is running on.
+    /// - `replica_id`: Which replica the thread should be registered with.
     ///
     /// # Example
     ///
@@ -463,7 +577,7 @@ where
     /// use node_replication::nr::NodeReplicated;
     /// use node_replication::nr::Dispatch;
     ///
-    /// #[derive(Default)]
+    /// #[derive(Default, Clone)]
     /// struct Void;
     /// impl Dispatch for Void {
     ///     type ReadOperation<'rop> = ();
@@ -476,13 +590,14 @@ where
     ///
     /// let replicas = NonZeroUsize::new(2).unwrap();
     /// let nrht = NodeReplicated::<Void>::new(replicas, |_| { 0 }).unwrap();
-    /// let ttkn = nrht.register(0).unwrap();
-    /// assert!(nrht.register(replicas.get()).is_none());
+    /// assert!(nrht.register(0).is_some());
     /// ```
     pub fn register(&self, replica_id: ReplicaId) -> Option<ThreadToken> {
-        if replica_id < self.replicas.len() {
-            let rtkn = self.replicas[replica_id].register()?;
-            Some(ThreadToken::new(replica_id, rtkn))
+        if self.replicas.len() < MAX_REPLICAS_PER_LOG {
+            let rtkn = self.replicas[&replica_id].register()?;
+            let ttkn = ThreadToken::new(replica_id, rtkn);
+
+            Some(ttkn)
         } else {
             None
         }
@@ -497,9 +612,9 @@ where
         if let Some(combiner_lock) = cl {
             // We expect to have already enqueued the op (it's a re-try since have the combiner lock),
             // so technically its not needed to supply it again (but we currently do it anyways...)
-            self.replicas[tkn.rid].execute_mut_locked(&self.log, op, tkn.rtkn, combiner_lock)
+            self.replicas[&tkn.rid].execute_mut_locked(&self.log, op, tkn.rtkn, combiner_lock)
         } else {
-            self.replicas[tkn.rid].execute_mut(&self.log, op, tkn.rtkn)
+            self.replicas[&tkn.rid].execute_mut(&self.log, op, tkn.rtkn)
         }
     }
 
@@ -528,7 +643,7 @@ where
     /// use node_replication::nr::NodeReplicated;
     /// use node_replication::nr::Dispatch;
     ///
-    /// #[derive(Default)]
+    /// #[derive(Default,Clone)]
     /// struct Void;
     /// impl Dispatch for Void {
     ///     type ReadOperation<'rop> = ();
@@ -558,11 +673,13 @@ where
         op: <D as Dispatch>::WriteOperation,
         tkn: ThreadToken,
     ) -> <D as Dispatch>::Response {
+        while !self.make_pending(op.clone(), tkn.gtid()) {}
+
         /// An enum to keep track of a stack of operations we should do on Replicas.
         ///
         /// e.g., either `Sync` an out-of-date, behind replica, or call `execute_locked` or
         /// `execute_mut_locked` to resume the operation with a combiner lock.
-        enum ResolveOp<'a, D: core::marker::Sync + Dispatch + Sized> {
+        enum ResolveOp<'a, D: core::marker::Sync + Dispatch + Sized + Clone> {
             /// Resumes a replica that earlier returned with an Error (and the CombinerLock).
             Exec(Option<CombinerLock<'a, D>>),
             /// Indicates need to [`Replica::sync()`] a replica with the given ID.
@@ -586,12 +703,14 @@ where
                         {
                             assert_ne!(stuck_ridx, tkn.rid);
                             let _aftkn = self.affinity_mngr.switch(stuck_ridx);
-                            self.replicas[stuck_ridx].sync(&self.log);
+                            self.replicas[&stuck_ridx].sync(&self.log);
                             // Affinity is reverted here, _aftkn is dropped.
                         }
-                        return self.replicas[tkn.rid]
-                            .get_response(&self.log, tkn.rtkn.tid())
-                            .expect("GcFailed has to produced a response");
+
+                        //return self.replicas[&tkn.rid]
+                        //.get_response(&self.log, tkn.rtkn.tid())
+                        //.expect("GcFailed has to produced a response");
+                        return self.get_response(tkn);
                     }
                 },
                 ResolveOp::Sync(ridx) => {
@@ -599,7 +718,7 @@ where
                     debug_assert_ne!(ridx, tkn.rid);
                     //warn!("execute_mut ResolveOp::Sync {}", ridx);
                     let _aftkn = self.affinity_mngr.switch(ridx);
-                    self.replicas[ridx].try_sync(&self.log);
+                    self.replicas[&ridx].try_sync(&self.log);
                     // _aftkn is dropped here, reverting affinity change
                 }
             }
@@ -614,9 +733,9 @@ where
     ) -> Result<<D as Dispatch>::Response, (ReplicaError<D>, <D as Dispatch>::ReadOperation<'rop>)>
     {
         if let Some(combiner_lock) = cl {
-            self.replicas[tkn.rid].execute_locked(&self.log, op, tkn.rtkn, combiner_lock)
+            self.replicas[&tkn.rid].execute_locked(&self.log, op, tkn.rtkn, combiner_lock)
         } else {
-            self.replicas[tkn.rid].execute(&self.log, op, tkn.rtkn)
+            self.replicas[&tkn.rid].execute(&self.log, op, tkn.rtkn)
         }
     }
 
@@ -644,7 +763,7 @@ where
     /// use node_replication::nr::NodeReplicated;
     /// use node_replication::nr::Dispatch;
     ///
-    /// #[derive(Default)]
+    /// #[derive(Default, Clone)]
     /// struct Void;
     /// impl Dispatch for Void {
     ///     type ReadOperation<'rop> = usize;
@@ -675,7 +794,7 @@ where
         ///
         /// e.g., either `Sync` an out-of-date, behind replica, or call `execute_locked` or
         /// `execute_mut_locked` to resume the operation with a combiner lock.
-        enum ResolveOp<'a, 'rop, D: core::marker::Sync + Dispatch + Sized> {
+        enum ResolveOp<'a, 'rop, D: core::marker::Sync + Dispatch + Sized + Clone> {
             /// Resumes a replica that earlier returned with an Error (and the CombinerLock).
             Exec(Option<CombinerLock<'a, D>>, D::ReadOperation<'rop>),
             /// Indicates need to [`Replica::sync()`] a replica with the given ID.
@@ -706,7 +825,7 @@ where
                     // Holds trivially because of all the other asserts in this function
                     debug_assert_ne!(ridx, tkn.rid);
                     let _aftkn = self.affinity_mngr.switch(ridx);
-                    self.replicas[ridx].try_sync(&self.log);
+                    self.replicas[&ridx].try_sync(&self.log);
                     // _aftkn is dropped here, reverting affinity change
                 }
             }
@@ -745,20 +864,164 @@ where
         resp.set(async move { self.execute(op, tkn) });
     }
 
+    fn select_replica(&self, tkn: ThreadToken) -> ReplicaId {
+        if self.replicas.contains_key(&tkn.rid) {
+            // Use the replica where the thread originally registered with if it
+            // exists
+            tkn.rid
+        } else {
+            // Distribute evenly across remaining replicas
+            let key_idx = tkn.rtkn.0 % self.replicas.len();
+            *self.replicas.keys().nth(key_idx).unwrap()
+        }
+    }
+
+    fn select_replica2(&self, tkn: ThreadToken) -> ReplicaId {
+        let replicas = self.replicas.keys().fold(0, |acc, rid| acc | (1 << rid)) as usize;
+        logging::info!("replicas: {:b}", replicas);
+
+        if ((1 << tkn.rid) & replicas) > 0 {
+            // Use the replica where the thread originally registered with if it
+            // exists
+            logging::info!("using original replica: {}", tkn.rid);
+            tkn.rid
+        }
+        else {
+            let key_idx = tkn.rtkn.0 % (replicas.count_ones() as usize);
+            logging::info!("key_idx: {key_idx}");
+            let mut replicas = replicas;
+            logging::info!("replica: {:b}", replicas);
+            let mut idx = 0;
+            logging::info!("idx: {idx}");
+            let mut replica_idx = 0;
+            logging::info!("replica_idx: {replica_idx}");
+
+            while idx <= key_idx {
+                replica_idx += replicas.trailing_zeros();
+                logging::info!("replica_idx: {replica_idx} leading zeros was {}", replicas.trailing_zeros());
+                replicas <<= replicas.trailing_zeros()+1;
+                idx += 1;
+            }
+
+            replica_idx as usize
+        }
+    }
+
+
+    fn context_iterator(&self, for_replica: ReplicaId) -> ContextIterator<D> {
+        ContextIterator {
+            contexts: &self.contexts,
+            for_replica,
+            next_idx: 0,
+        }
+    }
+
+    /// Enqueues an operation inside a thread local context. Returns a boolean
+    /// indicating whether the operation was enqueued (true) or not (false).
+    #[inline(always)]
+    fn make_pending(&self, op: <D as Dispatch>::WriteOperation, idx: usize) -> bool {
+        self.contexts[idx - 1].enqueue(op, ())
+    }
+
+    /// Busy waits until a response is available within the thread's context.
+    ///
+    /// # Arguments
+    /// - `slog`: The shared log.
+    /// - `idx`: identifies this thread.
+    pub(crate) fn get_response(&self, tkn: ThreadToken) -> <D as Dispatch>::Response {
+        let mut iter = 0;
+        let interval = 1 << 29;
+
+        // Keep trying to retrieve a response from the thread context. After trying `interval`
+        // times with no luck, try to perform flat combining to make some progress.
+        loop {
+            let r = self.contexts[tkn.gtid()].res();
+            if let Some(resp) = r {
+                return resp;
+            }
+
+            iter += 1;
+
+            if iter == interval {
+                self.sync(tkn);
+                iter = 0;
+            }
+        }
+    }
+
     #[doc(hidden)]
     pub fn sync(&self, tkn: ThreadToken) {
-        self.replicas[tkn.rid].sync(&self.log)
+        self.replicas[&tkn.rid].sync(&self.log)
     }
 }
 
-#[cfg(feature = "async")]
+struct ContextIterator<'a, D: Dispatch> {
+    contexts: &'a Vec<Context<<D as Dispatch>::WriteOperation, <D as Dispatch>::Response>>,
+    for_replica: ReplicaId,
+    next_idx: usize,
+}
+
+/*
+impl<'a, D: Dispatch> core::iter::Iterator for ContextIterator<'a, D> {
+    type Item = &'a Context<<D as Dispatch>::WriteOperation, <D as Dispatch>::Response>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.next_idx < self.contexts.len() {
+            let idx = self.next_idx;
+            self.next_idx += 1;
+
+            if let Some(ctx) = self.contexts[idx] {
+                return Some(ctx);
+            }
+        }
+        None
+    }
+}
+*/
+
 #[cfg(test)]
 mod test {
     use super::replica::test::Data;
+    #[cfg(feature = "async")]
     use super::reusable_box::ReusableBoxFuture;
     use super::*;
     use core::num::NonZeroUsize;
 
+    #[test]
+    fn select_correct_replica() {
+        env_logger::try_init();
+
+        fn mkttkn(rid: usize, tid: usize) -> ThreadToken {
+            ThreadToken {
+                rid,
+                rtkn: ReplicaToken(tid),
+            }
+        }
+
+        let replicas = NonZeroUsize::new(2).unwrap();
+        let nds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
+
+        assert_eq!(nds.select_replica(mkttkn(0, 0)), 0);
+        assert_eq!(nds.select_replica(mkttkn(0, 0)), nds.select_replica2(mkttkn(0, 0)));
+        assert_eq!(nds.select_replica(mkttkn(1, 1)), 1);
+        assert_eq!(nds.select_replica(mkttkn(1, 1)), nds.select_replica2(mkttkn(1, 1)));
+
+        // Doesn't have active replica, assign to 0 or 1:
+        assert_eq!(nds.select_replica(mkttkn(3, 0)), 0);
+        assert_eq!(nds.select_replica(mkttkn(3, 0)), nds.select_replica2(mkttkn(3, 0)));
+        // Threads on same (inactive) replicas are split evenly among active
+        // replicas:
+        assert_eq!(nds.select_replica(mkttkn(3, 1)), 1);
+        assert_eq!(nds.select_replica(mkttkn(3, 1)), nds.select_replica2(mkttkn(3, 1)));
+        assert_eq!(nds.select_replica(mkttkn(3, 2)), 0);
+        assert_eq!(nds.select_replica(mkttkn(3, 2)), nds.select_replica2(mkttkn(3, 2)));
+        assert_eq!(nds.select_replica(mkttkn(4, 0)), 0);
+        assert_eq!(nds.select_replica(mkttkn(4, 0)), nds.select_replica2(mkttkn(4, 0)));
+        assert_eq!(nds.select_replica(mkttkn(4, 1)), 1);
+        assert_eq!(nds.select_replica(mkttkn(4, 1)), nds.select_replica2(mkttkn(4, 1)));
+    }
+
+    #[cfg(feature = "async")]
     #[tokio::test]
     async fn test_box_reuse() {
         use futures::executor::block_on;
@@ -778,4 +1041,165 @@ mod test {
         let res = block_on(resp).unwrap();
         assert_eq!(res, 1);
     }
+
+    #[test]
+    fn test_add_replica_increments_replica_count() {
+        let replicas = NonZeroUsize::new(1).unwrap();
+        let mut async_ds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
+        assert_eq!(async_ds.replicas.len(), 1);
+        let _ = async_ds.add_replica();
+        assert_eq!(async_ds.replicas.len(), 2);
+        let _ = async_ds.add_replica();
+        assert_eq!(async_ds.replicas.len(), 3);
+    }
+
+    #[test]
+    #[should_panic(expected = "Succeeds (num_replicas < MAX_REPLICAS_PER_LOG")]
+    fn test_add_replica_does_not_exceed_max_replicas() {
+        let replicas = NonZeroUsize::new(1).unwrap();
+        let mut async_ds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
+        for _ in 0..MAX_REPLICAS_PER_LOG {
+            let _ = async_ds.add_replica();
+        }
+    }
+
+    /*
+        #[test]
+        fn test_add_replica_syncs_replica_data() {
+            let replicas = NonZeroUsize::new(1).unwrap();
+            let mut async_ds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
+
+            let ttkn_a = async_ds.register(0).expect("Unable to register with log");
+
+            //add a few iterations of log entries
+            let _ = async_ds.execute_mut(1, ttkn_a);
+            let _ = async_ds.execute_mut(5, ttkn_a);
+            let _ = async_ds.execute_mut(2, ttkn_a);
+
+            let added_replica = async_ds.add_replica().unwrap();
+
+            let added_replica_data = async_ds.replicas[&added_replica.rid].data.read(0).junk;
+
+            assert_eq!(3, added_replica_data);
+        }
+
+        #[test]
+        fn test_add_replica_syncs_replica_lmask() {
+            let replicas = NonZeroUsize::new(1).unwrap();
+            let mut async_ds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
+
+            let ttkn_a = async_ds.register(0).expect("Unable to register with log");
+            //add a few iterations of log entries
+            let _ = async_ds.execute_mut(1, ttkn_a);
+            let _ = async_ds.execute_mut(5, ttkn_a);
+            let _ = async_ds.execute_mut(2, ttkn_a);
+
+            let replica_lmask = async_ds.log.lmasks[&0].get();
+            let added_replica = async_ds.add_replica().unwrap();
+            let added_replica_lmask = async_ds.log.lmasks[&added_replica.rid].get();
+            assert_eq!(replica_lmask, added_replica_lmask);
+        }
+
+        #[test]
+        fn test_add_replica_syncs_replica_ltail() {
+            let replicas = NonZeroUsize::new(1).unwrap();
+            let mut async_ds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
+
+            let ttkn_a = async_ds.register(0).expect("Unable to register with log");
+
+            //add a few iterations of log entries
+            let _ = async_ds.execute_mut(1, ttkn_a);
+            let _ = async_ds.execute_mut(5, ttkn_a);
+            let _ = async_ds.execute_mut(2, ttkn_a);
+
+            let replica_ltails = async_ds.log.ltails[&0].load(Ordering::Relaxed);
+            let added_replica = async_ds.add_replica().unwrap();
+            let added_replica_ltails = async_ds.log.ltails[&added_replica.rid].load(Ordering::Relaxed);
+            assert_eq!(replica_ltails, added_replica_ltails);
+        }
+
+        #[test]
+        fn test_add_replica_adds_replicas_in_order() {
+            let replicas = NonZeroUsize::new(4).unwrap();
+            let mut async_ds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
+            let ttkn_a = async_ds.register(0).expect("Unable to register with log");
+            let ttkn_b = async_ds.register(1).expect("Unable to register with log");
+            let ttkn_c = async_ds.register(2).expect("Unable to register with log");
+            let _ttkn_d = async_ds.register(3).expect("Unable to register with log");
+
+            let _ = async_ds.execute_mut(1, ttkn_a);
+            let _ = async_ds.execute_mut(5, ttkn_b);
+            let _ = async_ds.execute_mut(2, ttkn_c);
+
+            let _ = async_ds.remove_replica(1);
+            let _ = async_ds.remove_replica(2);
+
+            let added_replica_four = async_ds.add_replica().unwrap();
+
+            assert_eq!(added_replica_four.rid, 4);
+        }
+    */
+    #[test]
+    fn test_remove_replica_returns_replica_id() {
+        let replicas = NonZeroUsize::new(1).unwrap();
+        let mut async_ds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
+        let _ = async_ds.register(0).expect("Unable to register with log");
+        let replica_id = async_ds.remove_replica(0);
+        assert_eq!(replica_id.unwrap(), 0);
+    }
+
+    #[test]
+    fn test_remove_replica_noop_on_invalid_replica_id_removal() {
+        let replicas = NonZeroUsize::new(2).unwrap();
+        let mut async_ds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
+        let ttkn_a = async_ds.register(0).expect("Unable to register with log");
+        let ttkn_b = async_ds.register(1).expect("Unable to register with log");
+
+        let _ = async_ds.execute_mut(1, ttkn_a);
+        let _ = async_ds.execute_mut(4, ttkn_b);
+
+        let _ = async_ds.remove_replica(15);
+
+        assert_eq!(async_ds.replicas.len(), 2);
+    }
+
+    /*
+       #[test]
+       fn test_remove_replica_syncs_replica_data() {
+           let replicas = NonZeroUsize::new(1).unwrap();
+           let mut async_ds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
+
+           let ttkn_a = async_ds.register(0).expect("Unable to register with log");
+
+           //add a few iterations of log entries
+           let _ = async_ds.execute_mut(1, ttkn_a);
+           let _ = async_ds.execute_mut(5, ttkn_a);
+           let _ = async_ds.execute_mut(2, ttkn_a);
+
+           let added_replica = async_ds.add_replica().unwrap();
+
+           let _ = async_ds.remove_replica(0);
+           let _ = async_ds.execute_mut(5, added_replica);
+
+           let added_replica_data = async_ds.replicas[&added_replica.rid].data.read(0).junk;
+           assert_eq!(4, added_replica_data);
+       }
+    */
+    #[test]
+    fn test_remove_replica_() {
+        let replicas = NonZeroUsize::new(2).unwrap();
+        let mut async_ds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
+        let ttkn_a = async_ds.register(0).expect("Unable to register with log");
+        let ttkn_b = async_ds.register(1).expect("Unable to register with log");
+
+        let _ = async_ds.execute_mut(1, ttkn_a);
+        let _ = async_ds.execute_mut(4, ttkn_b);
+
+        let _ = async_ds.remove_replica(15);
+
+        assert_eq!(async_ds.replicas.len(), 2);
+    }
+
+    // Check Lock before removing
+    // Check replica integrity after deletion
 }

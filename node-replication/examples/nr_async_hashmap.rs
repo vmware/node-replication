@@ -17,6 +17,7 @@ use node_replication::nr::NodeReplicated;
 const CAPACITY: usize = 32;
 
 /// The node-replicated hashmap uses a std hashmap internally.
+#[derive(Clone)]
 struct NrHashMap {
     storage: HashMap<usize, usize>,
 }

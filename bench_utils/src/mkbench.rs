@@ -140,7 +140,7 @@ pub trait DsInterface {
     ) -> <Self::D as Dispatch>::Response;
 }
 
-impl<'a, T: Dispatch + Sync + Default> DsInterface for NodeReplicated<T> {
+impl<'a, T: Dispatch + Sync + Default + Clone> DsInterface for NodeReplicated<T> {
     type D = T;
 
     fn new(replicas: NonZeroUsize, _logs: NonZeroUsize, log_size: usize) -> Arc<Self> {
@@ -235,7 +235,7 @@ pub fn baseline_comparison<R: DsInterface>(
     >,
     log_size: usize,
 ) where
-    R::D: Dispatch + Sync + Default,
+    R::D: Dispatch + Sync + Default + Clone,
     <R::D as Dispatch>::WriteOperation: Send + Sync,
     <R::D as Dispatch>::ReadOperation<'static>: Sync + Send + Clone,
     <R::D as Dispatch>::Response: Send,

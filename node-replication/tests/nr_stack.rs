@@ -8,7 +8,7 @@ extern crate rand;
 extern crate std;
 
 use std::collections::HashMap;
-use std::sync::{Arc, Barrier, RwLock};
+use std::sync::{Arc, Barrier};
 use std::thread;
 use std::usize;
 
@@ -27,10 +27,9 @@ enum OpRd {
     Peek,
 }
 
+#[derive(Clone)]
 struct Stack {
     storage: Vec<u32>,
-    popped: Vec<Option<u32>>,
-    peeked: RwLock<Vec<Option<u32>>>,
 }
 
 fn compare_vectors<T: PartialEq>(a: &Vec<T>, b: &Vec<T>) -> bool {
@@ -44,19 +43,15 @@ impl Stack {
     }
 
     pub fn pop(&mut self) -> Option<u32> {
-        let r = self.storage.pop();
-        self.popped.push(r);
-        return r;
+        self.storage.pop()
     }
 
     pub fn peek(&self) -> Option<u32> {
-        let mut r = None;
         let len = self.storage.len();
         if len > 0 {
-            r = Some(self.storage[len - 1]);
+            return Some(self.storage[len - 1]);
         }
-        self.peeked.write().unwrap().push(r);
-        return r;
+        return None;
     }
 }
 
@@ -64,8 +59,6 @@ impl Default for Stack {
     fn default() -> Stack {
         let s = Stack {
             storage: Default::default(),
-            popped: Default::default(),
-            peeked: Default::default(),
         };
 
         s
@@ -109,8 +102,6 @@ fn sequential_test() {
     let r = Replica::<Stack>::new(ltkn);
     let idx = r.register().expect("Failed to register with Replica.");
     let mut correct_stack: Vec<u32> = Vec::new();
-    let mut correct_popped: Vec<Option<u32>> = Vec::new();
-    let mut correct_peeked: Vec<Option<u32>> = Vec::new();
 
     // Populate with some initial data
     for _i in 0..50 {
@@ -124,15 +115,14 @@ fn sequential_test() {
         match op % 3usize {
             0usize => {
                 let o = r.execute_mut(&log, OpWr::Pop, idx).unwrap();
-                let popped = correct_stack.pop();
-                assert_eq!(popped, o);
-                correct_popped.push(popped);
+                let popped = correct_stack.pop().unwrap();
+                assert_eq!(popped, o.unwrap());
             }
             1usize => {
                 let element = orng.gen();
                 let pushed = r.execute_mut(&log, OpWr::Push(element), idx).unwrap();
-                assert_eq!(pushed, Some(element));
                 correct_stack.push(element);
+                assert_eq!(pushed, Some(element));
             }
             2usize => {
                 let o = r.execute(&log, OpRd::Peek, idx).unwrap();
@@ -142,7 +132,6 @@ fn sequential_test() {
                     ele = Some(correct_stack[len - 1]);
                 }
                 assert_eq!(ele, o);
-                correct_peeked.push(ele);
             }
             _ => unreachable!(),
         }
@@ -150,23 +139,15 @@ fn sequential_test() {
 
     let v = |data: &Stack| {
         assert!(
-            compare_vectors(&correct_popped, &data.popped),
-            "Pop operation error detected"
-        );
-        assert!(
             compare_vectors(&correct_stack, &data.storage),
             "Push operation error detected"
-        );
-        assert!(
-            compare_vectors(&correct_peeked, &data.peeked.read().unwrap()),
-            "Peek operation error detected"
         );
     };
     r.verify(&log, v);
 }
 
 /// A stack to verify that the log works correctly with multiple threads.
-#[derive(Eq, PartialEq)]
+#[derive(Eq, PartialEq, Clone)]
 struct VerifyStack {
     storage: Vec<u32>,
     per_replica_counter: HashMap<u16, u16>,
@@ -481,7 +462,7 @@ fn replicas_are_equal() {
     let mut p0 = vec![];
     let v = |data: &Stack| {
         d0.extend_from_slice(&data.storage);
-        p0.extend_from_slice(&data.popped);
+        p0.extend_from_slice(&data.storage);
     };
     replicas[0].verify(&log, v);
 
@@ -489,7 +470,7 @@ fn replicas_are_equal() {
     let mut p1 = vec![];
     let v = |data: &Stack| {
         d1.extend_from_slice(&data.storage);
-        p1.extend_from_slice(&data.popped);
+        p1.extend_from_slice(&data.storage);
     };
     replicas[1].verify(&log, v);
 

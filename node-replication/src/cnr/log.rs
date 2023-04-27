@@ -136,13 +136,12 @@ where
             let used = tail - head + 1;
 
             if used > self.slog.len() / 3 {
-                let r = self.next.load(Ordering::Relaxed);
                 let mut is_stuck = false;
-                let cur_local_tail = self.ltails[idx.0 - 1].load(Ordering::Relaxed);
+                let cur_local_tail = self.ltails[&(idx.0)].load(Ordering::Relaxed);
 
                 // Find the smallest local tail across all replicas.
-                for idx_iter in 1..r {
-                    let local_tail = self.ltails[idx_iter - 1].load(Ordering::Relaxed);
+                for idx_iter in 1..MAX_REPLICAS_PER_LOG {
+                    let local_tail = self.ltails[&(idx_iter - 1)].load(Ordering::Relaxed);
                     if cur_local_tail > local_tail
                         && cur_local_tail - local_tail > self.slog.len() / 3
                     {
@@ -297,9 +296,9 @@ where
         is_scan: bool,
         depends_on: Option<Arc<Vec<usize>>>,
     ) {
-        let num_replicas = self.next.load(Ordering::Relaxed) - 1;
+        let num_replicas = self.replica_count();
         let e = self.slog[self.index(offset)].as_ptr();
-        let mut m = self.lmasks[idx - 1].get();
+        let mut m = self.lmasks[&(idx - 1)].get();
 
         // This entry was just reserved so it should be dead (!= m). However, if
         // the log has wrapped around, then the alive mask has flipped. In this
@@ -362,7 +361,7 @@ where
         d: &mut F,
     ) {
         // Load the logical log offset from which we must execute operations.
-        let ltail = self.ltails[idx.0 - 1].load(Ordering::Relaxed);
+        let ltail = self.ltails[&(idx.0 - 1)].load(Ordering::Relaxed);
 
         // Check if we have any work to do by comparing our local tail with the log's
         // global tail. If they're equal, then we're done here and can simply return.
@@ -385,14 +384,15 @@ where
             let mut iteration = 1;
             let e = self.slog[self.index(i)].as_ptr();
 
-            while unsafe { (*e).alivef.load(Ordering::Acquire) != self.lmasks[idx.0 - 1].get() } {
+            while unsafe { (*e).alivef.load(Ordering::Acquire) != self.lmasks[&(idx.0 - 1)].get() }
+            {
                 if iteration % WARN_THRESHOLD == 0 {
                     warn!(
                         "alivef not being set for self.index(i={}) = {} (self.lmasks[{}] is {})...",
                         i,
                         self.index(i),
                         idx.0 - 1,
-                        self.lmasks[idx.0 - 1].get()
+                        self.lmasks[&(idx.0 - 1)].get()
                     );
                 }
                 iteration += 1;
@@ -424,11 +424,11 @@ where
 
             // Increment ltail for each operations, needed for scan
             // operations as the rubberband is ltail sensitive.
-            self.ltails[idx.0 - 1].fetch_add(1, Ordering::Relaxed);
+            self.ltails[&(idx.0 - 1)].fetch_add(1, Ordering::Relaxed);
 
             // Looks like we're going to wrap around now; flip this replica's local mask.
             if self.index(i) == self.slog.len() - 1 {
-                self.lmasks[idx.0 - 1].set(!self.lmasks[idx.0 - 1].get());
+                self.lmasks[&(idx.0 - 1)].set(!self.lmasks[&(idx.0 - 1)].get());
                 //trace!("idx: {} lmask: {}", idx, self.lmasks[idx - 1].get());
             }
         }
@@ -436,7 +436,7 @@ where
         // Update the completed tail after we've executed these operations.
         // Also update this replica's local tail.
         self.ctail.fetch_max(gtail, Ordering::Relaxed);
-        self.ltails[idx.0 - 1].store(gtail, Ordering::Relaxed);
+        self.ltails[&(idx.0 - 1)].store(gtail, Ordering::Relaxed);
     }
 
     /// Advances the head of the log forward. If a replica has stopped making progress,
@@ -569,15 +569,14 @@ mod tests {
         assert_eq!(l.slog.len(), n);
         assert_eq!(l.head.load(Ordering::Relaxed), 0);
         assert_eq!(l.tail.load(Ordering::Relaxed), 0);
-        assert_eq!(l.next.load(Ordering::Relaxed), 1);
         assert_eq!(l.ctail.load(Ordering::Relaxed), 0);
 
         for i in 0..MAX_REPLICAS_PER_LOG {
-            assert_eq!(l.ltails[i].load(Ordering::Relaxed), 0);
+            assert_eq!(l.ltails[&i].load(Ordering::Relaxed), 0);
         }
 
         for i in 0..MAX_REPLICAS_PER_LOG {
-            assert_eq!(l.lmasks[i].get(), true);
+            assert_eq!(l.lmasks[&i].get(), true);
         }
     }
 
@@ -621,11 +620,15 @@ mod tests {
         let l = Log::<Operation>::new_with_metadata(LogMetaData::new(1));
         let tkn = l.register().unwrap();
 
-        l.next.store(5, Ordering::Relaxed);
-        l.ltails[0].store(1023, Ordering::Relaxed);
-        l.ltails[1].store(224, Ordering::Relaxed);
-        l.ltails[2].store(4096, Ordering::Relaxed);
-        l.ltails[3].store(799, Ordering::Relaxed);
+        for i in 0..4 {
+            l.replica_inventory
+                .compare_and_swap(i, false, true, Ordering::Relaxed);
+        }
+
+        l.ltails[&0].store(1023, Ordering::Relaxed);
+        l.ltails[&1].store(224, Ordering::Relaxed);
+        l.ltails[&2].store(4096, Ordering::Relaxed);
+        l.ltails[&3].store(799, Ordering::Relaxed);
 
         l.advance_head(&tkn, &mut |_o: Operation, _i: usize, _, _, _, _| -> bool {
             true
@@ -648,10 +651,9 @@ mod tests {
             a
         };
 
-        l.next.store(2, Ordering::Relaxed);
         l.tail
             .store(l.slog.len() - GC_FROM_HEAD - 1, Ordering::Relaxed);
-        l.ltails[0].store(1024, Ordering::Relaxed);
+        l.ltails[&0].store(1024, Ordering::Relaxed);
         l.append(&o, &tkn, |_o: Operation, _i: usize, _, _, _, _| -> bool {
             true
         });
@@ -679,14 +681,18 @@ mod tests {
             a
         };
 
-        l.next.store(2, Ordering::Relaxed);
+        for i in 0..5 {
+            l.replica_inventory
+                .compare_and_swap(i, false, true, Ordering::Relaxed);
+        }
+
         l.head.store(2 * 8192, Ordering::Relaxed);
         l.tail.store(l.slog.len() - 10, Ordering::Relaxed);
         l.append(&o, &tkn, |_o: Operation, _i: usize, _, _, _, _| -> bool {
             true
         });
 
-        assert_eq!(l.lmasks[0].get(), true);
+        assert_eq!(l.lmasks[&0].get(), true);
         assert_eq!(l.tail.load(Ordering::Relaxed), l.slog.len() + 1014);
     }
 
@@ -714,7 +720,7 @@ mod tests {
         );
         assert_eq!(
             l.tail.load(Ordering::Relaxed),
-            l.ltails[0].load(Ordering::Relaxed)
+            l.ltails[&0].load(Ordering::Relaxed)
         );
     }
 
@@ -788,7 +794,7 @@ mod tests {
         );
         assert_eq!(
             l.tail.load(Ordering::Relaxed),
-            l.ltails[0].load(Ordering::Relaxed)
+            l.ltails[&0].load(Ordering::Relaxed)
         );
     }
 
@@ -816,17 +822,16 @@ mod tests {
         l.append(&o, &tkn, |_o: Operation, _i: usize, _, _, _, _| -> bool {
             true
         }); // Required for GC to work correctly.
-        l.next.store(2, Ordering::SeqCst);
         l.head.store(2 * 8192, Ordering::SeqCst);
         l.tail.store(l.slog.len() - 10, Ordering::SeqCst);
         l.append(&o, &tkn, |_o: Operation, _i: usize, _, _, _, _| -> bool {
             true
         });
 
-        l.ltails[0].store(l.slog.len() - 10, Ordering::SeqCst);
+        l.ltails[&0].store(l.slog.len() - 10, Ordering::SeqCst);
         l.exec(&tkn, &mut f);
 
-        assert_eq!(l.lmasks[0].get(), false);
+        assert_eq!(l.lmasks[&0].get(), false);
         assert_eq!(l.tail.load(Ordering::Relaxed), l.slog.len() + 1014);
     }
 
@@ -916,7 +921,10 @@ mod tests {
         assert_eq!(l.slog.len(), total_entries);
 
         // Intentionally not using `register()`, (will fail the test due to GC).
-        let tkn = LogToken(1);
+        // let tkn = LogToken(1);
+        // l.replica_inventory.set_bit(1,true);
+
+        let tkn = l.register().unwrap();
 
         let o1 = [(Arc::new(Operation::Read), 1, false)];
         let o2 = [(Arc::new(Operation::Read), 1, false)];
